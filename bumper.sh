@@ -175,7 +175,7 @@ fi
 echo
 
 # commit and tag
-git commit -m "bump: v${version} -> v${next_version}" --trailer "\nskip-checks: true" --cleanup=verbatim
+git commit -m "bump: v${version} -> v${next_version}" --trailer "[skip ci]"
 git tag -a "v${next_version}" -m "bump: v${version} -> v${next_version}"
 
 # done
