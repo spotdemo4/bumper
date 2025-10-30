@@ -131,15 +131,8 @@ for file in "${search[@]}"; do
     esac
 done
 
-# get files to manually bump
-if [[ $# -gt 1 ]]; then
-    shift
-    readarray -t files <<< "$@"
-else
-    files=()
-fi
-
 # perform manual bumps
+files=("$@")
 for file in "${files[@]}"; do
     # check if file exists
     if [[ ! -f "${file}" ]]; then
@@ -150,6 +143,7 @@ for file in "${files[@]}"; do
     # look for version occurrences
     readarray -t lines < <(grep -F "${version}" "${file}")
     if [[ ${#lines[@]} -eq 0 ]]; then
+        warn "no occurrences found in ${file}"
         continue
     fi
 
