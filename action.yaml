@@ -52,7 +52,7 @@ runs:
 
         if [ "${EXIT_CODE}" -eq 2 ]; then
           echo "missing dependency, using fallback binary"
-          wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.7/bumper-linux-x86_64" -O bumper
+          wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.8/bumper-linux-x86_64" -O bumper
           chmod +x bumper
           ./bumper ${{ inputs.files }}
         else
