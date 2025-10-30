@@ -16,11 +16,13 @@ runs:
   steps:
     - shell: bash
       run: |
-        if [ -z "$(git config --global user.name)" ]; then
-          echo "setting up git user"
+        if [ -z "$(git config user.name)" ]; then
+          echo "no user found, using default"
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
         fi
+
+        echo "git user: $(git config user.name) <$(git config user.email)>"
 
     - if: ${{ inputs.skip_deps != 'true' }}
       shell: bash

@@ -27,8 +27,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Create git user
+        uses: spotdemo4/setup-git-app-user@51cf8f3366b74a6b7e830d1cfc63b3526a036925 # v2.0.3
+        id: user
+        with:
+          app-id: ${{ vars.CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+
       - name: Initialize
         uses: spotdemo4/nix-init@main
+        with:
+          token: ${{ steps.user.outputs.token }}
 
       - name: Bump
         uses: spotdemo4/bumper@main
