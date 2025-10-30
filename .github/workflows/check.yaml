@@ -24,8 +24,6 @@ jobs:
     needs: check
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Create user
         uses: spotdemo4/setup-git-app-user@main

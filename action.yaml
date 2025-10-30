@@ -8,8 +8,7 @@ branding:
 inputs:
   files:
     description: list of files to look for version strings
-  skip_deps:
-    description: skip installing dependencies if they are already installed
+    required: false
 
 runs:
   using: composite
@@ -24,13 +23,15 @@ runs:
 
         echo "git user: $(git config user.name) <$(git config user.email)>"
 
-    - if: ${{ inputs.skip_deps != 'true' }}
+    - shell: bash
+      id: shell
+      continue-on-error: true
+      run: ./bumper.sh ${{ inputs.files }}
+
+    - if: ${{ steps.shell.conclusion == 'failure' }}
       shell: bash
       run: |
+        echo "bumping with just the script failed, trying with deb package"
         wget https://github.com/spotdemo4/bumper/releases/download/v0.1.1/bumper_0.1.1_amd64.deb
         sudo dpkg -i bumper_0.1.1_amd64.deb
         bumper ${{ inputs.files }}
-
-    - if: ${{ inputs.skip_deps == 'true' }}
-      shell: bash
-      run: ./bumper.sh ${{ inputs.files }}
