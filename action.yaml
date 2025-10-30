@@ -8,12 +8,20 @@ branding:
 inputs:
   files:
     description: list of files to look for version strings
+  skip_git:
+    description: skip git user setup if already configured
   skip_deps:
     description: skip installing dependencies if they are already installed
 
 runs:
   using: composite
   steps:
+    - if: ${{ inputs.skip_git != 'true' }}
+      shell: bash
+      run: |
+        git config --global user.name "${{ env.CI_COMMIT_AUTHOR }}"
+        git config --global user.email "username@users.noreply.github.com"
+
     - if: ${{ inputs.skip_deps != 'true' }}
       shell: bash
       run: |
