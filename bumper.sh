@@ -104,8 +104,33 @@ next_version="${major}.${minor}.${patch}"
 
 bold "$(info "${version} -> ${next_version}")"
 
-# perform automatic bumps
+# search for files to bump
 readarray -t search < <(git ls-files)
+
+# validate all required deps are installed
+for file in "${search[@]}"; do
+    case "${file}" in
+        # node
+        "package.json" | "package-lock.json")
+            if ! command -v npm >/dev/null 2>&1; then
+                bold "$(warn "npm not found")"
+                warn "please install npm to bump package.json files"
+                exit 2
+            fi
+            ;;
+
+        # nix
+        "flake.nix")
+            if ! command -v nix-update >/dev/null 2>&1; then
+                bold "$(warn "nix-update not found")"
+                warn "please install nix-update to bump flake.nix files"
+                exit 2
+            fi
+            ;;
+    esac
+done
+
+# perform automatic bumps
 for file in "${search[@]}"; do
     case "${file}" in
         # node
@@ -116,7 +141,6 @@ for file in "${search[@]}"; do
             else
                 bold "$(warn "npm version failed")"
                 warn "${err}"
-                exit 2
             fi
             ;;
 
@@ -127,7 +151,6 @@ for file in "${search[@]}"; do
             else
                 bold "$(warn "nix-update failed")"
                 warn "${err}"
-                exit 2
             fi
             ;;
     esac
