@@ -116,6 +116,7 @@ for file in "${search[@]}"; do
             else
                 bold "$(warn "npm version failed")"
                 warn "${err}"
+                exit 2
             fi
             ;;
 
@@ -126,6 +127,7 @@ for file in "${search[@]}"; do
             else
                 bold "$(warn "nix-update failed")"
                 warn "${err}"
+                exit 2
             fi
             ;;
     esac
