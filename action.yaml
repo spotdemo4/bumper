@@ -31,11 +31,17 @@ runs:
           nix shell nixpkgs#nix-update \
             --inputs-from . \
             --command bash \
-            -c "dirname $(which nix-update)" >> "${GITHUB_PATH}"
+            -c "which nix-update"
 
           nix shell nixpkgs#nix-update \
             --inputs-from . \
-            --command bash -c "which nix-update"
+            --command bash \
+            -c "dirname '$(which nix-update)'"
+
+          nix shell nixpkgs#nix-update \
+            --inputs-from . \
+            --command bash \
+            -c "dirname '$(which nix-update)'" >> "${GITHUB_PATH}"
         fi
 
     - shell: bash
