@@ -7,12 +7,12 @@ branding:
 
 inputs:
   files:
-    description: "list of files to look for version strings"
+    description: list of files to look for version strings
   skip_deps:
-    description: "skip installing dependencies if they are already installed"
+    description: skip installing dependencies if they are already installed
 
 runs:
-  using: "composite"
+  using: composite
   steps:
     - if: ${{ inputs.skip_deps != 'true' }}
       shell: bash
