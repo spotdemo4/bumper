@@ -1,0 +1,21 @@
+name: vulnerable
+
+on:
+  schedule:
+    - cron: "9 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  flake:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Initialize
+        uses: spotdemo4/nix-init@main
+        with:
+          shell: ci
+
+      - name: Check flake
+        run: flake-checker -f
