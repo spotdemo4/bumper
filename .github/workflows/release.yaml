@@ -9,7 +9,10 @@ permissions:
 
 jobs:
   bin:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Initialize
         uses: spotdemo4/nix-init@main
@@ -17,13 +20,24 @@ jobs:
       - name: Bundle
         run: nix bundle -o result --bundler github:DavHau/nix-portable
 
+      - name: Rename
+        id: rename
+        run: |
+          NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s)"
+          NAME="${NAME,,}"
+          echo "name=${NAME}" >> $GITHUB_OUTPUT
+          find result -type f -exec mv {} "${NAME}" \;
+
       - name: Release
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
         with:
-          files: ./result/**/*
+          files: ${{ steps.rename.outputs.name }}
 
   deb:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Initialize
         uses: spotdemo4/nix-init@main
@@ -31,13 +45,24 @@ jobs:
       - name: Bundle
         run: nix bundle -o result --bundler github:NixOS/bundlers#toDEB
 
+      - name: Rename
+        id: rename
+        run: |
+          NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s).deb"
+          NAME="${NAME,,}"
+          echo "name=${NAME}" >> $GITHUB_OUTPUT
+          find result -type f -exec mv {} "${NAME}" \;
+
       - name: Release
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
         with:
-          files: ./result/**/*.deb
+          files: ${{ steps.rename.outputs.name }}
 
   rpm:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Initialize
         uses: spotdemo4/nix-init@main
@@ -45,7 +70,38 @@ jobs:
       - name: Bundle
         run: nix bundle -o result --bundler github:NixOS/bundlers#toRPM
 
+      - name: Rename
+        id: rename
+        run: |
+          NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s).rpm"
+          NAME="${NAME,,}"
+          echo "name=${NAME}" >> $GITHUB_OUTPUT
+          find result -type f -exec mv {} "${NAME}" \;
+
       - name: Release
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
         with:
-          files: ./result/**/*.rpm
+          files: ${{ steps.rename.outputs.name }}
+
+  oci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Initialize
+        uses: spotdemo4/nix-init@main
+
+      - name: Create user
+        uses: spotdemo4/setup-git-app-user@main
+        id: user
+        with:
+          app-id: ${{ vars.CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+
+      - name: Bundle
+        run: nix bundle -o result --bundler github:NixOS/bundlers#toDockerImage
+
+      - name: Release
+        run: |
+          nix shell nixpkgs#skopeo --command skopeo copy \
+            --dest-creds=${{ steps.user.outputs.name }}:${{ steps.user.outputs.token }} \
+            docker-archive:result \
+            docker://ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME#v}
