@@ -28,9 +28,9 @@ runs:
         if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
           echo "nix-update not found, installing via nix"
 
-          IFS=":" read -ra paths <<< nix shell nixpkgs#nix-update \
+          IFS=":" read -ra paths <<< $(nix shell nixpkgs#nix-update \
             --inputs-from . \
-            --command bash -c "echo $PATH"
+            --command bash -c "echo $PATH")
 
           for path in "${paths[@]}"; do
             echo "${path}" >> "${GITHUB_PATH}"
