@@ -28,7 +28,7 @@ jobs:
       contents: write
     steps:
       - name: Create git user
-        uses: spotdemo4/setup-git-app-user@51cf8f3366b74a6b7e830d1cfc63b3526a036925 # v2.0.3
+        uses: spotdemo4/setup-git-app-user@v2.0.4
         id: user
         with:
           app-id: ${{ vars.CLIENT_ID }}
