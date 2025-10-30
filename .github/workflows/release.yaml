@@ -9,10 +9,7 @@ permissions:
 
 jobs:
   bin:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Initialize
         uses: spotdemo4/nix-init@main
@@ -34,10 +31,7 @@ jobs:
           files: ${{ steps.rename.outputs.name }}
 
   deb:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Initialize
         uses: spotdemo4/nix-init@main
@@ -59,10 +53,7 @@ jobs:
           files: ${{ steps.rename.outputs.name }}
 
   rpm:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Initialize
         uses: spotdemo4/nix-init@main
