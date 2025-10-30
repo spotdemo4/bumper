@@ -27,7 +27,9 @@ runs:
       run: |
         if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
           echo "nix-update not found, installing via nix"
-          nix shell --inputs-from . nixpkgs#nix-update
+          nix shell nixpkgs#nix-update \
+            --inputs-from . \
+            --command bash -c "echo $PATH" >> ${GITHUB_PATH}
         fi
 
         set +e
