@@ -1,0 +1,16 @@
+name: bumper
+description: git version bumping action
+author: trev
+branding:
+  icon: anchor
+  color: gray-dark
+
+inputs:
+  files:
+    description: "list of files to look for version strings"
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: bumper.sh ${{ inputs.files }}
