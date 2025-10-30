@@ -17,7 +17,7 @@ runs:
     - if: "${{ inputs.deps == 'true' }}"
       shell: bash
       run: |
-        wget https://github.com/spotdemo4/bumper/releases/download/v0.0.2/bumper_0.0.4_amd64.deb
+        wget https://github.com/spotdemo4/bumper/releases/download/v0.0.4/bumper_0.0.4_amd64.deb
         sudo dpkg -i bumper_0.0.4_amd64.deb
         bumper "${{ inputs.files }}"
 
