@@ -28,7 +28,7 @@ runs:
       continue-on-error: true
       run: ./bumper.sh ${{ inputs.files }}
 
-    - if: ${{ steps.shell.conclusion == 'failure' }}
+    - if: ${{ steps.shell.outcome == 'failure' }}
       shell: bash
       run: |
         echo "bumping with just the script failed, trying with deb package"
