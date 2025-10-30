@@ -31,7 +31,6 @@ runs:
     - if: ${{ steps.shell.outcome == 'failure' }}
       shell: bash
       run: |
-        echo "bumping with just the script failed, trying with deb package"
-        wget https://github.com/spotdemo4/bumper/releases/download/v0.1.5/bumper_0.1.5_amd64.deb
-        sudo dpkg -i bumper_0.1.5_amd64.deb
-        bumper ${{ inputs.files }}
+        echo "bumping with just the script failed, trying with binary"
+        wget https://github.com/spotdemo4/bumper/releases/download/v0.1.5/bumper
+        ./bumper ${{ inputs.files }}
