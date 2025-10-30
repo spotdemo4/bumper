@@ -199,9 +199,10 @@ fi
 
 echo
 
-# commit and tag
+# commit
 git commit -m "bump: v${version} -> v${next_version}" --trailer "[skip ci]"
-git tag -a "v${next_version}" -m "bump: v${version} -> v${next_version}"
+git push origin "${BRANCH}"
 
-# done
-git push --atomic origin "${BRANCH}" "v${next_version}"
+# tag
+git tag -a "v${next_version}" -m "bump: v${version} -> v${next_version}"
+git push origin "v${next_version}"
