@@ -75,7 +75,7 @@ for commit in "${commits[@]}"; do
     fi
 done
 
-bold "$(info "detected impact: ${impact}")"
+bold "$(info "impact: ${impact}")"
 
 # get next version
 version=${LAST_VERSION#v}

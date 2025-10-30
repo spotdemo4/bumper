@@ -98,6 +98,7 @@
         ];
 
         runtimeInputs = with pkgs; [
+          git
           nodejs_24
           nix-update
         ];

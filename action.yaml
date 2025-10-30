@@ -8,9 +8,20 @@ branding:
 inputs:
   files:
     description: "list of files to look for version strings"
+  deps:
+    description: "download all dependencies"
 
 runs:
   using: "composite"
   steps:
-    - shell: bash
-      run: bumper.sh ${{ inputs.files }}
+    - if: "${{ inputs.deps == 'true' }}"
+      shell: bash
+      run: |
+        wget https://github.com/spotdemo4/bumper/releases/download/v0.0.2/bumper_0.0.2_amd64.deb
+        sudo dpkg -i bumper_0.0.2_amd64.deb
+        bumper "${{ inputs.files }}"
+
+    - if: "${{ inputs.deps != 'true' }}"
+      shell: bash
+      run: |
+        bumper.sh "${{ inputs.files }}"
