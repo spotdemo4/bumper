@@ -28,20 +28,16 @@ runs:
         if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
           echo "nix-update not found, installing via nix"
 
-          nix shell nixpkgs#nix-update \
+          UPDATE=$(nix shell nixpkgs#nix-update \
             --inputs-from . \
             --command bash \
-            -c "which nix-update"
+            -c "which nix-update")
+          echo "nix-update installed at: ${UPDATE}"
 
-          nix shell nixpkgs#nix-update \
-            --inputs-from . \
-            --command bash \
-            -c "dirname '$(which nix-update)'"
+          DIR=$(dirname "${UPDATE}")
+          echo "adding nix-update to PATH: ${DIR}"
 
-          nix shell nixpkgs#nix-update \
-            --inputs-from . \
-            --command bash \
-            -c "dirname '$(which nix-update)'" >> "${GITHUB_PATH}"
+          echo "${DIR}" >> "${GITHUB_PATH}"
         fi
 
     - shell: bash
