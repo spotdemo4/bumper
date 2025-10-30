@@ -90,7 +90,7 @@
 
       packages.default = pkgs.stdenv.mkDerivation (finalAttrs: {
         pname = "bumper";
-        version = "0.1.6";
+        version = "0.1.7";
         src = ./.;
 
         nativeBuildInputs = with pkgs; [
