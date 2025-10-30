@@ -34,9 +34,12 @@ runs:
 
           for path in "${paths[@]}"; do
             echo "${path}" >> "${GITHUB_PATH}"
+            echo "added ${path} to PATH"
           done
         fi
 
+    - shell: bash
+      run: |
         set +e
         ./bumper.sh ${{ inputs.files }}
         EXIT_CODE=$?
