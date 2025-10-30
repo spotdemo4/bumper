@@ -27,8 +27,8 @@ runs:
     - if: ${{ inputs.skip_deps != 'true' }}
       shell: bash
       run: |
-        wget https://github.com/spotdemo4/bumper/releases/download/v0.1.0/bumper_0.1.0_amd64.deb
-        sudo dpkg -i bumper_0.1.0_amd64.deb
+        wget https://github.com/spotdemo4/bumper/releases/download/v0.1.1/bumper_0.1.1_amd64.deb
+        sudo dpkg -i bumper_0.1.1_amd64.deb
         bumper ${{ inputs.files }}
 
     - if: ${{ inputs.skip_deps == 'true' }}
