@@ -36,3 +36,6 @@ jobs:
 
       - name: Bump
         uses: spotdemo4/bumper@main
+        with:
+          files: >-
+            action.yaml
