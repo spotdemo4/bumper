@@ -92,7 +92,9 @@ jobs:
 
       - name: Release
         run: |
-          nix shell nixpkgs#skopeo --command skopeo copy \
+          nix shell nixpkgs#skopeo \
+            --inputs-from . \
+            --command skopeo copy \
             --dest-creds=${{ steps.user.outputs.name }}:${{ steps.user.outputs.token }} \
             docker-archive:result \
             docker://ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME#v}

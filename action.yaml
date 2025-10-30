@@ -24,14 +24,22 @@ runs:
         echo "git user: $(git config user.name) <$(git config user.email)>"
 
     - shell: bash
-      id: shell
-      continue-on-error: true
-      run: ./bumper.sh ${{ inputs.files }}
-
-    - if: ${{ steps.shell.outcome == 'failure' }}
-      shell: bash
       run: |
-        echo "bumping with just the script failed, trying with binary"
-        wget https://github.com/spotdemo4/bumper/releases/download/v0.1.7/bumper
-        chmod +x bumper
-        ./bumper ${{ inputs.files }}
+        if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
+          echo "nix-update not found, installing via nix"
+          nix shell --inputs-from . nixpkgs#nix-update
+        fi
+
+        set +e
+        ./bumper.sh ${{ inputs.files }}
+        EXIT_CODE=$?
+        set -e
+
+        if [ "${EXIT_CODE}" -eq 2 ]; then
+          echo "missing dependency, using fallback binary"
+          wget https://github.com/spotdemo4/bumper/releases/download/v0.1.7/bumper
+          chmod +x bumper
+          ./bumper ${{ inputs.files }}
+        else
+          exit ${EXIT_CODE}
+        fi
