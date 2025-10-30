@@ -14,7 +14,25 @@ jobs:
       - name: Initialize
         uses: spotdemo4/nix-init@main
 
+      - name: Info
+        id: info
+        run: |
+          BWRAP_PATH=$(nix shell nixpkgs#bubblewrap \
+            --inputs-from . \
+            --command bash \
+            -c "which bwrap")
+          echo "bwrap_path=${BWRAP_PATH}" >> $GITHUB_OUTPUT
+          echo "bwrap path: ${BWRAP_PATH}"
+
+          GIT_PATH=$(which git)
+          echo "git_path=${GIT_PATH}" >> $GITHUB_OUTPUT
+          echo "git path: ${GIT_PATH}"
+
       - name: Bundle
+        env:
+          NP_RUNTIME: bwrap
+          NP_BWRAP: ${{ steps.info.outputs.static_path }}
+          NP_GIT: ${{ steps.info.outputs.git_path }}
         run: nix bundle -o result --bundler github:DavHau/nix-portable
 
       - name: Rename

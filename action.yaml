@@ -28,33 +28,29 @@ runs:
         if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
           echo "nix-update not found, installing via nix"
 
-          UPDATE=$(nix shell nixpkgs#nix-update \
+          UPDATE_PATH=$(nix shell nixpkgs#nix-update \
             --inputs-from . \
             --command bash \
             -c "which nix-update")
-          echo "nix-update installed at: ${UPDATE}"
-
-          DIR=$(dirname "${UPDATE}")
-          echo "adding nix-update to PATH: ${DIR}"
-
-          echo "${DIR}" >> "${GITHUB_PATH}"
+          echo "$(dirname "${UPDATE_PATH}")" >> "${GITHUB_PATH}"
         fi
 
     - shell: bash
+      id: bumper
       run: |
-        echo "${GITHUB_PATH}"
-        echo "${PATH}"
-
         set +e
         ./bumper.sh ${{ inputs.files }}
-        EXIT_CODE=$?
+        echo "exit_code=${?}" >> "${GITHUB_OUTPUT}"
         set -e
 
-        if [ "${EXIT_CODE}" -eq 2 ]; then
-          echo "missing dependency, using fallback binary"
-          wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.8/bumper-linux-x86_64" -O bumper
-          chmod +x bumper
-          ./bumper ${{ inputs.files }}
-        else
-          exit ${EXIT_CODE}
-        fi
+    - shell: bash
+      if: ${{ steps.bumper.outputs.exit_code == '1' }}
+      run: exit 1
+
+    - shell: bash
+      if: ${{ steps.bumper.outputs.exit_code == '2' }}
+      run: |
+        echo "missing dependency, falling back to binary"
+        wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.7/bumper-linux-x86_64" -O bumper
+        chmod +x bumper
+        ./bumper ${{ inputs.files }}
