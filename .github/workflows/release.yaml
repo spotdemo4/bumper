@@ -41,7 +41,7 @@ jobs:
           NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s)"
           NAME="${NAME,,}"
           echo "name=${NAME}" >> $GITHUB_OUTPUT
-          find result -type f -exec mv {} "${NAME}" \;
+          find result -xtype l -exec mv {} "${NAME}" \;
 
       - name: Release
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
@@ -63,7 +63,7 @@ jobs:
           NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s).deb"
           NAME="${NAME,,}"
           echo "name=${NAME}" >> $GITHUB_OUTPUT
-          find result -type f -exec mv {} "${NAME}" \;
+          find result -xtype l -exec mv {} "${NAME}" \;
 
       - name: Release
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
@@ -85,7 +85,7 @@ jobs:
           NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s).rpm"
           NAME="${NAME,,}"
           echo "name=${NAME}" >> $GITHUB_OUTPUT
-          find result -type f -exec mv {} "${NAME}" \;
+          find result -xtype l -exec mv {} "${NAME}" \;
 
       - name: Release
         uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
