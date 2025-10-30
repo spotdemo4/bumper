@@ -41,6 +41,10 @@ if ! git diff --staged --quiet || ! git diff --quiet; then
     warn "please commit or stash changes before running bumper"
     exit 1
 fi
+if ! git fetch --all --tags; then
+    warn "could not fetch commits and tags"
+    exit 1
+fi
 if ! ROOT=$(git rev-parse --show-toplevel 2> /dev/null); then
     warn "not a git repository"
     exit 1

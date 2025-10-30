@@ -38,7 +38,7 @@
       devShells = {
         default = pkgs.mkShell {
           packages = with pkgs; [
-            trev.bumper
+            nix-update
           ];
           shellHook = pkgs.trev.shellhook.ref;
         };
