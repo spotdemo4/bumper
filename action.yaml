@@ -30,7 +30,8 @@ runs:
 
           nix shell nixpkgs#nix-update \
             --inputs-from . \
-            --command bash -c "which nix-update" >> "${GITHUB_PATH}"
+            --command bash \
+            -c "dirname $(which nix-update)" >> "${GITHUB_PATH}"
 
           nix shell nixpkgs#nix-update \
             --inputs-from . \
