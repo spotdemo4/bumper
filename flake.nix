@@ -93,9 +93,8 @@
 
         runtimeInputs = with pkgs; [
           git
+          nodejs_24
           nix-update
-          wl-clipboard
-          wl-clipboard-x11
         ];
 
         text = builtins.readFile ./bumper.sh;
