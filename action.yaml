@@ -33,4 +33,5 @@ runs:
       run: |
         echo "bumping with just the script failed, trying with binary"
         wget https://github.com/spotdemo4/bumper/releases/download/v0.1.5/bumper
+        chmod +x bumper
         ./bumper ${{ inputs.files }}
