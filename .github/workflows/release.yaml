@@ -103,16 +103,11 @@ jobs:
 
   oci:
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
       - name: Initialize
         uses: spotdemo4/nix-init@main
-
-      - name: Create user
-        uses: spotdemo4/setup-git-app-user@main
-        id: user
-        with:
-          app-id: ${{ vars.CLIENT_ID }}
-          private-key: ${{ secrets.PRIVATE_KEY }}
 
       - name: Bundle
         run: nix bundle -o result --bundler github:NixOS/bundlers#toDockerImage
@@ -122,6 +117,6 @@ jobs:
           nix shell nixpkgs#skopeo \
             --inputs-from . \
             --command skopeo copy \
-            --dest-creds=${{ steps.user.outputs.name }}:${{ steps.user.outputs.token }} \
+            --dest-creds=${{ github.actor }}:${{ secrets.GITHUB_TOKEN }} \
             docker-archive:result \
             docker://ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME#v}
