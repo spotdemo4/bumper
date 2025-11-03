@@ -9,22 +9,33 @@ inputs:
   files:
     description: list of files to look for version strings
     required: false
+  commit:
+    description: commit changes
+    required: false
+    default: true
+  push:
+    description: push changes
+    required: false
+    default: true
 
 runs:
   using: composite
   steps:
     - shell: bash
       run: |
+        echo "::group::Check git user"
         if [ -z "$(git config user.name)" ]; then
           echo "no user found, using default"
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
         fi
+        echo "::endgroup::"
 
         echo "git user: $(git config user.name) <$(git config user.email)>"
 
     - shell: bash
       run: |
+        echo "::group::Check nix-update"
         if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
           echo "nix-update not found, installing via nix"
 
@@ -34,9 +45,13 @@ runs:
             -c "which nix-update")
           echo "$(dirname "${UPDATE_PATH}")" >> "${GITHUB_PATH}"
         fi
+        echo "::endgroup::"
 
     - shell: bash
       id: bumper
+      env:
+        COMMIT: ${{ inputs.commit }}
+        PUSH: ${{ inputs.push }}
       run: |
         set +e
         ./bumper.sh ${{ inputs.files }}

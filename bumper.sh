@@ -21,7 +21,7 @@ if colors=$(tput colors 2> /dev/null); then
 fi
 
 function bold {
-    printf "\n%s%s%s\n" "${bold_color}" "$1" "${reset_color}"
+    printf "%s%s%s\n" "${bold_color}" "$1" "${reset_color}"
 }
 function info {
     printf "%s%s%s\n" "${info_color}" "$1" "${reset_color}"
@@ -61,11 +61,15 @@ if ! LAST_VERSION=$(git describe --tags "${LAST_HASH}" 2> /dev/null); then
     warn "no git tags found, please create a tag first"
     exit 1
 fi
+readarray -t commits < <(git log --pretty=format:"%s" "${LAST_HASH}..HEAD")
+if [[ ${#commits[@]} -eq 0 ]]; then
+    warn "no new commits since last tag (${LAST_VERSION})"
+    exit 0
+fi
 
 cd "${ROOT}" || exit 1
 
 # get semver impact
-readarray -t commits < <(git log --pretty=format:"%s" "${LAST_HASH}..HEAD")
 impact="patch"
 for commit in "${commits[@]}"; do
     if [[ "${commit}" == feat* ]]; then
@@ -172,12 +176,8 @@ for file in "${files[@]}"; do
         continue
     fi
 
-    # display occurrences
-    bold "$(info "${file}")"
-    for line in "${lines[@]}"; do
-        trim=$(echo "${line}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-        info "${trim}"
-    done
+    # display file being changed
+    bold "changing: $(info "${file}")"
 
     # change version
     sed -i "s/${version}/${next_version}/g" "${file}"
@@ -199,9 +199,21 @@ fi
 
 echo
 
-# commit and tag
-git commit -m "bump: v${version} -> v${next_version}"
-git tag -a "v${next_version}" -m "bump: v${version} -> v${next_version}"
+if [[ "${COMMIT}" == "false" ]]; then
+    bold "$(info "COMMIT is false, skipping commit and tag")"
+    exit 0
+fi
 
-# push
-git push --atomic origin "${BRANCH}" "v${next_version}"
+info "committing: v${version} -> v${next_version}"
+git commit -m "bump: v${version} -> v${next_version}" > /dev/null
+
+info "creating tag: v${next_version}"
+git tag -a "v${next_version}" -m "bump: v${version} -> v${next_version}" > /dev/null
+
+if [[ "${PUSH}" == "false" ]]; then
+    bold "$(info "PUSH is false, skipping push")"
+    exit 0
+fi
+
+info "pushing changes to origin ${BRANCH}"
+git push --atomic origin "${BRANCH}" "v${next_version}" > /dev/null
