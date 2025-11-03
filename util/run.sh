@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-cd "${GITHUB_ACTION_PATH}"
+cd "${GITHUB_ACTION_PATH}" || exit 1
 
 if ! ./bumper.sh; then
     if [[ "${?}" -eq 1 ]]; then

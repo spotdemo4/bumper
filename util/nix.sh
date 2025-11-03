@@ -9,5 +9,5 @@ if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
             --command bash \
             -c "which nix-update"
     )
-    echo "$(dirname "${UPDATE_PATH}")" >> "${GITHUB_PATH}"
+    dirname "${UPDATE_PATH}" >> "${GITHUB_PATH}"
 fi
