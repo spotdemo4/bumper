@@ -13,10 +13,6 @@ a simple shell script that
 
 this works well as a github action. have it run on every push to main and it will bump the version for every change, or run it on a schedule to increase the version if there were any new changes
 
-## why
-
-why create this when there are a million other actions that do something similar? well, most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code. If you know of an action that does what this does but better, let me know!
-
 ## usage
 
 ```console
@@ -30,11 +26,13 @@ creating tag: v0.0.2
 pushing changes to origin main
 ```
 
+## why
+
+why create this when there are a million other actions that do something similar? well, most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code. If you know of an action that does what this does but better, let me know!
+
 ## install
 
 ### github actions
-
-[example](https://github.com/spotdemo4/bumper/blob/main/.github/workflows/bump.yaml)
 
 ```yaml
 - name: Bump
@@ -52,8 +50,6 @@ pushing changes to origin main
 [`bumper.sh`](https://raw.githubusercontent.com/spotdemo4/bumper/refs/heads/main/bumper.sh)
 
 ### nix
-
-#### cli
 
 ```console
 $ nix run github:spotdemo4/bumper
