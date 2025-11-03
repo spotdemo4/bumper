@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   check:
-    if: ${{ ! startsWith(github.event.head_commit.message, 'bump') }}
     runs-on: ubuntu-latest
     steps:
       - name: Initialize
@@ -20,31 +19,3 @@ jobs:
 
       - name: Run checks
         run: nix flake check
-
-  bump:
-    needs: check
-    if: ${{ github.event_name == 'push' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Create user
-        uses: spotdemo4/setup-git-app-user@main
-        id: user
-        with:
-          app-id: ${{ vars.CLIENT_ID }}
-          private-key: ${{ secrets.PRIVATE_KEY }}
-
-      - name: Initialize
-        uses: spotdemo4/nix-init@main
-        with:
-          token: ${{ steps.user.outputs.token }}
-
-      - name: Set user
-        run: |
-          git config --global user.name "${{ steps.user.outputs.name }}"
-          git config --global user.email "${{ steps.user.outputs.email }}"
-
-      - name: Bump
-        uses: spotdemo4/bumper@main
-        with:
-          files: >-
-            action.yaml
