@@ -121,7 +121,7 @@ VERSION=${LAST_VERSION#v}
 major=$(echo "${VERSION}" | cut -s -d . -f 1)
 minor=$(echo "${VERSION}" | cut -s -d . -f 2)
 patch=$(echo "${VERSION}" | cut -s -d . -f 3)
-case "${impact}" in
+case "${IMPACT}" in
     major) 
         major=$((major + 1))
         minor=0
@@ -166,7 +166,7 @@ for FILE in "${SEARCH[@]}"; do
 done
 
 # perform automatic bumps
-for FILE in "${search[@]}"; do
+for FILE in "${SEARCH[@]}"; do
     case "${FILE}" in
         # node
         "package.json" | "package-lock.json")
