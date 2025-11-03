@@ -22,7 +22,5 @@ jobs:
         uses: spotdemo4/bumper@main
         with:
           files: |
-            util/run.sh
+            action.sh
             .github/README.md
-          skip_scopes: |
-            ci

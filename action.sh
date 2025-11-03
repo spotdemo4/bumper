@@ -12,26 +12,26 @@ echo "git user: $(git config user.name) <$(git config user.email)>"
 # download deps with nix if available
 if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
     echo "::group::nix-update not found, installing via nix"
-    UPDATE_PATH=$(
+    NIX_UPDATE_PATH=$(
         nix shell nixpkgs#nix-update \
             --inputs-from . \
             --command bash \
             -c "which nix-update"
     )
-    dirname "${UPDATE_PATH}" >> "${GITHUB_PATH}"
+    dirname "${NIX_UPDATE_PATH}" >> "${PATH}"
     echo "::endgroup::"
 fi
 
 # run bumper, fall back to binary if deps are missing
 if ! "${GITHUB_ACTION_PATH}/bumper.sh"; then
-    if [[ ! "${?}" -eq 2 ]]; then
+    if [ $? -eq 2 ]; then
+        echo "::group::missing dependency, falling back to binary"
+        wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.20/bumper-x86_64-linux" -O "${GITHUB_ACTION_PATH}/bumper"
+        chmod +x "${GITHUB_ACTION_PATH}/bumper"
+        echo "::endgroup::"
+
+        "${GITHUB_ACTION_PATH}/bumper"
+    else
         exit 1
     fi
-
-    echo "::group::missing dependency, falling back to binary"
-    wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.20/bumper-x86_64-linux" -O "${GITHUB_ACTION_PATH}/bumper"
-    chmod +x "${GITHUB_ACTION_PATH}/bumper"
-    echo "::endgroup::"
-
-    "${GITHUB_ACTION_PATH}/bumper"
 fi
