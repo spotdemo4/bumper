@@ -20,7 +20,7 @@ jobs:
           fetch_depth: 0
 
       - name: Bump
-        uses: spotdemo4/bumper@main
+        uses: spotdemo4/bumper@f04a147ddd35d7eb198b7784ad1c2c277c18d23e # v0.1.22
         with:
           files: |-
             action.sh
