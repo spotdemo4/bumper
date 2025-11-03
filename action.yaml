@@ -7,7 +7,7 @@ branding:
 
 inputs:
   files:
-    description: list of files to look for version strings
+    description: list of files to manually bump versions in
     required: false
   commit:
     description: commit changes
@@ -17,8 +17,17 @@ inputs:
     description: push changes
     required: false
     default: "true"
-  skip:
-    description: list of commit message prefixes to skip
+  major_types:
+    description: commit types that trigger a major version bump
+    required: false
+  minor_types:
+    description: commit types that trigger a minor version bump
+    required: false
+  patch_types:
+    description: commit types that trigger a patch version bump
+    required: false
+  skip_scopes:
+    description: commit scopes to skip
     required: false
 
 runs:
@@ -53,24 +62,23 @@ runs:
     - shell: bash
       id: bumper
       env:
+        FILES: ${{ inputs.files }}
         COMMIT: ${{ inputs.commit }}
         PUSH: ${{ inputs.push }}
-        SKIP_PREFIX: ${{ inputs.skip }}
+        MAJOR_TYPES: ${{ inputs.major_types }}
+        MINOR_TYPES: ${{ inputs.minor_types }}
+        PATCH_TYPES: ${{ inputs.patch_types }}
+        SKIP_SCOPES: ${{ inputs.skip_scopes }}
         DEBUG: ${{ runner.debug }}
       run: |
-        chmod +x ${{ github.action_path }}/bumper.sh
-        if ! ${{ github.action_path }}/bumper.sh ${{ inputs.files }}; then
-          echo "exit_code=${?}" >> "${GITHUB_OUTPUT}"
+        chmod +x "${{ github.action_path }}/bumper.sh"
+        if ! "${{ github.action_path }}/bumper.sh"; then
+          if [[ "${?}" -eq 1 ]]; then
+            exit 1
+          fi
+
+          echo "missing dependency, falling back to binary"
+          wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.20/bumper-x86_64-linux" -O "${{ github.action_path }}/bumper"
+          chmod +x "${{ github.action_path }}/bumper"
+          "${{ github.action_path }}/bumper"
         fi
-
-    - if: ${{ steps.bumper.outputs.exit_code == '1' }}
-      shell: bash
-      run: exit 1
-
-    - if: ${{ steps.bumper.outputs.exit_code == '2' }}
-      shell: bash
-      run: |
-        echo "missing dependency, falling back to binary"
-        wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.20/bumper-x86_64-linux" -O bumper
-        chmod +x bumper
-        ./bumper ${{ inputs.files }}

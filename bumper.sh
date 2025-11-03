@@ -80,33 +80,59 @@ if [[ ${#COMMITS[@]} -eq 0 ]]; then
     exit 0
 fi
 
-# get skip prefixes
-if [[ -n "${SKIP_PREFIX}" ]]; then
-    SKIP_PREFIX=("${SKIP_PREFIX}")
-else
-    declare -a SKIP_PREFIX=("bump" "chore")
-fi
+# get vars from env
+readarray -t SKIP_SCOPES <<< "${SKIP_SCOPES}"
+readarray -t MAJOR_TYPES <<< "${MAJOR_TYPES:-"BREAKING CHANGE"}"
+readarray -t MINOR_TYPES <<< "${MINOR_TYPES:-"feat"}"
+readarray -t PATCH_TYPES <<< "${PATCH_TYPES:-"fix"}"
 
-# get semver impact
+# get semver impact from commits
+# https://www.conventionalcommits.org/en/v1.0.0/
 IMPACT=""
 for COMMIT in "${COMMITS[@]}"; do
     info "${COMMIT}"
 
-    for PREFIX in "${SKIP_PREFIX[@]}"; do
-        if [[ "${COMMIT}" == "${PREFIX}"* ]]; then
-            # skip over specified prefixes
+    TYPE_SCOPE=$(echo "${COMMIT}" | cut -d ':' -f 1)
+    TYPE=$(echo "${TYPE_SCOPE}" | cut -d '(' -f 1)
+    SCOPE=$(echo "${TYPE_SCOPE}" | cut -s -d '(' -f 2 | cut -s -d ')' -f 1)
+
+    for SKIP_SCOPE in "${SKIP_SCOPES[@]}"; do
+        if [[ "${SCOPE,,}" == "${SKIP_SCOPE,,}" ]]; then
+            info "skipping commit with scope: ${SCOPE}"
             continue 2
         fi
     done
 
-    if [[ "${COMMIT}" == BREAKING\ CHANGE* ]]; then
+    if [[ "${TYPE_SCOPE: -1}" == "!" ]]; then
         IMPACT="major"
         break
-    elif [[ "${COMMIT}" == feat* ]]; then
-        IMPACT="minor"
-    elif [[ -z "${IMPACT}" ]]; then
-        IMPACT="patch"
     fi
+
+    for MAJOR_TYPE in "${MAJOR_TYPES[@]}"; do
+        if [[ "${TYPE,,}" == "${MAJOR_TYPE,,}" ]]; then
+            IMPACT="major"
+            break 2
+        fi
+    done
+
+    for MINOR_TYPE in "${MINOR_TYPES[@]}"; do
+        if [[ "${TYPE,,}" == "${MINOR_TYPE,,}" ]]; then
+            IMPACT="minor"
+            continue 2
+        fi
+    done
+
+    # skip checking for patches if already impactful
+    if [[ -n "${IMPACT}" ]]; then
+        continue
+    fi
+
+    for PATCH_TYPE in "${PATCH_TYPES[@]}"; do
+        if [[ "${TYPE,,}" == "${PATCH_TYPE,,}" ]]; then
+            IMPACT="patch"
+            continue 2
+        fi
+    done
 done
 
 echo
@@ -191,8 +217,12 @@ for FILE in "${SEARCH[@]}"; do
     esac
 done
 
+# get files from args & env
+ARG_FILES=("$@")
+readarray -t ENV_FILES <<< "${FILES}"
+FILES=( "${ARG_FILES[@]}" "${ENV_FILES[@]}" )
+
 # perform manual bumps
-FILES=("$@")
 for FILE in "${FILES[@]}"; do
     # check if file exists
     if [[ ! -f "${FILE}" ]]; then
