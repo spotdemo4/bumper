@@ -109,6 +109,8 @@ for COMMIT in "${COMMITS[@]}"; do
     fi
 done
 
+echo
+
 if [[ -z "${IMPACT}" ]]; then
     warn "no new impactful commits since last tag (${LAST_VERSION})"
     exit 0
@@ -206,7 +208,7 @@ for FILE in "${FILES[@]}"; do
     fi
 
     # display file being changed
-    bold "changing: $(info "${FILE}")"
+    bold "bumping: $(info "${FILE}")"
 
     # change version
     sed -i "s/${VERSION}/${NEXT_VERSION}/g" "${FILE}"
