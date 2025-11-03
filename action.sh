@@ -12,14 +12,15 @@ echo "git user: $(git config user.name) <$(git config user.email)>"
 # download deps with nix if available
 if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
     echo "::group::nix-update not found, installing via nix"
-    NIX_UPDATE_PATH=$(
+    NIX_UPDATE_DIR=$(
         nix shell nixpkgs#nix-update \
             --inputs-from . \
             --command bash \
             -c "which nix-update"
     )
-    export PATH=$(dirname "${NIX_UPDATE_PATH}"):${PATH}
-    echo "added nix-update to PATH: $(dirname "${NIX_UPDATE_PATH}")"
+    NIX_UPDATE_PATH=$(dirname "${NIX_UPDATE_DIR}")
+    export PATH="${NIX_UPDATE_PATH}:${PATH}"
+    echo "added nix-update to PATH: ${NIX_UPDATE_PATH}"
     echo "::endgroup::"
 fi
 
