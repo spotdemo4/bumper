@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Initialize
-        uses: spotdemo4/nix-init@main
+        uses: spotdemo4/nix-init@08a91698a7d25d7492b4883a37cd889db53353b1 # v1.0.2
         with:
           shell: ci
 
