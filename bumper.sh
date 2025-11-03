@@ -75,6 +75,9 @@ for commit in "${commits[@]}"; do
     if [[ "${commit}" == bump* ]]; then
         # skip over bump commits
         continue
+    elif [[ "${commit}" == chore* ]]; then
+        # skip over chore commits
+        continue
     elif [[ -z "${impact}" ]]; then
         impact="patch"
     elif [[ "${commit}" == feat* ]]; then
