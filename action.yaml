@@ -12,11 +12,11 @@ inputs:
   commit:
     description: commit changes
     required: false
-    default: true
+    default: "true"
   push:
     description: push changes
     required: false
-    default: true
+    default: "true"
 
 runs:
   using: composite
