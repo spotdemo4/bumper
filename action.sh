@@ -18,7 +18,8 @@ if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
             --command bash \
             -c "which nix-update"
     )
-    dirname "${NIX_UPDATE_PATH}" >> "${PATH}"
+    export PATH=$(dirname "${NIX_UPDATE_PATH}"):${PATH}
+    echo "added nix-update to PATH: $(dirname "${NIX_UPDATE_PATH}")"
     echo "::endgroup::"
 fi
 
