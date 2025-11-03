@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Initialize
-        uses: spotdemo4/nix-init@315f2ec17d93c978e1e433247fec64ca1b79b01e # v1.0.3
+        uses: spotdemo4/nix-init@66d8f152d46a575eda9336e09d6f7fccc7756b16 # v1.1.0
 
       - name: Info
         id: info
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Initialize
-        uses: spotdemo4/nix-init@315f2ec17d93c978e1e433247fec64ca1b79b01e # v1.0.3
+        uses: spotdemo4/nix-init@66d8f152d46a575eda9336e09d6f7fccc7756b16 # v1.1.0
 
       - name: Bundle
         run: nix bundle -o result --bundler github:NixOS/bundlers#toDEB
@@ -94,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Initialize
-        uses: spotdemo4/nix-init@315f2ec17d93c978e1e433247fec64ca1b79b01e # v1.0.3
+        uses: spotdemo4/nix-init@66d8f152d46a575eda9336e09d6f7fccc7756b16 # v1.1.0
 
       - name: Bundle
         run: nix bundle -o result --bundler github:NixOS/bundlers#toRPM
@@ -121,7 +121,7 @@ jobs:
       packages: write
     steps:
       - name: Initialize
-        uses: spotdemo4/nix-init@315f2ec17d93c978e1e433247fec64ca1b79b01e # v1.0.3
+        uses: spotdemo4/nix-init@66d8f152d46a575eda9336e09d6f7fccc7756b16 # v1.1.0
 
       - name: Bundle
         run: nix bundle -o result --bundler github:NixOS/bundlers#toDockerImage
