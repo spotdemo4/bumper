@@ -199,7 +199,7 @@ fi
 
 echo
 
-if [[ "${COMMIT}" == "false" ]]; then
+if [[ "${COMMIT:-true}" == "false" ]]; then
     bold "$(info "COMMIT is false, skipping commit and tag")"
     exit 0
 fi
@@ -210,7 +210,7 @@ git commit -m "bump: v${version} -> v${next_version}" > /dev/null
 info "creating tag: v${next_version}"
 git tag -a "v${next_version}" -m "bump: v${version} -> v${next_version}" > /dev/null
 
-if [[ "${PUSH}" == "false" ]]; then
+if [[ "${PUSH:-true}" == "false" ]]; then
     bold "$(info "PUSH is false, skipping push")"
     exit 0
 fi
