@@ -66,6 +66,6 @@ runs:
       if: ${{ steps.bumper.outputs.exit_code == '2' }}
       run: |
         echo "missing dependency, falling back to binary"
-        wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.17/bumper-x86_64-linux" -O bumper
+        wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.18/bumper-x86_64-linux" -O bumper
         chmod +x bumper
         ./bumper ${{ inputs.files }}
