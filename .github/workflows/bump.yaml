@@ -23,4 +23,4 @@ jobs:
         with:
           files: >-
             action.yaml
-            README.md
+            .github/README.md
