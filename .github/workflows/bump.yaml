@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Create user
-        uses: spotdemo4/setup-git-app-user@main
         id: user
+        uses: spotdemo4/setup-git-app-user@c9decd10aa020d716ee1460d4653b48fe9cbe9f7 # v2.0.5
         with:
           app-id: ${{ vars.CLIENT_ID }}
           private-key: ${{ secrets.PRIVATE_KEY }}

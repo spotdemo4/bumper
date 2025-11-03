@@ -54,7 +54,8 @@ runs:
         PUSH: ${{ inputs.push }}
       run: |
         set +e
-        ./bumper.sh ${{ inputs.files }}
+        chmod +x ${{ github.action_path }}/bumper.sh
+        ${{ github.action_path }}/bumper.sh ${{ inputs.files }}
         echo "exit_code=${?}" >> "${GITHUB_OUTPUT}"
         set -e
 
