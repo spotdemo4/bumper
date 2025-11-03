@@ -1,6 +1,96 @@
 # git version bumper
 
-[![check status](https://img.shields.io/github/actions/workflow/status/spotdemo4/bumper/check.yaml?logo=GitHub&logoColor=%23cdd6f4&label=check&labelColor=%2311111b)](https://github.com/spotdemo4/bumper/actions/workflows/check.yaml)
-[![vulnerable status](https://img.shields.io/github/actions/workflow/status/spotdemo4/bumper/vulnerable.yaml?logo=nixos&logoColor=%2389dceb&label=vulnerable&labelColor=%2311111b)](https://github.com/spotdemo4/bumper/actions/workflows/vulnerable.yaml)
+![check](https://github.com/spotdemo4/bumper/actions/workflows/check.yaml/badge.svg)
+![vulnerable](https://github.com/spotdemo4/bumper/actions/workflows/vulnerable.yaml/badge.svg)
 
-creates a semver git version bump using conventional commit guidelines
+a simple shell script that
+
+- determines the [semantic versioning](https://semver.org/) impact (major, minor or patch) of the [conventional commits](https://www.conventionalcommits.org) since the last git tag
+- increments the git tag by the impact (v0.0.1 -> PATCH -> v0.0.2)
+- applies the version bump to discovered files (`package.json`, `flake.nix`)
+- applies the version bump to files given as arguments (`bumper [files...]`)
+- commits the bumped files and pushes them with the new git tag
+
+this works well as a github action. have it run on every push to main and it will bump the version for every change, or run it on a schedule to increase the version if there were any new changes
+
+## why
+
+why create this when there are a million other actions that do something similar? well, most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code. If you know of an action that does what this does but better, let me know!
+
+## usage
+
+```console
+$ bumper action.yaml
+impact: patch
+0.1.15 -> 0.1.16
+changed: action.yaml
+
+committing: v0.1.15 -> v0.1.16
+creating tag: v0.1.16
+pushing changes to origin main
+```
+
+## install
+
+### github actions
+
+```yaml
+- name: Bump
+  uses: spotdemo4/bumper@main
+  with:
+    files: >-
+      action.yaml
+      README.md
+    commit: true # optional, default true
+    push: true # optional, default true
+```
+
+[example](https://github.com/spotdemo4/bumper/blob/main/.github/workflows/bump.yaml)
+
+### nix
+
+#### cli
+
+```console
+$ nix run github:spotdemo4/bumper
+impact: patch
+0.1.15 -> 0.1.16
+[main 188351c] bump: v0.1.15 -> v0.1.16
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+To https://github.com/spotdemo4/bumper
+   c0adeca..188351c  main -> main
+ * [new tag]         v0.1.16 -> v0.1.16
+```
+
+#### flake
+
+```nix
+inputs = {
+    bumper = {
+        url = "github:spotdemo4/bumper";
+        inputs.nixpkgs.follows = "nixpkgs";
+    };
+};
+
+outputs = { bumper, ... }: {
+    devShells."${system}".default = pkgs.mkShell {
+        packages = with pkgs; [
+            bumper."${system}".default
+        ];
+    };
+}
+```
+
+### script
+
+[`bumper.sh`](https://raw.githubusercontent.com/spotdemo4/bumper/refs/heads/main/bumper.sh)
+
+### binary (static, deb, rpm)
+
+https://github.com/spotdemo4/bumper/releases/latest
+
+### container
+
+```console
+$ docker pull ghcr.io/spotdemo4/bumper:0.1.16
+```
