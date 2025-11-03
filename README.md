@@ -38,7 +38,7 @@ pushing changes to origin main
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.1.16
+  uses: spotdemo4/bumper@v0.1.17
   with:
     files: >-
       action.yaml
@@ -91,5 +91,5 @@ outputs = { bumper, ... }: {
 ### container
 
 ```console
-$ docker pull ghcr.io/spotdemo4/bumper:0.1.16
+$ docker pull ghcr.io/spotdemo4/bumper:0.1.17
 ```
