@@ -81,7 +81,7 @@ if [[ ${#COMMITS[@]} -eq 0 ]]; then
 fi
 
 # get vars from env
-readarray -t SKIP_SCOPES <<< "${SKIP_SCOPES}"
+readarray -t SKIP_SCOPES <<< "${SKIP_SCOPES:-"ci"}"
 readarray -t MAJOR_TYPES <<< "${MAJOR_TYPES:-"BREAKING CHANGE"}"
 readarray -t MINOR_TYPES <<< "${MINOR_TYPES:-"feat"}"
 readarray -t PATCH_TYPES <<< "${PATCH_TYPES:-"fix"}"

@@ -59,6 +59,7 @@
           ];
           script = ''
             shellcheck bumper.sh
+            shellcheck util/*.sh
           '';
         };
 

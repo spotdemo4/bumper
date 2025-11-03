@@ -21,6 +21,8 @@ jobs:
       - name: Bump
         uses: spotdemo4/bumper@main
         with:
-          files: >-
-            action.yaml
+          files: |
+            util/run.sh
             .github/README.md
+          skip_scopes: |
+            ci

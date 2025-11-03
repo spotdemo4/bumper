@@ -38,29 +38,29 @@ why create this when there are a million other actions that do something similar
 - name: Bump
   uses: spotdemo4/bumper@v0.1.20
   with:
-    commit: true # optional, default true
-    push: true # optional, default true
+    commit: true # commit changes after bumping, default true
+    push: true # push changes after bumping, default true
 
-    # optional, files to manually update
+    # list of files to bump versions in
     files: |
       action.yaml
       README.md
 
-    # optional, default "BREAKING CHANGE"
+    # conventional commit types for MAJOR version bumps, default "BREAKING CHANGE"
     major_types: |
       BREAKING CHANGE
 
-    # optional, default "feat"
+    # conventional commit types for MINOR version bumps, default "feat"
     minor_types: |
       feat
 
-    # optional, default "fix"
+    # conventional commit types for PATCH version bumps, default "fix"
     patch_types: |
       fix
 
-    # optional, commit scopes to skip
+    # conventional commit scopes to skip over, default "ci"
     skip_scopes: |
-      nix
+      ci
 ```
 
 ### script

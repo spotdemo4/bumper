@@ -7,57 +7,37 @@ branding:
 
 inputs:
   files:
-    description: list of files to manually bump versions in
+    description: list of files to bump versions in
     required: false
   commit:
-    description: commit changes
+    description: commit changes after bumping
     required: false
     default: "true"
   push:
-    description: push changes
+    description: push changes after bumping
     required: false
     default: "true"
   major_types:
-    description: commit types that trigger a major version bump
+    description: conventional commit types for MAJOR version bumps
     required: false
   minor_types:
-    description: commit types that trigger a minor version bump
+    description: conventional commit types for MINOR version bumps
     required: false
   patch_types:
-    description: commit types that trigger a patch version bump
+    description: conventional commit types for PATCH version bumps
     required: false
   skip_scopes:
-    description: commit scopes to skip
+    description: conventional commit scopes to skip over
     required: false
 
 runs:
   using: composite
   steps:
     - shell: bash
-      run: |
-        echo "::group::Check git user"
-        if [ -z "$(git config user.name)" ]; then
-          echo "no user found, using default"
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        fi
-        echo "::endgroup::"
-
-        echo "git user: $(git config user.name) <$(git config user.email)>"
+      run: "${{ github.action_path }}/util/git-user.sh"
 
     - shell: bash
-      run: |
-        echo "::group::Check nix-update"
-        if command -v nix &> /dev/null && ! command -v nix-update &> /dev/null; then
-          echo "nix-update not found, installing via nix"
-
-          UPDATE_PATH=$(nix shell nixpkgs#nix-update \
-            --inputs-from . \
-            --command bash \
-            -c "which nix-update")
-          echo "$(dirname "${UPDATE_PATH}")" >> "${GITHUB_PATH}"
-        fi
-        echo "::endgroup::"
+      run: "${{ github.action_path }}/util/nix.sh"
 
     - shell: bash
       id: bumper
@@ -70,15 +50,4 @@ runs:
         PATCH_TYPES: ${{ inputs.patch_types }}
         SKIP_SCOPES: ${{ inputs.skip_scopes }}
         DEBUG: ${{ runner.debug }}
-      run: |
-        chmod +x "${{ github.action_path }}/bumper.sh"
-        if ! "${{ github.action_path }}/bumper.sh"; then
-          if [[ "${?}" -eq 1 ]]; then
-            exit 1
-          fi
-
-          echo "missing dependency, falling back to binary"
-          wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.20/bumper-x86_64-linux" -O "${{ github.action_path }}/bumper"
-          chmod +x "${{ github.action_path }}/bumper"
-          "${{ github.action_path }}/bumper"
-        fi
+      run: "${{ github.action_path }}/util/run.sh"
