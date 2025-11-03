@@ -34,13 +34,6 @@ runs:
   using: composite
   steps:
     - shell: bash
-      run: "${{ github.action_path }}/util/git-user.sh"
-
-    - shell: bash
-      run: "${{ github.action_path }}/util/nix.sh"
-
-    - shell: bash
-      id: bumper
       env:
         FILES: ${{ inputs.files }}
         COMMIT: ${{ inputs.commit }}
@@ -50,4 +43,4 @@ runs:
         PATCH_TYPES: ${{ inputs.patch_types }}
         SKIP_SCOPES: ${{ inputs.skip_scopes }}
         DEBUG: ${{ runner.debug }}
-      run: "${{ github.action_path }}/util/run.sh"
+      run: "${{ github.action_path }}/action.sh"
