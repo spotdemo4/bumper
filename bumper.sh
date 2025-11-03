@@ -70,18 +70,25 @@ fi
 cd "${ROOT}" || exit 1
 
 # get semver impact
-impact="patch"
+impact=""
 for commit in "${commits[@]}"; do
-    if [[ "${commit}" == feat* ]]; then
-        if [[ "${impact}" == "patch" ]]; then
-            impact="minor"
-        fi
+    if [[ "${commit}" == bump* ]]; then
+        # skip over bump commits
+        continue
+    elif [[ -z "${impact}" ]]; then
+        impact="patch"
+    elif [[ "${commit}" == feat* ]]; then
+        impact="minor"
     elif [[ "${commit}" == BREAKING\ CHANGE* ]]; then
-        if [[ "${impact}" != "minor" ]]; then
-            impact="major"
-        fi
+        impact="major"
+        break
     fi
 done
+
+if [[ -z "${impact}" ]]; then
+    warn "no new impactful commits since last tag (${LAST_VERSION})"
+    exit 0
+fi
 
 bold "$(info "impact: ${impact}")"
 
