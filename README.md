@@ -22,11 +22,11 @@ why create this when there are a million other actions that do something similar
 ```console
 $ bumper action.yaml
 impact: patch
-0.1.15 -> 0.1.16
+0.0.1 -> 0.0.2
 changed: action.yaml
 
-committing: v0.1.15 -> v0.1.16
-creating tag: v0.1.16
+committing: v0.0.1 -> v0.0.2
+creating tag: v0.0.2
 pushing changes to origin main
 ```
 
@@ -34,9 +34,11 @@ pushing changes to origin main
 
 ### github actions
 
+[example](https://github.com/spotdemo4/bumper/blob/main/.github/workflows/bump.yaml)
+
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@main
+  uses: spotdemo4/bumper@v0.1.16
   with:
     files: >-
       action.yaml
@@ -45,7 +47,9 @@ pushing changes to origin main
     push: true # optional, default true
 ```
 
-[example](https://github.com/spotdemo4/bumper/blob/main/.github/workflows/bump.yaml)
+### script
+
+[`bumper.sh`](https://raw.githubusercontent.com/spotdemo4/bumper/refs/heads/main/bumper.sh)
 
 ### nix
 
@@ -54,12 +58,11 @@ pushing changes to origin main
 ```console
 $ nix run github:spotdemo4/bumper
 impact: patch
-0.1.15 -> 0.1.16
-[main 188351c] bump: v0.1.15 -> v0.1.16
- 2 files changed, 2 insertions(+), 2 deletions(-)
-To https://github.com/spotdemo4/bumper
-   c0adeca..188351c  main -> main
- * [new tag]         v0.1.16 -> v0.1.16
+0.0.1 -> 0.0.2
+
+committing: v0.0.1 -> v0.0.2
+creating tag: v0.0.2
+pushing changes to origin main
 ```
 
 #### flake
@@ -81,13 +84,9 @@ outputs = { bumper, ... }: {
 }
 ```
 
-### script
+### binary
 
-[`bumper.sh`](https://raw.githubusercontent.com/spotdemo4/bumper/refs/heads/main/bumper.sh)
-
-### binary (static, deb, rpm)
-
-https://github.com/spotdemo4/bumper/releases/latest
+[release](https://github.com/spotdemo4/bumper/releases/latest)
 
 ### container
 
