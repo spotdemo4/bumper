@@ -92,10 +92,22 @@ IMPACT=""
 for COMMIT in "${COMMITS[@]}"; do
     info "${COMMIT}"
 
-    TYPE_SCOPE=$(echo "${COMMIT}" | cut -d ':' -f 1)
-    TYPE=$(echo "${TYPE_SCOPE}" | cut -d '(' -f 1)
-    SCOPE=$(echo "${TYPE_SCOPE}" | cut -s -d '(' -f 2 | cut -s -d ')' -f 1)
+    # skip commits that don't follow conventional commit format
+    if [[ ! "${COMMIT}" == *:* ]]; then
+        warn "skipping non-conventional commit"
+        continue
+    fi
 
+    PREFIX=$(echo "${COMMIT}" | cut -d ':' -f 1)
+    TYPE=$(echo "${PREFIX}" | cut -d '(' -f 1)
+    SCOPE=$(echo "${PREFIX}" | cut -s -d '(' -f 2 | cut -s -d ')' -f 1)
+
+    # default empty scope to "none"
+    if [[ -z "${SCOPE}" ]]; then
+        SCOPE="none"
+    fi
+
+    # check if scope is in skip list
     for SKIP_SCOPE in "${SKIP_SCOPES[@]}"; do
         if [[ "${SCOPE,,}" == "${SKIP_SCOPE,,}" ]]; then
             info "skipping commit with scope: ${SCOPE}"
@@ -103,7 +115,8 @@ for COMMIT in "${COMMITS[@]}"; do
         fi
     done
 
-    if [[ "${TYPE_SCOPE: -1}" == "!" ]]; then
+    # if commit prefix ends with "!", it's a major change
+    if [[ "${PREFIX: -1}" == "!" ]]; then
         IMPACT="major"
         break
     fi
