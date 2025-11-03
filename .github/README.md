@@ -42,24 +42,24 @@ why create this when there are a million other actions that do something similar
     push: true # push changes after bumping, default true
 
     # list of files to bump versions in
-    files: |
+    files: |-
       action.yaml
       README.md
 
     # conventional commit types for MAJOR version bumps, default "BREAKING CHANGE"
-    major_types: |
+    major_types: |-
       BREAKING CHANGE
 
     # conventional commit types for MINOR version bumps, default "feat"
-    minor_types: |
+    minor_types: |-
       feat
 
     # conventional commit types for PATCH version bumps, default "fix"
-    patch_types: |
+    patch_types: |-
       fix
 
     # conventional commit scopes to skip over, default "ci"
-    skip_scopes: |
+    skip_scopes: |-
       ci
 ```
 
