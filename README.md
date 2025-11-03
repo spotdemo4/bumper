@@ -36,7 +36,7 @@ why create this when there are a million other actions that do something similar
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.1.19
+  uses: spotdemo4/bumper@v0.1.20
   with:
     files: >- # optional, files to manually update
       action.yaml
@@ -90,5 +90,5 @@ outputs = { bumper, ... }: {
 ### container
 
 ```console
-$ docker pull ghcr.io/spotdemo4/bumper:0.1.19
+$ docker pull ghcr.io/spotdemo4/bumper:0.1.20
 ```
