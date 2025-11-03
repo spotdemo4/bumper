@@ -36,7 +36,15 @@ function success {
     printf "%s%s%s\n" "${success_color}" "$1" "${reset_color}"
 }
 
-# git info
+function run {
+    if [[ -n "${DEBUG}" ]]; then
+        "$@"
+    else
+        "$@" &> /dev/null
+    fi
+}
+
+# validate the git environment is set up correctly
 if ! git diff --staged --quiet || ! git diff --quiet; then
     warn "please commit or stash changes before running bumper"
     exit 1
@@ -61,45 +69,58 @@ if ! LAST_VERSION=$(git describe --tags "${LAST_HASH}" 2> /dev/null); then
     warn "no git tags found, please create a tag first"
     exit 1
 fi
-readarray -t commits < <(git log --pretty=format:"%s" "${LAST_HASH}..HEAD")
-if [[ ${#commits[@]} -eq 0 ]]; then
+
+# go to repo root
+cd "${ROOT}" || exit 1
+
+# get commits since last tag
+readarray -t COMMITS < <(git log --pretty=format:"%s" "${LAST_HASH}..HEAD")
+if [[ ${#COMMITS[@]} -eq 0 ]]; then
     warn "no new commits since last tag (${LAST_VERSION})"
     exit 0
 fi
 
-cd "${ROOT}" || exit 1
+# get skip prefixes
+if [[ -n "${SKIP_PREFIX}" ]]; then
+    SKIP_PREFIX=("${SKIP_PREFIX}")
+else
+    declare -a SKIP_PREFIX=("bump" "chore")
+fi
 
 # get semver impact
-impact=""
-for commit in "${commits[@]}"; do
-    if [[ "${commit}" == bump* ]]; then
-        # skip over bump commits
-        continue
-    elif [[ "${commit}" == chore* ]]; then
-        # skip over chore commits
-        continue
-    elif [[ -z "${impact}" ]]; then
-        impact="patch"
-    elif [[ "${commit}" == feat* ]]; then
-        impact="minor"
-    elif [[ "${commit}" == BREAKING\ CHANGE* ]]; then
-        impact="major"
+IMPACT=""
+for COMMIT in "${COMMITS[@]}"; do
+    info "${COMMIT}"
+
+    for PREFIX in "${SKIP_PREFIX[@]}"; do
+        if [[ "${COMMIT}" == "${PREFIX}"* ]]; then
+            # skip over specified prefixes
+            continue 2
+        fi
+    done
+
+    if [[ "${COMMIT}" == BREAKING\ CHANGE* ]]; then
+        IMPACT="major"
         break
+    elif [[ "${COMMIT}" == feat* ]]; then
+        IMPACT="minor"
+    elif [[ -z "${IMPACT}" ]]; then
+        IMPACT="patch"
     fi
 done
 
-if [[ -z "${impact}" ]]; then
+if [[ -z "${IMPACT}" ]]; then
     warn "no new impactful commits since last tag (${LAST_VERSION})"
     exit 0
 fi
 
-bold "$(info "impact: ${impact}")"
+bold "$(info "impact: ${IMPACT}")"
 
 # get next version
-version=${LAST_VERSION#v}
-major=$(echo "${version}" | cut -s -d . -f 1)
-minor=$(echo "${version}" | cut -s -d . -f 2)
-patch=$(echo "${version}" | cut -s -d . -f 3)
+VERSION=${LAST_VERSION#v}
+major=$(echo "${VERSION}" | cut -s -d . -f 1)
+minor=$(echo "${VERSION}" | cut -s -d . -f 2)
+patch=$(echo "${VERSION}" | cut -s -d . -f 3)
 case "${impact}" in
     major) 
         major=$((major + 1))
@@ -114,19 +135,19 @@ case "${impact}" in
         patch=$((patch + 1))
         ;;
 esac
-next_version="${major}.${minor}.${patch}"
+NEXT_VERSION="${major}.${minor}.${patch}"
 
-bold "$(info "${version} -> ${next_version}")"
+bold "$(info "${VERSION} -> ${NEXT_VERSION}")"
 
 # search for files to bump
-readarray -t search < <(git ls-files)
+readarray -t SEARCH < <(git ls-files)
 
 # validate all required deps are installed
-for file in "${search[@]}"; do
-    case "${file}" in
+for FILE in "${SEARCH[@]}"; do
+    case "${FILE}" in
         # node
         "package.json" | "package-lock.json")
-            if ! command -v npm >/dev/null 2>&1; then
+            if ! run command -v npm; then
                 bold "$(warn "npm not found")"
                 warn "please install npm to bump package.json files"
                 exit 2
@@ -135,7 +156,7 @@ for file in "${search[@]}"; do
 
         # nix
         "flake.nix")
-            if ! command -v nix-update >/dev/null 2>&1; then
+            if ! run command -v nix-update; then
                 bold "$(warn "nix-update not found")"
                 warn "please install nix-update to bump flake.nix files"
                 exit 2
@@ -145,58 +166,56 @@ for file in "${search[@]}"; do
 done
 
 # perform automatic bumps
-for file in "${search[@]}"; do
-    case "${file}" in
+for FILE in "${search[@]}"; do
+    case "${FILE}" in
         # node
         "package.json" | "package-lock.json")
-            if err=$(npm version "${next_version}" --no-git-tag-version --allow-same-version 2>&1 >/dev/null); then
+            if run npm version "${NEXT_VERSION}" --no-git-tag-version --allow-same-version; then
                 git add package.json
                 git add package-lock.json
             else
-                bold "$(warn "npm version failed")"
-                warn "${err}"
+                bold "$(warn "'npm version' failed")"
             fi
             ;;
 
         # nix
         "flake.nix")
-            if err=$(nix-update --flake --version "${next_version}" default 2>&1 >/dev/null); then
+            if run nix-update --flake --version "${NEXT_VERSION}" default; then
                 git add flake.nix
             else
-                bold "$(warn "nix-update failed")"
-                warn "${err}"
+                bold "$(warn "'nix-update' failed")"
             fi
             ;;
     esac
 done
 
 # perform manual bumps
-files=("$@")
-for file in "${files[@]}"; do
+FILES=("$@")
+for FILE in "${FILES[@]}"; do
     # check if file exists
-    if [[ ! -f "${file}" ]]; then
-        warn "file not found: ${file}"
+    if [[ ! -f "${FILE}" ]]; then
+        warn "file not found: ${FILE}"
         continue
     fi
 
     # look for version occurrences
-    readarray -t lines < <(grep -F "${version}" "${file}")
-    if [[ ${#lines[@]} -eq 0 ]]; then
-        warn "no occurrences found in ${file}"
+    readarray -t LINES < <(grep -F "${VERSION}" "${FILE}")
+    if [[ ${#LINES[@]} -eq 0 ]]; then
+        warn "no occurrences found in ${FILE}"
         continue
     fi
 
     # display file being changed
-    bold "changing: $(info "${file}")"
+    bold "changing: $(info "${FILE}")"
 
     # change version
-    sed -i "s/${version}/${next_version}/g" "${file}"
+    sed -i "s/${VERSION}/${NEXT_VERSION}/g" "${FILE}"
 
     # validate change
-    if grep -q "${next_version}" "${file}"; then
-        git add "${file}"
+    if grep -q "${NEXT_VERSION}" "${FILE}"; then
+        git add "${FILE}"
     else
-        warn "failed to replace version in ${file}"
+        warn "failed to replace version in ${FILE}"
         continue
     fi
 done
@@ -207,6 +226,7 @@ if git diff --staged --quiet; then
     exit 1
 fi
 
+# push changes
 echo
 
 if [[ "${COMMIT:-true}" == "false" ]]; then
@@ -214,11 +234,11 @@ if [[ "${COMMIT:-true}" == "false" ]]; then
     exit 0
 fi
 
-info "committing: v${version} -> v${next_version}"
-git commit -m "bump: v${version} -> v${next_version}" > /dev/null
+info "committing: v${VERSION} -> v${NEXT_VERSION}"
+run git commit -m "bump: v${VERSION} -> v${NEXT_VERSION}"
 
-info "creating tag: v${next_version}"
-git tag -a "v${next_version}" -m "bump: v${version} -> v${next_version}" > /dev/null
+info "creating tag: v${NEXT_VERSION}"
+run git tag -a "v${NEXT_VERSION}" -m "bump: v${VERSION} -> v${NEXT_VERSION}"
 
 if [[ "${PUSH:-true}" == "false" ]]; then
     bold "$(info "PUSH is false, skipping push")"
@@ -226,4 +246,4 @@ if [[ "${PUSH:-true}" == "false" ]]; then
 fi
 
 info "pushing changes to origin ${BRANCH}"
-git push --atomic origin "${BRANCH}" "v${next_version}" > /dev/null
+run git push --atomic origin "${BRANCH}" "v${NEXT_VERSION}"

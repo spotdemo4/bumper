@@ -17,6 +17,9 @@ inputs:
     description: push changes
     required: false
     default: "true"
+  skip:
+    description: list of commit message prefixes to skip
+    required: false
 
 runs:
   using: composite
@@ -52,19 +55,20 @@ runs:
       env:
         COMMIT: ${{ inputs.commit }}
         PUSH: ${{ inputs.push }}
+        SKIP_PREFIX: ${{ inputs.skip }}
+        DEBUG: ${{ runner.debug }}
       run: |
-        set +e
         chmod +x ${{ github.action_path }}/bumper.sh
-        ${{ github.action_path }}/bumper.sh ${{ inputs.files }}
-        echo "exit_code=${?}" >> "${GITHUB_OUTPUT}"
-        set -e
+        if ! ${{ github.action_path }}/bumper.sh ${{ inputs.files }}; then
+          echo "exit_code=${?}" >> "${GITHUB_OUTPUT}"
+        fi
 
-    - shell: bash
-      if: ${{ steps.bumper.outputs.exit_code == '1' }}
+    - if: ${{ steps.bumper.outputs.exit_code == '1' }}
+      shell: bash
       run: exit 1
 
-    - shell: bash
-      if: ${{ steps.bumper.outputs.exit_code == '2' }}
+    - if: ${{ steps.bumper.outputs.exit_code == '2' }}
+      shell: bash
       run: |
         echo "missing dependency, falling back to binary"
         wget "https://github.com/spotdemo4/bumper/releases/download/v0.1.19/bumper-x86_64-linux" -O bumper
