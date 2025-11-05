@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "0 22 * * 1-5" # every weekday at 22:00 UTC
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Force bump even if no changes"
+        required: false
+        type: choice
+        default: "false"
+        options:
+          - "true"
+          - "false"
 
 permissions:
   contents: read
@@ -20,8 +29,9 @@ jobs:
           fetch_depth: 0
 
       - name: Bump
-        uses: spotdemo4/bumper@93d1f7b51dc921f1e4b43899027b19bec17dfaec # v0.1.23
+        uses: spotdemo4/bumper@691017ab4c09b3dab619de406abeabcc560610e3 # v0.2.1
         with:
+          force: ${{ inputs.force }}
           files: |-
             action.sh
             .github/README.md
