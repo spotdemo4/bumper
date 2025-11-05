@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Force bump even if no changes"
+        description: "Force bump"
         required: false
         type: choice
         default: "false"
