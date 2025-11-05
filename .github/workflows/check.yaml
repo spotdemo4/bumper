@@ -22,7 +22,10 @@ jobs:
           if [[ -n "${CI-}" ]]; then
             echo "CI environment detected, setting TERM=linux"
             TERM=linux
+            echo "TERM=linux" >> $GITHUB_ENV
           fi
+
+          echo "${TERM}"
           RED=$(tput setaf 1)
           echo "${RED}Running nix flake checks..."
           nix flake check
