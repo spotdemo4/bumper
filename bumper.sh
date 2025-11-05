@@ -6,17 +6,17 @@ if [[ -n "${CI-}" ]]; then
 fi
 
 # color support
-if colors=$(tput colors 2> /dev/null); then
-    color_reset=$(tput sgr0)
-    color_bold=$(tput bold)
+if colors=$(tput -T "${TERM}" colors 2> /dev/null); then
+    color_reset=$(tput -T "${TERM}" sgr0)
+    color_bold=$(tput -T "${TERM}" bold)
 
     if [[ "$colors" -ge 256 ]]; then
-        color_info=$(tput setaf 189)
-        color_warn=$(tput setaf 216)
-        color_success=$(tput setaf 117)
+        color_info=$(tput -T "${TERM}" setaf 189)
+        color_warn=$(tput -T "${TERM}" setaf 216)
+        color_success=$(tput -T "${TERM}" setaf 117)
     elif [[ "$colors" -ge 8 ]]; then
-        color_warn=$(tput setaf 3)
-        color_success=$(tput setaf 2)
+        color_warn=$(tput -T "${TERM}" setaf 3)
+        color_success=$(tput -T "${TERM}" setaf 2)
     fi
 fi
 
