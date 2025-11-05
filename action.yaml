@@ -29,6 +29,9 @@ inputs:
   skip_scopes:
     description: conventional commit scopes to skip over
     required: false
+  force:
+    description: force at least a PATCH version bump
+    required: false
 
 runs:
   using: composite
@@ -42,5 +45,6 @@ runs:
         MINOR_TYPES: ${{ inputs.minor_types }}
         PATCH_TYPES: ${{ inputs.patch_types }}
         SKIP_SCOPES: ${{ inputs.skip_scopes }}
+        FORCE: ${{ inputs.force }}
         DEBUG: ${{ runner.debug }}
       run: "${{ github.action_path }}/action.sh"

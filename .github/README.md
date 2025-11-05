@@ -40,6 +40,7 @@ why create this when there are a million other actions that do something similar
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
+    force: false # force at least a PATCH version bump, default false
 
     # list of files to bump versions in
     files: |-

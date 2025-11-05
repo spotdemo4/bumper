@@ -1,39 +1,36 @@
 #!/usr/bin/env bash
 
-# color support
-reset_color=""
-bold_color=""
-info_color=""
-dialog_color=""
-warn_color=""
-success_color=""
+# set TERM to linux in CI environments for tput compatibility
+if [[ -n "${CI-}" ]]; then
+    TERM=linux
+fi
 
+# color support
 if colors=$(tput colors 2> /dev/null); then
-    reset_color=$(tput sgr0)
-    bold_color=$(tput bold)
+    color_reset=$(tput sgr0)
+    color_bold=$(tput bold)
 
     if [[ "$colors" -ge 256 ]]; then
-        info_color=$(tput setaf 189)
-        dialog_color=$(tput setaf 246)
-        warn_color=$(tput setaf 216)
-        success_color=$(tput setaf 117)
+        color_info=$(tput setaf 189)
+        color_warn=$(tput setaf 216)
+        color_success=$(tput setaf 117)
+    elif [[ "$colors" -ge 8 ]]; then
+        color_warn=$(tput setaf 3)
+        color_success=$(tput setaf 2)
     fi
 fi
 
 function bold {
-    printf "%s%s%s\n" "${bold_color}" "$1" "${reset_color}"
+    printf "%s%s%s\n" "${color_bold}" "$1" "${color_reset}"
 }
 function info {
-    printf "%s%s%s\n" "${info_color}" "$1" "${reset_color}"
-}
-function dialog {
-    printf "%s%s%s\n" "${dialog_color}" "$1" "${reset_color}"
+    printf "%s%s%s\n" "${color_info}" "$1" "${color_reset}"
 }
 function warn {
-    printf "%s%s%s\n" "${warn_color}" "$1" "${reset_color}"
+    printf "%s%s%s\n" "${color_warn}" "$1" "${color_reset}"
 }
 function success {
-    printf "%s%s%s\n" "${success_color}" "$1" "${reset_color}"
+    printf "%s%s%s\n" "${color_success}" "$1" "${color_reset}"
 }
 
 function run {
@@ -73,22 +70,23 @@ fi
 # go to repo root
 cd "${ROOT}" || exit 1
 
-# get commits since last tag
-readarray -t COMMITS < <(git log --pretty=format:"%s" "${LAST_HASH}..HEAD")
-if [[ ${#COMMITS[@]} -eq 0 ]]; then
-    warn "no new commits since last tag (${LAST_VERSION})"
-    exit 0
-fi
-
 # get vars from env
 readarray -t SKIP_SCOPES <<< "${SKIP_SCOPES:-"ci"}"
 readarray -t MAJOR_TYPES <<< "${MAJOR_TYPES:-"BREAKING CHANGE"}"
 readarray -t MINOR_TYPES <<< "${MINOR_TYPES:-"feat"}"
 readarray -t PATCH_TYPES <<< "${PATCH_TYPES:-"fix"}"
 
+# check if we should force a version bump
+IMPACT=""
+if [[ "${FORCE:-false}" == "true" ]]; then
+    warn "FORCE is true, forcing (at least) a PATCH version bump"
+    IMPACT="patch"
+fi
+
 # get semver impact from commits
 # https://www.conventionalcommits.org/en/v1.0.0/
-IMPACT=""
+readarray -t COMMITS < <(git log --pretty=format:"%s" "${LAST_HASH}..HEAD")
+bold "$(info "commits since last tag:")"
 for COMMIT in "${COMMITS[@]}"; do
     info "${COMMIT}"
 
@@ -147,8 +145,6 @@ for COMMIT in "${COMMITS[@]}"; do
         fi
     done
 done
-
-echo
 
 if [[ -z "${IMPACT}" ]]; then
     warn "no new impactful commits since last tag (${LAST_VERSION})"
