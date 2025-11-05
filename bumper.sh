@@ -86,7 +86,7 @@ fi
 # get semver impact from commits
 # https://www.conventionalcommits.org/en/v1.0.0/
 readarray -t COMMITS < <(git log --pretty=format:"%s" "${LAST_HASH}..HEAD")
-bold "$(info "commits since last tag:")"
+bold "$(info "checking ${#COMMITS[@]} commits since last tag (${LAST_VERSION})")"
 for COMMIT in "${COMMITS[@]}"; do
     # skip commits that don't follow conventional commit format
     if [[ ! "${COMMIT}" == *:* ]]; then
@@ -106,21 +106,21 @@ for COMMIT in "${COMMITS[@]}"; do
     # check if scope is in skip list
     for SKIP_SCOPE in "${SKIP_SCOPES[@]}"; do
         if [[ "${SCOPE,,}" == "${SKIP_SCOPE,,}" ]]; then
-            info "$(bold "SKIPPED (scope) -") ${COMMIT}"
+            info "$(bold "skipped (scope) -") ${COMMIT}"
             continue 2
         fi
     done
 
     # if commit prefix ends with "!", it's a major change
     if [[ "${PREFIX: -1}" == "!" ]]; then
-        info "$(bold "MAJOR -") ${COMMIT}"
+        info "$(bold "major -") ${COMMIT}"
         IMPACT="major"
         break
     fi
 
     for MAJOR_TYPE in "${MAJOR_TYPES[@]}"; do
         if [[ "${TYPE,,}" == "${MAJOR_TYPE,,}" ]]; then
-            info "$(bold "MAJOR -") ${COMMIT}"
+            info "$(bold "major -") ${COMMIT}"
             IMPACT="major"
             break 2
         fi
@@ -128,7 +128,7 @@ for COMMIT in "${COMMITS[@]}"; do
 
     for MINOR_TYPE in "${MINOR_TYPES[@]}"; do
         if [[ "${TYPE,,}" == "${MINOR_TYPE,,}" ]]; then
-            info "$(bold "MINOR -") ${COMMIT}"
+            info "$(bold "minor -") ${COMMIT}"
             IMPACT="minor"
             continue 2
         fi
@@ -136,13 +136,13 @@ for COMMIT in "${COMMITS[@]}"; do
 
     # skip checking for patches if already impactful
     if [[ -n "${IMPACT}" ]]; then
-        info "$(bold "SKIPPED (impact) -") ${COMMIT}"
+        info "$(bold "skipped (impact) -") ${COMMIT}"
         continue
     fi
 
     for PATCH_TYPE in "${PATCH_TYPES[@]}"; do
         if [[ "${TYPE,,}" == "${PATCH_TYPE,,}" ]]; then
-            info "$(bold "PATCH -") ${COMMIT}"
+            info "$(bold "patch -") ${COMMIT}"
             IMPACT="patch"
             continue 2
         fi
