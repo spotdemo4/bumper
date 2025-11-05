@@ -90,7 +90,7 @@ bold "$(info "checking ${#COMMITS[@]} commits since last tag (${LAST_VERSION})")
 for COMMIT in "${COMMITS[@]}"; do
     # skip commits that don't follow conventional commit format
     if [[ ! "${COMMIT}" == *:* ]]; then
-        info "$(bold "SKIPPED (convention) -") ${COMMIT}"
+        info "skipped (convention): ${COMMIT}"
         continue
     fi
 
@@ -106,21 +106,21 @@ for COMMIT in "${COMMITS[@]}"; do
     # check if scope is in skip list
     for SKIP_SCOPE in "${SKIP_SCOPES[@]}"; do
         if [[ "${SCOPE,,}" == "${SKIP_SCOPE,,}" ]]; then
-            info "$(bold "skipped (scope) -") ${COMMIT}"
+            info "skipped (scope): ${COMMIT}"
             continue 2
         fi
     done
 
     # if commit prefix ends with "!", it's a major change
     if [[ "${PREFIX: -1}" == "!" ]]; then
-        info "$(bold "major -") ${COMMIT}"
+        info "$(bold "major:") ${COMMIT}"
         IMPACT="major"
         break
     fi
 
     for MAJOR_TYPE in "${MAJOR_TYPES[@]}"; do
         if [[ "${TYPE,,}" == "${MAJOR_TYPE,,}" ]]; then
-            info "$(bold "major -") ${COMMIT}"
+            info "$(bold "major:") ${COMMIT}"
             IMPACT="major"
             break 2
         fi
@@ -128,7 +128,7 @@ for COMMIT in "${COMMITS[@]}"; do
 
     for MINOR_TYPE in "${MINOR_TYPES[@]}"; do
         if [[ "${TYPE,,}" == "${MINOR_TYPE,,}" ]]; then
-            info "$(bold "minor -") ${COMMIT}"
+            info "$(bold "minor:") ${COMMIT}"
             IMPACT="minor"
             continue 2
         fi
@@ -136,17 +136,19 @@ for COMMIT in "${COMMITS[@]}"; do
 
     # skip checking for patches if already impactful
     if [[ -n "${IMPACT}" ]]; then
-        info "$(bold "skipped (impact) -") ${COMMIT}"
+        info "skipped (impact): ${COMMIT}"
         continue
     fi
 
     for PATCH_TYPE in "${PATCH_TYPES[@]}"; do
         if [[ "${TYPE,,}" == "${PATCH_TYPE,,}" ]]; then
-            info "$(bold "patch -") ${COMMIT}"
+            info "$(bold "patch:") ${COMMIT}"
             IMPACT="patch"
             continue 2
         fi
     done
+
+    info "skipped (type): ${COMMIT}"
 done
 
 if [[ -z "${IMPACT}" ]]; then
@@ -250,7 +252,7 @@ for FILE in "${FILES[@]}"; do
     fi
 
     # display file being changed
-    bold "bumping: $(info "${FILE}")"
+    info "bumping: $(bold "${FILE}")"
 
     # change version
     sed -i "s/${VERSION}/${NEXT_VERSION}/g" "${FILE}"
@@ -270,9 +272,6 @@ if git diff --staged --quiet; then
     exit 1
 fi
 
-# push changes
-echo
-
 if [[ "${COMMIT:-true}" == "false" ]]; then
     bold "$(info "COMMIT is false, skipping commit and tag")"
     exit 0
@@ -289,5 +288,5 @@ if [[ "${PUSH:-true}" == "false" ]]; then
     exit 0
 fi
 
-info "pushing changes to origin ${BRANCH}"
+success "pushing changes to origin ${BRANCH}"
 run git push --atomic origin "${BRANCH}" "v${NEXT_VERSION}"
