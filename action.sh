@@ -28,7 +28,7 @@ fi
 if ! "${GITHUB_ACTION_PATH}/bumper.sh"; then
     if [ $? -eq 2 ]; then
         echo "::group::missing dependency, falling back to binary"
-        wget "https://github.com/spotdemo4/bumper/releases/download/v0.2.2/bumper-x86_64-linux" -O "${GITHUB_ACTION_PATH}/bumper"
+        wget "https://github.com/spotdemo4/bumper/releases/download/v0.2.3/bumper-x86_64-linux" -O "${GITHUB_ACTION_PATH}/bumper"
         chmod +x "${GITHUB_ACTION_PATH}/bumper"
         echo "::endgroup::"
 
