@@ -238,6 +238,11 @@ FILES=( "${ARG_FILES[@]}" "${ENV_FILES[@]}" )
 
 # perform manual bumps
 for FILE in "${FILES[@]}"; do
+    # skip empty args
+    if [[ -z "${FILE}" ]]; then
+        continue
+    fi
+
     # check if file exists
     if [[ ! -f "${FILE}" ]]; then
         warn "file not found: ${FILE}"
