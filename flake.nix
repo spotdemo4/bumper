@@ -114,7 +114,6 @@
           echo "#!${pkgs.runtimeShell}" >> bumper
           echo "${pkgs.lib.concatMapStringsSep "\n" (option: "set -o ${option}") [
             "errexit"
-            "nounset"
             "pipefail"
           ]}" >> bumper
           echo 'export PATH="${pkgs.lib.makeBinPath finalAttrs.runtimeInputs}:$PATH"' >> bumper
