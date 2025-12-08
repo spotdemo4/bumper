@@ -27,6 +27,7 @@ jobs:
       - name: Bump
         uses: spotdemo4/bumper@main
         with:
+          debug: ${{ runner.debug }}
           force: ${{ inputs.force }}
           files: |-
             action.yaml
