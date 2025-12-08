@@ -21,8 +21,17 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
+      - name: Create app token
+        uses: spotdemo4/setup-git-app-user@v2
+        id: app
+        with:
+          app-id: ${{ vars.CLIENT_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          token: ${{ steps.app.outputs.token }}
 
       - name: Bump
         uses: spotdemo4/bumper@main
