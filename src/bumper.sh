@@ -7,8 +7,9 @@ set -e
 DIR="${BASH_SOURCE%/*}"
 if [[ ! -d "$DIR" ]]; then DIR="$PWD"; fi
 
-source "$DIR/util.sh"
 source "$DIR/colors.sh"
+source "$DIR/git.sh"
+source "$DIR/util.sh"
 
 # validate the git environment is set up correctly
 if ! git diff --staged --quiet || ! git diff --quiet; then
