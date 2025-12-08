@@ -174,7 +174,7 @@
             dontFixup = true;
 
             meta = {
-              description = "nix flake releaser";
+              description = "version bumper";
               mainProgram = "bumper.sh";
               homepage = "https://github.com/spotdemo4/bumper";
               platforms = pkgs.lib.platforms.all;
