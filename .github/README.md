@@ -36,7 +36,7 @@ why create this when there are a million other actions that do something similar
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.3.3
+  uses: spotdemo4/bumper@v0.3.4
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
@@ -106,5 +106,5 @@ outputs = { bumper, ... }: {
 ### container
 
 ```console
-$ docker pull ghcr.io/spotdemo4/bumper:0.3.3
+$ docker pull ghcr.io/spotdemo4/bumper:0.3.4
 ```
