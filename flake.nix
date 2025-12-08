@@ -42,6 +42,7 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               # bash
+              gnused
               nix-update
               nodejs_latest
 
@@ -145,6 +146,7 @@
             ];
 
             runtimeInputs = with pkgs; [
+              gnused
               nix-update
               nodejs_latest
             ];
