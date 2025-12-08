@@ -147,6 +147,7 @@
 
             runtimeInputs = with pkgs; [
               git
+              openssh
               gnused
               nix-update
               nodejs_latest
