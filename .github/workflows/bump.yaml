@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Force bump"
+        description: "force"
         required: false
         type: choice
         default: "true"
