@@ -194,6 +194,10 @@
               packages.default
               dockerTools.caCertificates
             ];
+            fakeRootCommands = ''
+              ${pkgs.dockerTools.shadowSetup}
+            '';
+            enableFakechroot = true;
 
             config.Cmd = [
               "${pkgs.lib.meta.getExe packages.default}"
