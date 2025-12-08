@@ -153,6 +153,7 @@
             runtimeInputs = with pkgs; [
               coreutils
               git
+              gnugrep
               gnused
               nix-update
               nodejs_latest
