@@ -32,6 +32,9 @@ inputs:
   force:
     description: force at least a PATCH version bump
     required: false
+  debug:
+    description: enable debug logging
+    required: false
 
 runs:
   using: docker
@@ -45,4 +48,4 @@ runs:
     PATCH_TYPES: ${{ inputs.patch_types }}
     SKIP_SCOPES: ${{ inputs.skip_scopes }}
     FORCE: ${{ inputs.force }}
-    DEBUG: ${{ runner.debug }}
+    DEBUG: ${{ inputs.debug }}
