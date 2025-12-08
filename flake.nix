@@ -57,12 +57,6 @@
             shellHook = pkgs.shellhook.ref;
           };
 
-          bump = pkgs.mkShell {
-            packages = with pkgs; [
-              nix-update
-            ];
-          };
-
           update = pkgs.mkShell {
             packages = with pkgs; [
               renovate
