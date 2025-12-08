@@ -146,6 +146,7 @@
             ];
 
             runtimeInputs = with pkgs; [
+              git
               gnused
               nix-update
               nodejs_latest
@@ -184,12 +185,6 @@
           });
 
           image = pkgs.dockerTools.buildLayeredImage {
-            fromImage = pkgs.dockerTools.pullImage {
-              imageName = "nixos/nix";
-              imageDigest = "sha256:0d9c872db1ca2f3eaa4a095baa57ed9b72c09d53a0905a4428813f61f0ea98db";
-              hash = "sha256-H7uT+XPp5xadUzP2GEq031yZSIfzpZ1Ps6KVeBTIhOg=";
-            };
-
             name = packages.default.pname;
             tag = packages.default.version;
             created = "now";
