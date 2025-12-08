@@ -36,7 +36,7 @@ why create this when there are a million other actions that do something similar
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.4.5
+  uses: spotdemo4/bumper@v0.5.0
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
@@ -66,12 +66,12 @@ why create this when there are a million other actions that do something similar
 
 ### Binary
 
-[bumper-0.4.5.tar.xz](https://github.com/spotdemo4/bumper/releases/download/v0.4.5/bumper-0.4.5.tar.xz)
+[bumper-0.5.0.tar.xz](https://github.com/spotdemo4/bumper/releases/download/v0.5.0/bumper-0.5.0.tar.xz)
 
 ### Image
 
 ```elm
-docker run -it --rm -v "$(pwd):/app" -v "$HOME/.ssh:/root/.ssh" -w /app ghcr.io/spotdemo4/bumper:0.4.5
+docker run -it --rm -v "$(pwd):/app" -v "$HOME/.ssh:/root/.ssh" -w /app ghcr.io/spotdemo4/bumper:0.5.0
 ```
 
 ### Nix

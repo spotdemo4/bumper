@@ -38,7 +38,7 @@ inputs:
 
 runs:
   using: docker
-  image: docker://ghcr.io/spotdemo4/bumper:0.4.5
+  image: docker://ghcr.io/spotdemo4/bumper:0.5.0
   env:
     FILES: ${{ inputs.files }}
     COMMIT: ${{ inputs.commit }}
