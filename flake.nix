@@ -1,5 +1,5 @@
 {
-  description = "bumper: git semantic version bumper";
+  description = "bumper";
 
   nixConfig = {
     extra-substituters = [
@@ -11,134 +11,189 @@
   };
 
   inputs = {
-    systems.url = "systems";
+    systems.url = "github:nix-systems/default";
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
-    utils = {
-      url = "github:numtide/flake-utils";
-      inputs.systems.follows = "systems";
-    };
-    nur = {
+    trev = {
       url = "github:spotdemo4/nur";
+      inputs.systems.follows = "systems";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = {
-    nixpkgs,
-    utils,
-    nur,
-    ...
-  }:
-    utils.lib.eachDefaultSystem (system: let
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [nur.overlays.default];
-      };
-    in {
-      devShells = {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            nix-update
-          ];
-          shellHook = pkgs.trev.shellhook.ref;
-        };
-
-        ci = pkgs.mkShell {
-          packages = with pkgs; [
-            flake-checker
-            trev.renovate
+  outputs =
+    {
+      nixpkgs,
+      trev,
+      ...
+    }:
+    trev.libs.mkFlake (
+      system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [
+            trev.overlays.packages
+            trev.overlays.libs
           ];
         };
-      };
+      in
+      rec {
+        devShells = {
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              # bash
+              nix-update
+              nodejs_latest
 
-      checks = pkgs.trev.lib.mkChecks {
-        shell = {
-          src = ./.;
-          deps = with pkgs; [
-            shellcheck
-          ];
-          script = ''
-            shellcheck bumper.sh
-            shellcheck action.sh
-          '';
+              # util
+              bumper
+
+              # lint
+              nixfmt
+              prettier
+            ];
+            shellHook = pkgs.shellhook.ref;
+          };
+
+          bump = pkgs.mkShell {
+            packages = with pkgs; [
+              nix-update
+            ];
+          };
+
+          update = pkgs.mkShell {
+            packages = with pkgs; [
+              renovate
+            ];
+          };
+
+          vulnerable = pkgs.mkShell {
+            packages = with pkgs; [
+              # nix
+              flake-checker
+
+              # actions
+              octoscan
+            ];
+          };
         };
 
-        nix = {
-          src = ./.;
-          deps = with pkgs; [
-            alejandra
-          ];
-          script = ''
-            alejandra -c .
-          '';
+        checks = pkgs.lib.mkChecks {
+          bash = {
+            src = packages.default;
+            deps = with pkgs; [
+              shellcheck
+            ];
+            script = ''
+              shellcheck src/*.sh
+            '';
+          };
+
+          nix = {
+            src = ./.;
+            deps = with pkgs; [
+              nixfmt-tree
+            ];
+            script = ''
+              treefmt --ci
+            '';
+          };
+
+          actions = {
+            src = ./.;
+            deps = with pkgs; [
+              prettier
+              action-validator
+              octoscan
+              renovate
+            ];
+            script = ''
+              prettier --check "**/*.json" "**/*.yaml"
+              action-validator .github/**/*.yaml
+              octoscan scan .github
+              renovate-config-validator .github/renovate.json
+            '';
+          };
         };
 
-        actions = {
-          src = ./.;
-          deps = with pkgs; [
-            prettier
-            action-validator
-            trev.renovate
-          ];
-          script = ''
-            prettier --check .
-            action-validator action.yaml
-            action-validator .github/**/*.yaml
-            renovate-config-validator .github/renovate.json
-          '';
+        apps = pkgs.lib.mkApps {
+          dev.script = "./src/bumper.sh";
         };
-      };
 
-      packages.default = pkgs.stdenv.mkDerivation (finalAttrs: {
-        pname = "bumper";
-        version = "0.2.5";
-        src = ./.;
+        packages = {
+          default = pkgs.stdenv.mkDerivation (finalAttrs: {
+            pname = "bumper";
+            version = "0.2.5";
 
-        nativeBuildInputs = with pkgs; [
-          shellcheck
-        ];
+            src = builtins.path {
+              name = "root";
+              path = ./.;
+            };
 
-        runtimeInputs = with pkgs; [
-          git
-          nodejs_24
-          nix-update
-        ];
+            nativeBuildInputs = with pkgs; [
+              shellcheck
+            ];
 
-        unpackPhase = ''
-          cp "$src/bumper.sh" .
-        '';
+            runtimeInputs = with pkgs; [
+              nix-update
+              nodejs_latest
+            ];
 
-        dontBuild = true;
+            unpackPhase = ''
+              cp -a "$src/." .
+            '';
 
-        configurePhase = ''
-          echo "#!${pkgs.runtimeShell}" >> bumper
-          echo "${pkgs.lib.concatMapStringsSep "\n" (option: "set -o ${option}") [
-            "errexit"
-            "pipefail"
-          ]}" >> bumper
-          echo 'export PATH="${pkgs.lib.makeBinPath finalAttrs.runtimeInputs}:$PATH"' >> bumper
-          tail -n +2 bumper.sh >> bumper
-          chmod +x bumper
-        '';
+            dontBuild = true;
 
-        doCheck = true;
-        checkPhase = ''
-          shellcheck ./bumper
-        '';
+            configurePhase = ''
+              chmod +w src
+              sed -i '1c\#!${pkgs.runtimeShell}' src/bumper.sh
+              sed -i '2c\export PATH="${pkgs.lib.makeBinPath finalAttrs.runtimeInputs}:$PATH"' src/bumper.sh
+            '';
 
-        installPhase = ''
-          mkdir -p $out/bin
-          cp bumper $out/bin/bumper
-        '';
+            doCheck = true;
+            checkPhase = ''
+              shellcheck src/*.sh
+            '';
 
-        meta = {
-          description = "git semantic version bumper";
-          mainProgram = "bumper";
-          homepage = "https://github.com/spotdemo4/bumper";
-          platforms = pkgs.lib.platforms.all;
+            installPhase = ''
+              mkdir -p $out/bin
+              cp -R src/*.sh $out/bin
+            '';
+
+            dontFixup = true;
+
+            meta = {
+              description = "nix flake releaser";
+              mainProgram = "bumper.sh";
+              homepage = "https://github.com/spotdemo4/bumper";
+              platforms = pkgs.lib.platforms.all;
+            };
+          });
+
+          image = pkgs.dockerTools.buildLayeredImage {
+            fromImage = pkgs.dockerTools.pullImage {
+              imageName = "nixos/nix";
+              imageDigest = "sha256:0d9c872db1ca2f3eaa4a095baa57ed9b72c09d53a0905a4428813f61f0ea98db";
+              hash = "sha256-H7uT+XPp5xadUzP2GEq031yZSIfzpZ1Ps6KVeBTIhOg=";
+            };
+
+            name = packages.default.pname;
+            tag = packages.default.version;
+            created = "now";
+            meta = packages.default.meta;
+            contents = with pkgs; [
+              packages.default
+              dockerTools.caCertificates
+            ];
+
+            config.Cmd = [
+              "${pkgs.lib.meta.getExe packages.default}"
+            ];
+          };
         };
-      });
 
-      formatter = pkgs.alejandra;
-    });
+        formatter = pkgs.nixfmt-tree;
+      }
+    );
 }

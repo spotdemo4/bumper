@@ -6,131 +6,26 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Initialize
+        uses: spotdemo4/nix-init@0a2f62e3b132c09b144b6957976f538f79fc81a2 # v1.10.0
+
+      - name: Check
+        run: nix flake check
+
   release:
-    runs-on: ubuntu-latest
+    needs: check
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: Release
-        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
+        uses: spotdemo4/nix-flake-release@9b905f57d2fb668554eb8ed900b01ecef154fdca # v0.3.0
         with:
-          generate_release_notes: true
-
-  bin:
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Initialize
-        uses: spotdemo4/nix-init@b1a572723d705a405747541fad38545a57f03ee3 # v1.7.0
-
-      - name: Info
-        id: info
-        run: |
-          BWRAP_PATH=$(nix shell nixpkgs#bubblewrap \
-            --inputs-from . \
-            --command bash \
-            -c "which bwrap")
-          echo "bwrap_path=${BWRAP_PATH}" >> $GITHUB_OUTPUT
-          echo "bwrap path: ${BWRAP_PATH}"
-
-          GIT_PATH=$(which git)
-          echo "git_path=${GIT_PATH}" >> $GITHUB_OUTPUT
-          echo "git path: ${GIT_PATH}"
-
-      - name: Bundle
-        env:
-          NP_RUNTIME: bwrap
-          NP_BWRAP: ${{ steps.info.outputs.static_path }}
-          NP_GIT: ${{ steps.info.outputs.git_path }}
-        run: nix bundle -o result --bundler github:DavHau/nix-portable
-
-      - name: Rename
-        id: rename
-        run: |
-          NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s)"
-          NAME="${NAME,,}"
-          echo "name=${NAME}" >> $GITHUB_OUTPUT
-
-          FILE_LINK=$(find -L result -type f -print -quit)
-          FILE_REAL=$(readlink -f "${FILE_LINK}")
-          ln -s "${FILE_REAL}" "${NAME}"
-
-      - name: Release
-        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
-        with:
-          files: ${{ steps.rename.outputs.name }}
-
-  deb:
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Initialize
-        uses: spotdemo4/nix-init@b1a572723d705a405747541fad38545a57f03ee3 # v1.7.0
-
-      - name: Bundle
-        run: nix bundle -o result --bundler github:NixOS/bundlers#toDEB
-
-      - name: Rename
-        id: rename
-        run: |
-          NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s).deb"
-          NAME="${NAME,,}"
-          echo "name=${NAME}" >> $GITHUB_OUTPUT
-
-          FILE_LINK=$(find -L result -type f -print -quit)
-          FILE_REAL=$(readlink -f "${FILE_LINK}")
-          ln -s "${FILE_REAL}" "${NAME}"
-
-      - name: Release
-        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
-        with:
-          files: ${{ steps.rename.outputs.name }}
-
-  rpm:
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Initialize
-        uses: spotdemo4/nix-init@b1a572723d705a405747541fad38545a57f03ee3 # v1.7.0
-
-      - name: Bundle
-        run: nix bundle -o result --bundler github:NixOS/bundlers#toRPM
-
-      - name: Rename
-        id: rename
-        run: |
-          NAME="/tmp/${{ github.event.repository.name }}-$(uname -m)-$(uname -s).rpm"
-          NAME="${NAME,,}"
-          echo "name=${NAME}" >> $GITHUB_OUTPUT
-
-          FILE_LINK=$(find -L result -type f -print -quit)
-          FILE_REAL=$(readlink -f "${FILE_LINK}")
-          ln -s "${FILE_REAL}" "${NAME}"
-
-      - name: Release
-        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
-        with:
-          files: ${{ steps.rename.outputs.name }}
-
-  oci:
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-    steps:
-      - name: Initialize
-        uses: spotdemo4/nix-init@b1a572723d705a405747541fad38545a57f03ee3 # v1.7.0
-
-      - name: Bundle
-        run: nix bundle -o result --bundler github:NixOS/bundlers#toDockerImage
-
-      - name: Release
-        run: |
-          nix shell nixpkgs#skopeo \
-            --inputs-from . \
-            --command skopeo copy \
-            --dest-creds=${{ github.actor }}:${{ secrets.GITHUB_TOKEN }} \
-            docker-archive:result \
-            docker://ghcr.io/${{ github.repository }}:${GITHUB_REF_NAME#v}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

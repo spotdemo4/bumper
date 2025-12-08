@@ -1,25 +1,17 @@
 {
   "editor.formatOnSave": true,
+  "files.associations": {
+    "renovate.json": "jsonc",
+    ".envrc.project": "shellscript"
+  },
 
   // nix
   "nix.enableLanguageServer": true,
   "nix.serverPath": "nixd",
-  "nix.serverSettings": {
-    "nixd": {
-      "formatting": {
-        "command": ["alejandra"]
-      }
-    }
-  },
   "[nix]": {
     "editor.defaultFormatter": "jnoortheen.nix-ide"
   },
 
   // actions
-  "editor.defaultFormatter": "esbenp.prettier-vscode",
-  "files.associations": {
-    ".semgrepignore": "ignore",
-    "renovate.json": "jsonc",
-    ".envrc.project": "shellscript"
-  }
+  "editor.defaultFormatter": "esbenp.prettier-vscode"
 }

@@ -3,3 +3,4 @@
 # then run `direnv allow` to enable
 
 use flake
+dotenv_if_exists

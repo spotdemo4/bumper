@@ -34,17 +34,15 @@ inputs:
     required: false
 
 runs:
-  using: composite
-  steps:
-    - shell: bash
-      env:
-        FILES: ${{ inputs.files }}
-        COMMIT: ${{ inputs.commit }}
-        PUSH: ${{ inputs.push }}
-        MAJOR_TYPES: ${{ inputs.major_types }}
-        MINOR_TYPES: ${{ inputs.minor_types }}
-        PATCH_TYPES: ${{ inputs.patch_types }}
-        SKIP_SCOPES: ${{ inputs.skip_scopes }}
-        FORCE: ${{ inputs.force }}
-        DEBUG: ${{ runner.debug }}
-      run: "${{ github.action_path }}/action.sh"
+  using: docker
+  image: docker://ghcr.io/spotdemo4/bumper:0.3.0
+  env:
+    FILES: ${{ inputs.files }}
+    COMMIT: ${{ inputs.commit }}
+    PUSH: ${{ inputs.push }}
+    MAJOR_TYPES: ${{ inputs.major_types }}
+    MINOR_TYPES: ${{ inputs.minor_types }}
+    PATCH_TYPES: ${{ inputs.patch_types }}
+    SKIP_SCOPES: ${{ inputs.skip_scopes }}
+    FORCE: ${{ inputs.force }}
+    DEBUG: ${{ runner.debug }}

@@ -2,11 +2,11 @@
   "nodes": {
     "nixpkgs": {
       "locked": {
-        "lastModified": 1762361079,
-        "narHash": "sha256-lz718rr1BDpZBYk7+G8cE6wee3PiBUpn8aomG/vLLiY=",
+        "lastModified": 1764947035,
+        "narHash": "sha256-EYHSjVM4Ox4lvCXUMiKKs2vETUSL5mx+J2FfutM7T9w=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "ffcdcf99d65c61956d882df249a9be53e5902ea5",
+        "rev": "a672be65651c80d3f592a89b3945466584a22069",
         "type": "github"
       },
       "original": {
@@ -16,32 +16,11 @@
         "type": "github"
       }
     },
-    "nur": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1762506693,
-        "narHash": "sha256-szJFUtY/U+9GkkyaWEv9R/8J8TRT4TktwCcDVuVicyQ=",
-        "owner": "spotdemo4",
-        "repo": "nur",
-        "rev": "9b0a85a8dd9847245ff2cc8651d253c62c30fe3a",
-        "type": "github"
-      },
-      "original": {
-        "owner": "spotdemo4",
-        "repo": "nur",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
         "nixpkgs": "nixpkgs",
-        "nur": "nur",
         "systems": "systems",
-        "utils": "utils"
+        "trev": "trev"
       }
     },
     "systems": {
@@ -54,27 +33,31 @@
         "type": "github"
       },
       "original": {
-        "id": "systems",
-        "type": "indirect"
+        "owner": "nix-systems",
+        "repo": "default",
+        "type": "github"
       }
     },
-    "utils": {
+    "trev": {
       "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
         "systems": [
           "systems"
         ]
       },
       "locked": {
-        "lastModified": 1731533236,
-        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
+        "lastModified": 1765185286,
+        "narHash": "sha256-PqtqK26vnX2E83TaMUl64k8AaSEqBiMFuCaTtQx7+IM=",
+        "owner": "spotdemo4",
+        "repo": "nur",
+        "rev": "590871bedd66ed583761fe6c92744d8f3f074a9f",
         "type": "github"
       },
       "original": {
-        "owner": "numtide",
-        "repo": "flake-utils",
+        "owner": "spotdemo4",
+        "repo": "nur",
         "type": "github"
       }
     }

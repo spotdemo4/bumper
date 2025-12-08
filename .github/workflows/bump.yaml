@@ -21,17 +21,13 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
-      - name: Initialize
-        uses: spotdemo4/nix-init@b1a572723d705a405747541fad38545a57f03ee3 # v1.7.0
-        with:
-          app_id: ${{ vars.CLIENT_ID }}
-          private_key: ${{ secrets.PRIVATE_KEY }}
-          fetch_depth: 0
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
       - name: Bump
-        uses: spotdemo4/bumper@32534ba92eb765a5dd0d22d2ee2064748d0a2042 # v0.2.5
+        uses: spotdemo4/bumper@main
         with:
           force: ${{ inputs.force }}
           files: |-
-            action.sh
+            action.yaml
             .github/README.md
