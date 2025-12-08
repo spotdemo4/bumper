@@ -14,8 +14,11 @@ on:
           - "true"
           - "false"
 
+concurrency:
+  group: release
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   bump:
