@@ -158,7 +158,7 @@ readarray -t SEARCH < <(git ls-files)
 for FILE in "${SEARCH[@]}"; do
     case "${FILE}" in
         # node
-        "package.json" | "package-lock.json")
+        "package.json")
             if ! run command -v npm; then
                 bold "$(warn "npm not found")"
                 warn "please install npm to bump package.json files"
@@ -174,6 +174,15 @@ for FILE in "${SEARCH[@]}"; do
                 exit 2
             fi
             ;;
+
+        # rust
+        "Cargo.toml")
+            if ! run command -v cargo-bump; then
+                bold "$(warn "cargo-bump not found")"
+                warn "please install cargo-bump to bump Cargo.toml files"
+                exit 2
+            fi
+            ;;
     esac
 done
 
@@ -181,7 +190,7 @@ done
 for FILE in "${SEARCH[@]}"; do
     case "${FILE}" in
         # node
-        "package.json" | "package-lock.json")
+        "package.json")
             if run npm version "${NEXT_VERSION}" --no-git-tag-version --allow-same-version; then
                 git add package.json
                 git add package-lock.json
@@ -196,6 +205,16 @@ for FILE in "${SEARCH[@]}"; do
                 git add flake.nix
             else
                 bold "$(warn "'nix-update' failed")"
+            fi
+            ;;
+
+        # rust
+        "Cargo.toml")
+            if run cargo-bump "${NEXT_VERSION}"; then
+                git add Cargo.toml
+                git add Cargo.lock
+            else
+                bold "$(warn "'cargo-bump' failed")"
             fi
             ;;
     esac

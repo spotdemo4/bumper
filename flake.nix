@@ -42,6 +42,7 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               # bash
+              cargo-bump
               gnused
               nix-update
               nodejs_latest
@@ -151,6 +152,7 @@
             ];
 
             runtimeInputs = with pkgs; [
+              cargo-bump
               coreutils
               git
               gnugrep
@@ -185,9 +187,11 @@
             dontFixup = true;
 
             meta = {
-              description = "version bumper";
+              description = "git semantic version bumper";
               mainProgram = "bumper.sh";
               homepage = "https://github.com/spotdemo4/bumper";
+              changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
+              license = pkgs.lib.licenses.mit;
               platforms = pkgs.lib.platforms.all;
             };
           });
@@ -197,6 +201,7 @@
             tag = packages.default.version;
             created = "now";
             meta = packages.default.meta;
+
             contents = with pkgs; [
               packages.default
               dockerTools.caCertificates
