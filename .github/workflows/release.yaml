@@ -8,8 +8,7 @@ concurrency:
   group: release
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   check:
