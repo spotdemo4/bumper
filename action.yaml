@@ -6,6 +6,10 @@ branding:
   color: gray-dark
 
 inputs:
+  token:
+    description: git token for authentication
+    required: false
+    default: ${{ github.token }}
   files:
     description: list of files to bump versions in
     required: false
@@ -40,6 +44,7 @@ runs:
   using: docker
   image: docker://ghcr.io/spotdemo4/bumper:0.3.0
   env:
+    TOKEN: ${{ inputs.token }}
     FILES: ${{ inputs.files }}
     COMMIT: ${{ inputs.commit }}
     PUSH: ${{ inputs.push }}

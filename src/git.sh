@@ -9,3 +9,15 @@ if [ -z "$(git config user.name)" ]; then
     git config --global user.name "github-actions[bot]"
     git config --global user.email "github-actions[bot]@users.noreply.github.com"
 fi
+
+# authenticate git if token is provided
+if [[ -n $TOKEN ]]; then
+    CURRENT_URL=$(git config --get remote.origin.url)
+
+    if [[ $CURRENT_URL == https://* ]]; then
+        echo "authenticating git with token"
+        
+        AUTH_URL=${CURRENT_URL/https:\/\//https:\/\/"$TOKEN"@}
+        git config remote.origin.url "$AUTH_URL"
+    fi
+fi
