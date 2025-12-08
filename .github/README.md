@@ -13,7 +13,7 @@ a simple shell script that
 
 this works well as a github action. have it run on every push to main and it will bump the version for every change, or run it on a schedule to increase the version if there were any new changes
 
-## usage
+## Usage
 
 ```console
 $ bumper action.yaml
@@ -26,17 +26,17 @@ creating tag: v0.0.2
 pushing changes to origin main
 ```
 
-## why
+## Why
 
 why create this when there are a million other actions that do something similar? well, most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code. If you know of an action that does what this does but better, let me know!
 
-## install
+## Install
 
-### github actions
+### Action
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.4.0
+  uses: spotdemo4/bumper@v0.4.5
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
@@ -64,23 +64,25 @@ why create this when there are a million other actions that do something similar
       ci
 ```
 
-### script
+### Binary
 
-[`bumper.sh`](https://raw.githubusercontent.com/spotdemo4/bumper/refs/heads/main/bumper.sh)
+[bumper-0.4.5.tar.xz](https://github.com/spotdemo4/bumper/releases/download/v0.4.5/bumper-0.4.5.tar.xz)
 
-### nix
+### Image
 
-```console
-$ nix run github:spotdemo4/bumper
-impact: patch
-0.0.1 -> 0.0.2
-
-committing: v0.0.1 -> v0.0.2
-creating tag: v0.0.2
-pushing changes to origin main
+```elm
+docker run -it --rm -v "$(pwd):/app" -v "$HOME/.ssh:/root/.ssh" -w /app ghcr.io/spotdemo4/bumper:0.4.5
 ```
 
-#### flake
+### Nix
+
+#### CLI
+
+```elm
+nix run github:spotdemo4/bumper
+```
+
+#### Flake
 
 ```nix
 inputs = {
@@ -97,14 +99,4 @@ outputs = { bumper, ... }: {
         ];
     };
 }
-```
-
-### binary
-
-[release](https://github.com/spotdemo4/bumper/releases/latest)
-
-### container
-
-```console
-$ docker pull ghcr.io/spotdemo4/bumper:0.4.0
 ```
