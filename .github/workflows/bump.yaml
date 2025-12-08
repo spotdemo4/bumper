@@ -32,7 +32,7 @@ jobs:
           private-key: ${{ secrets.PRIVATE_KEY }}
 
       - name: Bump
-        uses: spotdemo4/bumper@main
+        uses: spotdemo4/bumper@09058497039b77efa1eec0e52c5aca7713e01327 # v0.4.4
         with:
           debug: ${{ runner.debug }}
           force: ${{ inputs.force }}
