@@ -24,7 +24,6 @@ readarray -t SKIP_SCOPES < <(array "${SKIP_SCOPES:-"ci"}")
 DO_COMMIT="${COMMIT:-true}"
 DO_PUSH="${PUSH:-true}"
 FORCE="${FORCE:-false}"
-DEBUG="${DEBUG:-false}"
 
 # get args
 FILES+=( "${@}" )
