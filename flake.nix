@@ -134,7 +134,15 @@
           build.script = ''
             nix build .#image
             docker load -i result
-            docker run -it --rm -v "$(pwd):/app" -v "$HOME/.ssh:/root/.ssh" -w /app -e DEBUG="true" -e FORCE="true" -e COMMIT="false" "bumper:${packages.default.version}"
+            docker run \
+              --rm \
+              -v "$PWD:/app" \
+              -v "$HOME/.ssh:/root/.ssh" \
+              -w /app \
+              -e DEBUG=true \
+              -e FORCE=true \
+              -e COMMIT=false \
+              "bumper:${packages.default.version}"
           '';
         };
 

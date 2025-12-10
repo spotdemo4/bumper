@@ -25,7 +25,6 @@ jobs:
         run: nix flake check
 
   test:
-    needs: check
     runs-on: ubuntu-24.04
     steps:
       - name: Initialize
@@ -35,6 +34,7 @@ jobs:
 
       - name: Run bumper
         env:
+          FORCE: true
           PUSH: false
           DEBUG: ${{ runner.debug }}
         run: bumper
