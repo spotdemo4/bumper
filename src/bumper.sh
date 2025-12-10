@@ -174,7 +174,7 @@ for FILE in "${SEARCH[@]}"; do
                 bold "$(warn "'npm version' failed")"
             fi
 
-            popd
+            run popd
             ;;
 
         # nix
@@ -192,7 +192,7 @@ for FILE in "${SEARCH[@]}"; do
                 bold "$(warn "'nix-update' failed")"
             fi
 
-            popd
+            run popd
             ;;
 
         # rust
@@ -211,7 +211,7 @@ for FILE in "${SEARCH[@]}"; do
                 bold "$(warn "'cargo-bump' failed")"
             fi
 
-            popd
+            run popd
             ;;
     esac
 done
