@@ -38,7 +38,7 @@ if ! git fetch --all --tags --quiet; then
     warn "could not fetch commits and tags"
     exit 1
 fi
-if ! ROOT=$(git rev-parse --show-toplevel 2> /dev/null); then
+if ! git rev-parse --show-toplevel 2> /dev/null; then
     warn "not a git repository"
     exit 1
 fi
@@ -54,9 +54,6 @@ if ! LAST_VERSION=$(git describe --tags "${LAST_HASH}" 2> /dev/null); then
     warn "no git tags found, please create a tag first"
     exit 1
 fi
-
-# go to repo root
-cd "${ROOT}" || exit 1
 
 # check if we should force a version bump
 IMPACT=""
