@@ -63,19 +63,19 @@ fi
 last_version=${last_version#v}
 
 # determine impact
-info ""
+info
 impact=$(get_impact "${MAJOR_TYPES}" "${MINOR_TYPES}" "${PATCH_TYPES}" "${SKIP_SCOPES}" "${last_hash}" "${last_version}" "${FORCE}")
 if [[ -z "${impact}" ]]; then
     success "no new impactful commits since last tag (v${last_version})"
     exit 0
 fi
 info "$(bold "impact: ${impact}")"
-info ""
+info
 
 # get next version
 next_version=$(get_next_version "${last_version}" "${impact}")
 info "$(bold "v${last_version} -> v${next_version}")"
-info ""
+info
 
 # perform bumps
 for bump_path in "${PATHS[@]}"; do
@@ -87,6 +87,7 @@ for bump_path in "${PATHS[@]}"; do
         warn "file or directory not found: ${bump_path}"
     fi
 done
+info
 
 # check for staged changes
 if git diff --staged --quiet; then
