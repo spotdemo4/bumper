@@ -131,7 +131,7 @@
 
         apps = pkgs.lib.mkApps {
           dev.script = "./src/bumper.sh";
-          build.script = ''
+          build-image.script = ''
             nix build .#image
             docker load -i result
             docker run \
@@ -186,11 +186,10 @@
             '';
 
             installPhase = ''
-              mkdir -p $out/bin
               mkdir -p $out/lib/bumper
-
               cp -R src/*.sh $out/lib/bumper
 
+              mkdir -p $out/bin
               makeWrapper "$out/lib/bumper/bumper.sh" "$out/bin/bumper"
             '';
 

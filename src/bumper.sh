@@ -196,7 +196,7 @@ done
 
 # get files from args & env
 VERSION_FILES=( "${@}" )
-if [[ -n "${FILES}" ]]; then
+if [[ -n "${FILES-}" ]]; then
     IFS=$' \n' read -r -a ENV_FILES <<< "${FILES-}"
     VERSION_FILES+=( "${ENV_FILES[@]}" )
 fi
