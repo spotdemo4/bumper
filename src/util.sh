@@ -27,5 +27,10 @@ function array() {
         fi
     done
 
+    # return empty if no entries
+    if [[ "${#array[@]}" -eq 0 ]]; then
+        return
+    fi
+
     printf "%s\n" "${array[@]}"
 }

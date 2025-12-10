@@ -25,13 +25,13 @@ function bold {
 }
 
 function info {
-    printf "%s%s%s\n" "${color_info-}" "$1" "${color_reset-}"
+    printf "%s%s%s\n" "${color_info-}" "$1" "${color_reset-}" >&2
 }
 
 function warn {
-    printf "%s%s%s\n" "${color_warn-}" "$1" "${color_reset-}"
+    printf "%s%s%s\n" "${color_warn-}" "$1" "${color_reset-}" >&2
 }
 
 function success {
-    printf "%s%s%s\n" "${color_success-}" "$1" "${color_reset-}"
+    printf "%s%s%s\n" "${color_success-}" "$1" "${color_reset-}" >&2
 }

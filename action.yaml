@@ -7,11 +7,12 @@ branding:
 
 inputs:
   files:
-    description: list of files to bump versions in
+    description: files to bump versions in
     required: false
-  ignore_dirs:
-    description: list of directories to skip over
+  path:
+    description: path(s) to bump versions in
     required: false
+    default: ${{ github.workspace }}
   major_types:
     description: conventional commit types for MAJOR version bumps
     required: false
@@ -46,8 +47,7 @@ runs:
   using: docker
   image: docker://ghcr.io/spotdemo4/bumper:0.5.0
   env:
-    FILES: ${{ inputs.files }}
-    IGNORE_DIRS: ${{ inputs.ignore_dirs }}
+    PATHS: ${{ inputs.path }} ${{ inputs.files }}
     MAJOR_TYPES: ${{ inputs.major_types }}
     MINOR_TYPES: ${{ inputs.minor_types }}
     PATCH_TYPES: ${{ inputs.patch_types }}
