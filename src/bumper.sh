@@ -12,6 +12,7 @@ if [[ ! -d "$DIR" ]]; then DIR="$PWD"; fi
 
 source "$DIR/colors.sh"
 source "$DIR/git.sh"
+source "$DIR/nix.sh"
 source "$DIR/util.sh"
 
 # validate the git environment is set up correctly
@@ -186,11 +187,20 @@ for FILE in "${SEARCH[@]}"; do
                 continue
             fi
 
-            if run nix-update --flake --version "${NEXT_VERSION}" default; then
-                run git add flake.nix
-            else
-                bold "$(warn "'nix-update' failed")"
+            system=$(nix_system)
+            readarray -t packages < <(nix_packages "${system}")
+            if [[ ${#packages[@]} -eq 0 ]]; then
+                warn "no packages found in '${FILE}' for system '${system}'"
+                exit 1
             fi
+
+            for package in "${packages[@]}"; do
+                if ! run nix-update --flake --version "${NEXT_VERSION}" "${package}"; then
+                    warn "'nix-update' failed for package '${package}'"
+                fi
+            done
+
+            run git add flake.nix
 
             run popd
             ;;
@@ -204,7 +214,7 @@ for FILE in "${SEARCH[@]}"; do
                 continue
             fi
 
-            if run cargo-bump "${NEXT_VERSION}"; then
+            if run cargo-bump bump "${NEXT_VERSION}"; then
                 run git add Cargo.toml
                 run git add Cargo.lock || true
             else

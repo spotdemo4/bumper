@@ -42,6 +42,7 @@
         devShells = {
           default = pkgs.mkShell {
             packages = with pkgs; [
+              jq
               sd
               cargo-bump # rust
               nix-update # nix
@@ -162,6 +163,7 @@
             ];
 
             runtimeInputs = with pkgs; [
+              jq
               sd
               cargo-bump # rust
               nix-update # nix
