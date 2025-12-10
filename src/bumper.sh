@@ -158,37 +158,58 @@ readarray -t SEARCH < <(git ls-files)
 for FILE in "${SEARCH[@]}"; do
     case "${FILE}" in
         # node
-        "package.json")
-            pushd "$(dirname "${FILE}")" || continue
+        ?(*/)"package.json")
+            info "bumping: $(bold "${FILE}")"
+
+            if ! run pushd "$(dirname "${FILE}")"; then
+                warn "could not change directory to $(dirname "${FILE}")"
+                continue
+            fi
+
             if run npm version "${NEXT_VERSION}" --no-git-tag-version --allow-same-version; then
-                git add package.json
-                git add package-lock.json
+                run git add package.json
+                run git add package-lock.json || true
             else
                 bold "$(warn "'npm version' failed")"
             fi
+
             popd
             ;;
 
         # nix
-        "flake.nix")
-            pushd "$(dirname "${FILE}")" || continue
+        ?(*/)"flake.nix")
+            info "bumping: $(bold "${FILE}")"
+
+            if ! run pushd "$(dirname "${FILE}")"; then
+                warn "could not change directory to $(dirname "${FILE}")"
+                continue
+            fi
+
             if run nix-update --flake --version "${NEXT_VERSION}" default; then
-                git add flake.nix
+                run git add flake.nix
             else
                 bold "$(warn "'nix-update' failed")"
             fi
+
             popd
             ;;
 
         # rust
-        "Cargo.toml")
-            pushd "$(dirname "${FILE}")" || continue
+        ?(*/)"Cargo.toml")
+            info "bumping: $(bold "${FILE}")"
+
+            if ! run pushd "$(dirname "${FILE}")"; then
+                warn "could not change directory to $(dirname "${FILE}")"
+                continue
+            fi
+
             if run cargo-bump "${NEXT_VERSION}"; then
-                git add Cargo.toml
-                git add Cargo.lock
+                run git add Cargo.toml
+                run git add Cargo.lock || true
             else
                 bold "$(warn "'cargo-bump' failed")"
             fi
+
             popd
             ;;
     esac
