@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # export PATH="${PATH}" placeholder, will be replaced in release
 
-set -e
+set -o errexit
+set -o nounset
+set -o pipefail
 
 # make source imports work
 DIR="${BASH_SOURCE%/*}"
@@ -249,7 +251,7 @@ for FILE in "${FILES[@]}"; do
     info "bumping: $(bold "${FILE}")"
 
     # change version
-    sed -i "s/${VERSION}/${NEXT_VERSION}/g" "${FILE}"
+    sd -F "${VERSION}" "${NEXT_VERSION}" "${FILE}"
 
     # validate change
     if grep -q "${NEXT_VERSION}" "${FILE}"; then

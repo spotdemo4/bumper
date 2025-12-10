@@ -42,19 +42,26 @@
         devShells = {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              # bash
-              cargo-bump
-              nix-update
-              nodejs_latest
+              sd
+              cargo-bump # rust
+              nix-update # nix
+              nodejs_latest # node
 
               # util
               bumper
 
               # lint
-              nixfmt
-              prettier
+              shellcheck # bash
+              nixfmt # nix
+              prettier # json/yaml
             ];
             shellHook = pkgs.shellhook.ref;
+          };
+
+          check = pkgs.mkShell {
+            packages = [
+              packages.default
+            ];
           };
 
           update = pkgs.mkShell {
@@ -142,13 +149,15 @@
             };
 
             nativeBuildInputs = with pkgs; [
+              makeWrapper
               shellcheck
             ];
 
             runtimeInputs = with pkgs; [
-              cargo-bump
-              nix-update
-              nodejs_latest
+              sd
+              cargo-bump # rust
+              nix-update # nix
+              nodejs_latest # node
             ];
 
             unpackPhase = ''
@@ -170,14 +179,18 @@
 
             installPhase = ''
               mkdir -p $out/bin
-              cp -R src/*.sh $out/bin
+              mkdir -p $out/lib/bumper
+
+              cp -R src/*.sh $out/lib/bumper
+
+              makeWrapper "$out/lib/bumper/bumper.sh" "$out/bin/bumper"
             '';
 
             dontFixup = true;
 
             meta = {
               description = "git semantic version bumper";
-              mainProgram = "bumper.sh";
+              mainProgram = "bumper";
               homepage = "https://github.com/spotdemo4/bumper";
               changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
               license = pkgs.lib.licenses.mit;
