@@ -40,4 +40,4 @@ jobs:
         run: bumper
 
       - name: Print diff
-        run: git --no-pager diff
+        run: git --no-pager diff origin/main
