@@ -37,7 +37,9 @@ jobs:
           FORCE: true
           PUSH: false
           DEBUG: ${{ runner.debug }}
-        run: bumper
+        run: |
+          cd tests
+          bumper
 
       - name: Print diff
         run: git --no-pager diff origin/main

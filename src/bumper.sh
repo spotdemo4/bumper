@@ -24,12 +24,13 @@ readarray -t SKIP_SCOPES < <(array "${SKIP_SCOPES:-"ci"}")
 DO_COMMIT="${COMMIT:-true}"
 DO_PUSH="${PUSH:-true}"
 FORCE="${FORCE:-false}"
+ALLOW_DIRTY="${ALLOW_DIRTY:-false}"
 
 # get args
 FILES+=( "${@}" )
 
 # validate the git environment is set up correctly
-if ! git diff --staged --quiet || ! git diff --quiet; then
+if [[ "${ALLOW_DIRTY}" != "true" ]] && (! git diff --staged --quiet || ! git diff --quiet); then
     warn "please commit or stash changes before running bumper"
     exit 1
 fi
@@ -221,11 +222,11 @@ for FILE in "${SEARCH[@]}"; do
                 continue
             fi
 
-            if run cargo-bump bump "${NEXT_VERSION}"; then
+            if run cargo-set-version set-version "${NEXT_VERSION}"; then
                 run git add Cargo.toml
                 run git add Cargo.lock || true
             else
-                bold "$(warn "'cargo-bump' failed")"
+                bold "$(warn "'cargo-set-version' failed")"
             fi
 
             run popd

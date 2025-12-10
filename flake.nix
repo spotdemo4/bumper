@@ -44,9 +44,13 @@
             packages = with pkgs; [
               jq
               sd
-              cargo-bump # rust
-              nix-update # nix
-              nodejs_latest # node
+              # rust
+              cargo
+              cargo-edit
+              # nix
+              nix-update
+              # node
+              nodejs_latest
 
               # util
               bumper
@@ -165,9 +169,13 @@
             runtimeInputs = with pkgs; [
               jq
               sd
-              cargo-bump # rust
-              nix-update # nix
-              nodejs_latest # node
+              # rust
+              cargo
+              cargo-edit
+              # nix
+              nix-update
+              # node
+              nodejs_latest
             ];
 
             unpackPhase = ''
