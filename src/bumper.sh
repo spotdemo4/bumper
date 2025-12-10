@@ -4,6 +4,7 @@
 set -o errexit
 set -o nounset
 set -o pipefail
+shopt -s extglob
 
 # make source imports work
 DIR="${BASH_SOURCE%/*}"
@@ -158,7 +159,7 @@ readarray -t SEARCH < <(git ls-files)
 for FILE in "${SEARCH[@]}"; do
     case "${FILE}" in
         # node
-        ?(*/)"package.json")
+        ?(*/)package.json)
             info "bumping: $(bold "${FILE}")"
 
             if ! run pushd "$(dirname "${FILE}")"; then
@@ -177,7 +178,7 @@ for FILE in "${SEARCH[@]}"; do
             ;;
 
         # nix
-        ?(*/)"flake.nix")
+        ?(*/)flake.nix)
             info "bumping: $(bold "${FILE}")"
 
             if ! run pushd "$(dirname "${FILE}")"; then
@@ -195,7 +196,7 @@ for FILE in "${SEARCH[@]}"; do
             ;;
 
         # rust
-        ?(*/)"Cargo.toml")
+        ?(*/)Cargo.toml)
             info "bumping: $(bold "${FILE}")"
 
             if ! run pushd "$(dirname "${FILE}")"; then
