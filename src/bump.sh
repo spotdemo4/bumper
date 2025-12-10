@@ -2,7 +2,7 @@
 
 function bump_dir() {
     local dir="$1"
-    local version="$2"
+    local next_version="$2"
 
     local search=()
     readarray -t search < <(git ls-files "${dir}")
@@ -17,7 +17,7 @@ function bump_dir() {
                     continue
                 fi
 
-                if run npm version "${version}" --no-git-tag-version --allow-same-version; then
+                if run npm version "${next_version}" --no-git-tag-version --allow-same-version; then
                     run git add package.json
                     run git add package-lock.json || true
                 else
@@ -47,7 +47,7 @@ function bump_dir() {
                 fi
 
                 for package in "${packages[@]}"; do
-                    if ! run nix-update --flake --version "${version}" "${package}"; then
+                    if ! run nix-update --flake --version "${next_version}" "${package}"; then
                         warn "'nix-update' failed for package '${package}'"
                     fi
                 done
@@ -66,7 +66,7 @@ function bump_dir() {
                     continue
                 fi
 
-                if run cargo-set-version set-version "${version}"; then
+                if run cargo-set-version set-version "${next_version}"; then
                     run git add Cargo.toml
                     run git add Cargo.lock || true
                 else

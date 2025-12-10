@@ -59,11 +59,14 @@ if ! last_version=$(git describe --tags "${last_hash}" 2> /dev/null); then
     exit 1
 fi
 
+# strip leading 'v' from version
+last_version=${last_version#v}
+
 # determine impact
 info ""
 impact=$(get_impact "${MAJOR_TYPES}" "${MINOR_TYPES}" "${PATCH_TYPES}" "${SKIP_SCOPES}" "${last_hash}" "${last_version}" "${FORCE}")
 if [[ -z "${impact}" ]]; then
-    success "no new impactful commits since last tag (${last_version})"
+    success "no new impactful commits since last tag (v${last_version})"
     exit 0
 fi
 info "$(bold "impact: ${impact}")"
@@ -71,7 +74,7 @@ info ""
 
 # get next version
 next_version=$(get_next_version "${last_version}" "${impact}")
-info "$(bold "${last_version} -> ${next_version}")"
+info "$(bold "v${last_version} -> v${next_version}")"
 info ""
 
 # perform bumps

@@ -136,15 +136,13 @@ function get_next_version() {
     local last_version="${1}"
     local impact="${2}"
 
-    local version
     local major
     local minor
     local patch
 
-    version=${last_version#v}
-    major=$(echo "${version}" | cut -s -d . -f 1)
-    minor=$(echo "${version}" | cut -s -d . -f 2)
-    patch=$(echo "${version}" | cut -s -d . -f 3)
+    major=$(echo "${last_version}" | cut -s -d . -f 1)
+    minor=$(echo "${last_version}" | cut -s -d . -f 2)
+    patch=$(echo "${last_version}" | cut -s -d . -f 3)
 
     case "${impact}" in
         major) 
