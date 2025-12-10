@@ -21,17 +21,17 @@ if colors=$(tput -T "${TERM}" colors 2> /dev/null); then
 fi
 
 function bold {
-    printf "%s%s%s\n" "${color_bold-}" "$1" "${color_reset-}"
+    printf "%s%s%s\n" "${color_bold-}" "${1-}" "${color_reset-}"
 }
 
 function info {
-    printf "%s%s%s\n" "${color_info-}" "$1" "${color_reset-}" >&2
+    printf "%s%s%s\n" "${color_info-}" "${1-}" "${color_reset-}" >&2
 }
 
 function warn {
-    printf "%s%s%s\n" "${color_warn-}" "$1" "${color_reset-}" >&2
+    printf "%s%s%s\n" "${color_warn-}" "${1-}" "${color_reset-}" >&2
 }
 
 function success {
-    printf "%s%s%s\n" "${color_success-}" "$1" "${color_reset-}" >&2
+    printf "%s%s%s\n" "${color_success-}" "${1-}" "${color_reset-}" >&2
 }
