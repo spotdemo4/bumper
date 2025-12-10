@@ -9,6 +9,9 @@ inputs:
   files:
     description: list of files to bump versions in
     required: false
+  ignore_dirs:
+    description: list of directories to skip over
+    required: false
   major_types:
     description: conventional commit types for MAJOR version bumps
     required: false
@@ -32,6 +35,9 @@ inputs:
   force:
     description: force at least a PATCH version bump
     required: false
+  allow_dirty:
+    description: allow a dirty working directory
+    required: false
   debug:
     description: enable debug logging
     required: false
@@ -41,6 +47,7 @@ runs:
   image: docker://ghcr.io/spotdemo4/bumper:0.5.0
   env:
     FILES: ${{ inputs.files }}
+    IGNORE_DIRS: ${{ inputs.ignore_dirs }}
     MAJOR_TYPES: ${{ inputs.major_types }}
     MINOR_TYPES: ${{ inputs.minor_types }}
     PATCH_TYPES: ${{ inputs.patch_types }}
@@ -48,4 +55,5 @@ runs:
     COMMIT: ${{ inputs.commit }}
     PUSH: ${{ inputs.push }}
     FORCE: ${{ inputs.force }}
+    ALLOW_DIRTY: ${{ inputs.allow_dirty }}
     DEBUG: ${{ inputs.debug }}

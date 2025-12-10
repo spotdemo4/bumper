@@ -17,6 +17,7 @@ source "$DIR/util.sh"
 
 # get vars
 readarray -t FILES < <(array "${FILES-}")
+readarray -t IGNORE_DIRS < <(array "${IGNORE_DIRS-}")
 readarray -t MAJOR_TYPES < <(array "${MAJOR_TYPES:-"BREAKING CHANGE"}")
 readarray -t MINOR_TYPES < <(array "${MINOR_TYPES:-"feat"}")
 readarray -t PATCH_TYPES < <(array "${PATCH_TYPES:-"fix"}")
@@ -163,6 +164,14 @@ bold "$(info "${VERSION} -> ${NEXT_VERSION}")"
 # perform automatic bumps
 readarray -t SEARCH < <(git ls-files)
 for FILE in "${SEARCH[@]}"; do
+
+    # skip ignored directories
+    for IGNORE_DIR in "${IGNORE_DIRS[@]}"; do
+        if [[ "${FILE}" == ${IGNORE_DIR}/** ]]; then
+            continue 2
+        fi
+    done
+
     case "${FILE}" in
         # node
         ?(*/)package.json)
