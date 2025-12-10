@@ -34,6 +34,7 @@
           overlays = [
             trev.overlays.packages
             trev.overlays.libs
+            trev.overlays.images
           ];
         };
       in
@@ -43,7 +44,6 @@
             packages = with pkgs; [
               # bash
               cargo-bump
-              gnused
               nix-update
               nodejs_latest
 
@@ -147,13 +147,8 @@
 
             runtimeInputs = with pkgs; [
               cargo-bump
-              coreutils
-              git
-              gnugrep
-              gnused
               nix-update
               nodejs_latest
-              openssh
             ];
 
             unpackPhase = ''
@@ -193,19 +188,17 @@
           image = pkgs.dockerTools.buildLayeredImage {
             name = packages.default.pname;
             tag = packages.default.version;
-            created = "now";
-            meta = packages.default.meta;
 
+            fromImage = pkgs.image.nix;
             contents = with pkgs; [
               packages.default
               dockerTools.caCertificates
             ];
-            fakeRootCommands = pkgs.dockerTools.shadowSetup;
-            enableFakechroot = true;
 
-            config.Cmd = [
-              "${pkgs.lib.meta.getExe packages.default}"
-            ];
+            created = "now";
+            meta = packages.default.meta;
+
+            config.Cmd = [ "${pkgs.lib.meta.getExe packages.default}" ];
           };
         };
 
