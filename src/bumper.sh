@@ -153,82 +153,56 @@ NEXT_VERSION="${major}.${minor}.${patch}"
 
 bold "$(info "${VERSION} -> ${NEXT_VERSION}")"
 
-# search for files to bump
-readarray -t SEARCH < <(git ls-files)
-
-# validate all required deps are installed
-for FILE in "${SEARCH[@]}"; do
-    case "${FILE}" in
-        # node
-        "package.json")
-            if ! run command -v npm; then
-                bold "$(warn "npm not found")"
-                warn "please install npm to bump package.json files"
-                exit 2
-            fi
-            ;;
-
-        # nix
-        "flake.nix")
-            if ! run command -v nix-update; then
-                bold "$(warn "nix-update not found")"
-                warn "please install nix-update to bump flake.nix files"
-                exit 2
-            fi
-            ;;
-
-        # rust
-        "Cargo.toml")
-            if ! run command -v cargo-bump; then
-                bold "$(warn "cargo-bump not found")"
-                warn "please install cargo-bump to bump Cargo.toml files"
-                exit 2
-            fi
-            ;;
-    esac
-done
-
 # perform automatic bumps
+readarray -t SEARCH < <(git ls-files)
 for FILE in "${SEARCH[@]}"; do
     case "${FILE}" in
         # node
         "package.json")
+            pushd "$(dirname "${FILE}")" || continue
             if run npm version "${NEXT_VERSION}" --no-git-tag-version --allow-same-version; then
                 git add package.json
                 git add package-lock.json
             else
                 bold "$(warn "'npm version' failed")"
             fi
+            popd
             ;;
 
         # nix
         "flake.nix")
+            pushd "$(dirname "${FILE}")" || continue
             if run nix-update --flake --version "${NEXT_VERSION}" default; then
                 git add flake.nix
             else
                 bold "$(warn "'nix-update' failed")"
             fi
+            popd
             ;;
 
         # rust
         "Cargo.toml")
+            pushd "$(dirname "${FILE}")" || continue
             if run cargo-bump "${NEXT_VERSION}"; then
                 git add Cargo.toml
                 git add Cargo.lock
             else
                 bold "$(warn "'cargo-bump' failed")"
             fi
+            popd
             ;;
     esac
 done
 
 # get files from args & env
-ARG_FILES=("$@")
-readarray -t ENV_FILES <<< "${FILES}"
-FILES=( "${ARG_FILES[@]}" "${ENV_FILES[@]}" )
+VERSION_FILES=( "${@}" )
+if [[ -n "${FILES}" ]]; then
+    IFS=$' \n' read -r -a ENV_FILES <<< "${FILES-}"
+    VERSION_FILES+=( "${ENV_FILES[@]}" )
+fi
 
 # perform manual bumps
-for FILE in "${FILES[@]}"; do
+for FILE in "${VERSION_FILES[@]}"; do
     # skip empty args
     if [[ -z "${FILE}" ]]; then
         continue
