@@ -9,14 +9,6 @@ inputs:
   files:
     description: list of files to bump versions in
     required: false
-  commit:
-    description: commit changes after bumping
-    required: false
-    default: "true"
-  push:
-    description: push changes after bumping
-    required: false
-    default: "true"
   major_types:
     description: conventional commit types for MAJOR version bumps
     required: false
@@ -29,6 +21,14 @@ inputs:
   skip_scopes:
     description: conventional commit scopes to skip over
     required: false
+  commit:
+    description: commit changes after bumping
+    required: false
+    default: "true"
+  push:
+    description: push changes after bumping
+    required: false
+    default: "true"
   force:
     description: force at least a PATCH version bump
     required: false
@@ -41,11 +41,11 @@ runs:
   image: docker://ghcr.io/spotdemo4/bumper:0.5.0
   env:
     FILES: ${{ inputs.files }}
-    COMMIT: ${{ inputs.commit }}
-    PUSH: ${{ inputs.push }}
     MAJOR_TYPES: ${{ inputs.major_types }}
     MINOR_TYPES: ${{ inputs.minor_types }}
     PATCH_TYPES: ${{ inputs.patch_types }}
     SKIP_SCOPES: ${{ inputs.skip_scopes }}
+    COMMIT: ${{ inputs.commit }}
+    PUSH: ${{ inputs.push }}
     FORCE: ${{ inputs.force }}
     DEBUG: ${{ inputs.debug }}

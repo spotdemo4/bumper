@@ -15,6 +15,20 @@ source "$DIR/git.sh"
 source "$DIR/nix.sh"
 source "$DIR/util.sh"
 
+# get vars
+readarray -t FILES < <(array "${FILES-}")
+readarray -t MAJOR_TYPES < <(array "${MAJOR_TYPES:-"BREAKING CHANGE"}")
+readarray -t MINOR_TYPES < <(array "${MINOR_TYPES:-"feat"}")
+readarray -t PATCH_TYPES < <(array "${PATCH_TYPES:-"fix"}")
+readarray -t SKIP_SCOPES < <(array "${SKIP_SCOPES:-"ci"}")
+DO_COMMIT="${COMMIT:-true}"
+DO_PUSH="${PUSH:-true}"
+FORCE="${FORCE:-false}"
+DEBUG="${DEBUG:-false}"
+
+# get args
+FILES+=( "${@}" )
+
 # validate the git environment is set up correctly
 if ! git diff --staged --quiet || ! git diff --quiet; then
     warn "please commit or stash changes before running bumper"
@@ -44,16 +58,10 @@ fi
 # go to repo root
 cd "${ROOT}" || exit 1
 
-# get vars from env
-readarray -t SKIP_SCOPES <<< "${SKIP_SCOPES:-"ci"}"
-readarray -t MAJOR_TYPES <<< "${MAJOR_TYPES:-"BREAKING CHANGE"}"
-readarray -t MINOR_TYPES <<< "${MINOR_TYPES:-"feat"}"
-readarray -t PATCH_TYPES <<< "${PATCH_TYPES:-"fix"}"
-
 # check if we should force a version bump
 IMPACT=""
-if [[ "${FORCE:-false}" == "true" ]]; then
-    warn "FORCE is true, forcing (at least) a PATCH version bump"
+if [[ "${FORCE}" == "true" ]]; then
+    warn "forcing (at least) a PATCH version bump"
     IMPACT="patch"
 fi
 
@@ -226,15 +234,8 @@ for FILE in "${SEARCH[@]}"; do
     esac
 done
 
-# get files from args & env
-VERSION_FILES=( "${@}" )
-if [[ -n "${FILES-}" ]]; then
-    IFS=$' \n' read -r -a ENV_FILES <<< "${FILES-}"
-    VERSION_FILES+=( "${ENV_FILES[@]}" )
-fi
-
 # perform manual bumps
-for FILE in "${VERSION_FILES[@]}"; do
+for FILE in "${FILES[@]}"; do
     # skip empty args
     if [[ -z "${FILE}" ]]; then
         continue
@@ -274,8 +275,8 @@ if git diff --staged --quiet; then
     exit 1
 fi
 
-if [[ "${COMMIT:-true}" == "false" ]]; then
-    bold "$(info "COMMIT is false, skipping commit and tag")"
+if [[ "${DO_COMMIT}" == "false" ]]; then
+    bold "$(info "skipping commit, tag and push")"
     exit 0
 fi
 
@@ -285,8 +286,8 @@ run git commit -m "bump: v${VERSION} -> v${NEXT_VERSION}"
 info "creating tag: v${NEXT_VERSION}"
 run git tag -a "v${NEXT_VERSION}" -m "bump: v${VERSION} -> v${NEXT_VERSION}"
 
-if [[ "${PUSH:-true}" == "false" ]]; then
-    bold "$(info "PUSH is false, skipping push")"
+if [[ "${DO_PUSH}" == "false" ]]; then
+    bold "$(info "skipping push")"
     exit 0
 fi
 

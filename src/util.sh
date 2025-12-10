@@ -7,3 +7,25 @@ function run {
         "$@" &> /dev/null
     fi
 }
+
+function array() {
+    local string="$1"
+    local n_array=()
+    local array=()
+
+    # split by either spaces or newlines
+    if [[ "${string}" == *$'\n'* ]]; then
+        readarray -t n_array <<< "${string}"
+    else
+        IFS=" " read -r -a n_array <<< "${string}"
+    fi
+
+    # remove empty entries
+    for item in "${n_array[@]}"; do
+        if [[ -n "${item}" ]]; then
+            array+=( "${item}" )
+        fi
+    done
+
+    printf "%s\n" "${array[@]}"
+}
