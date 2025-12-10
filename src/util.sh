@@ -2,9 +2,13 @@
 
 function run {
     if [[ -n "${DEBUG-}" ]]; then
-        "$@"
+        "${@}" >&2
+    elif [[ -n "${CI-}" ]]; then
+        cmd "::group::${*}"
+        "${@}" >&2
+        cmd "::endgroup::"
     else
-        "$@" &> /dev/null
+        "${@}" &> /dev/null
     fi
 }
 

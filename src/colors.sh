@@ -9,12 +9,15 @@ fi
 if colors=$(tput -T "${TERM}" colors 2> /dev/null); then
     color_reset=$(tput -T "${TERM}" sgr0)
     color_bold=$(tput -T "${TERM}" bold)
+    color_italic=$(tput -T "${TERM}" sitm)
 
     if [[ "$colors" -ge 256 ]]; then
         color_info=$(tput -T "${TERM}" setaf 189)
+        color_cmd=$(tput -T "${TERM}" setaf 51)
         color_warn=$(tput -T "${TERM}" setaf 216)
         color_success=$(tput -T "${TERM}" setaf 117)
     elif [[ "$colors" -ge 8 ]]; then
+        color_cmd=$(tput -T "${TERM}" setaf 6)
         color_warn=$(tput -T "${TERM}" setaf 3)
         color_success=$(tput -T "${TERM}" setaf 2)
     fi
@@ -26,6 +29,10 @@ function bold {
 
 function info {
     printf "%s%s%s\n" "${color_info-}" "${1-}" "${color_reset-}" >&2
+}
+
+function cmd {
+    printf "%s%s%s%s\n" "${color_cmd-}" "${color_italic-}" "${1-}" "${color_reset-}" >&2
 }
 
 function warn {
