@@ -29,6 +29,18 @@
 
             installPhase = "touch $out";
           });
+
+          another = pkgs.stdenv.mkDerivation (finalAttrs: {
+            pname = "test2";
+            version = "0.0.1";
+
+            src = builtins.path {
+              name = "root";
+              path = ./.;
+            };
+
+            installPhase = "touch $out";
+          });
         };
     };
 }
