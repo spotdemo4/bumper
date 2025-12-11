@@ -1,5 +1,5 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "$schema": "https://docs.renovatebot.com/renovate-global-schema.json",
 
   // self-hosted
   "onboarding": false,
@@ -25,13 +25,11 @@
     },
     {
       "groupName": "Nix Inputs",
-      "matchManagers": ["nix"],
-      "matchPackageNames": ["*"]
+      "matchManagers": ["nix"]
     },
     {
       "groupName": "GitHub Actions",
-      "matchManagers": ["github-actions"],
-      "matchPackageNames": ["*"]
+      "matchManagers": ["github-actions"]
     }
   ]
 }
