@@ -234,7 +234,10 @@
             created = "now";
             meta = packages.default.meta;
 
-            config.Cmd = [ "${pkgs.lib.meta.getExe packages.default}" ];
+            config = {
+              Cmd = [ "${pkgs.lib.meta.getExe packages.default}" ];
+              Env = [ "DOCKER=true" ];
+            };
           };
         };
 

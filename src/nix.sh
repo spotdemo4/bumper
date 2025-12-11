@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-if [[ "${CI}" == "true" ]]; then
+if [[ "${DOCKER-}" == "true" ]]; then
     # https://discourse.nixos.org/t/warning-about-home-ownership/52351
     chown -R "${USER}:${USER}" "${HOME}"
 fi
