@@ -12,26 +12,26 @@ function bump_dir() {
             ?(*/)package.json)
                 info "bumping: $(bold "${file}")"
 
-                if ! run pushd "$(dirname "${file}")"; then
+                if ! pushd "$(dirname "${file}")" &> /dev/null; then
                     warn "could not change directory to $(dirname "${file}")"
                     continue
                 fi
 
                 if run npm version "${next_version}" --no-git-tag-version --allow-same-version; then
-                    run git add package.json
-                    run git add package-lock.json || true
+                    git add package.json
+                    git add package-lock.json || true
                 else
                     warn "$(bold "'npm version' failed")"
                 fi
 
-                run popd || true
+                popd &> /dev/null || true
                 ;;
 
             # nix
             ?(*/)flake.nix)
                 info "bumping: $(bold "${file}")"
 
-                if ! run pushd "$(dirname "${file}")"; then
+                if ! pushd "$(dirname "${file}")" &> /dev/null; then
                     warn "could not change directory to $(dirname "${file}")"
                     continue
                 fi
@@ -52,28 +52,28 @@ function bump_dir() {
                     fi
                 done
 
-                run git add flake.nix
+                git add flake.nix
 
-                run popd || true
+                popd &> /dev/null || true
                 ;;
 
             # rust
             ?(*/)Cargo.toml)
                 info "bumping: $(bold "${file}")"
 
-                if ! run pushd "$(dirname "${file}")"; then
+                if ! pushd "$(dirname "${file}")" &> /dev/null; then
                     warn "could not change directory to $(dirname "${file}")"
                     continue
                 fi
 
                 if run cargo-set-version set-version "${next_version}"; then
-                    run git add Cargo.toml
-                    run git add Cargo.lock || true
+                    git add Cargo.toml
+                    git add Cargo.lock || true
                 else
                     warn "$(bold "'cargo-set-version' failed")"
                 fi
 
-                run popd || true
+                popd &> /dev/null || true
                 ;;
         esac
     done

@@ -11,7 +11,6 @@ DIR="${BASH_SOURCE%/*}"
 if [[ ! -d "$DIR" ]]; then DIR="$PWD"; fi
 
 source "$DIR/util.sh"
-source "$DIR/colors.sh"
 source "$DIR/nix.sh"
 source "$DIR/git.sh"
 source "$DIR/bump.sh"
@@ -22,8 +21,8 @@ MAJOR_TYPES="${MAJOR_TYPES:-"BREAKING CHANGE"}"
 MINOR_TYPES="${MINOR_TYPES:-"feat"}"
 PATCH_TYPES="${PATCH_TYPES:-"fix"}"
 SKIP_SCOPES="${SKIP_SCOPES:-"ci"}"
-DO_COMMIT="${COMMIT:-true}"
-DO_PUSH="${PUSH:-true}"
+COMMIT="${COMMIT:-true}"
+PUSH="${PUSH:-true}"
 FORCE="${FORCE:-false}"
 ALLOW_DIRTY="${ALLOW_DIRTY:-false}"
 
@@ -96,7 +95,7 @@ if git diff --staged --quiet; then
 fi
 
 # commit
-if [[ "${DO_COMMIT}" == "false" ]]; then
+if [[ "${COMMIT}" == "false" ]]; then
     success "skipping commit, tag and push"
     exit 0
 fi
@@ -108,7 +107,7 @@ info "creating tag: v${next_version}"
 run git tag -a "v${next_version}" -m "bump: v${last_version} -> v${next_version}"
 
 # push
-if [[ "${DO_PUSH}" == "false" ]]; then
+if [[ "${PUSH}" == "false" ]]; then
     success "skipping push"
     exit 0
 fi

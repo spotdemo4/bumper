@@ -44,11 +44,14 @@
             packages = with pkgs; [
               jq
               sd
+
               # rust
               cargo
               cargo-edit
+
               # nix
               nix-update
+
               # node
               nodejs_latest
 
@@ -154,7 +157,7 @@
         packages = {
           default = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "bumper";
-            version = "0.6.0";
+            version = "0.6.1";
 
             src = builtins.path {
               name = "root";
@@ -169,11 +172,14 @@
             runtimeInputs = with pkgs; [
               jq
               sd
+
               # rust
               cargo
               cargo-edit
+
               # nix
               nix-update
+
               # node
               nodejs_latest
             ];

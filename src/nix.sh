@@ -15,7 +15,7 @@ function nix_packages () {
     packages=$(nix "${NIX_ARGS[@]}" flake show --json 2> /dev/null)
 
     local packages_json
-    packages_json=$(echo "${packages}" | jq -r --arg system "$system" '.packages[$system] | keys[]')
+    packages_json=$(echo "${packages}" | jq -r --arg system "${system}" '.packages[$system] | keys[]')
 
     echo "${packages_json}"
 }
