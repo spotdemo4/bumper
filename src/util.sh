@@ -45,9 +45,9 @@ function run() {
     if [[ -n "${DEBUG-}" ]]; then
         "${@}" >&2
     elif [[ -n "${CI-}" ]]; then
-        success "::group::${*}"
+        printf "%s%s%s%s\n" "::group::" "${color_success-}" "${*}" "${color_reset-}" >&2
         "${@}" >&2
-        success "::endgroup::"
+        printf "%s\n" "::endgroup::" >&2
     elif tput cols &> /dev/null; then
         local width
         local line
