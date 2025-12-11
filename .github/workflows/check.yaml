@@ -54,7 +54,7 @@ jobs:
 
       - name: Run bumper
         uses: spotdemo4/bumper@main
-        env:
+        with:
           force: true
           push: false
           debug: ${{ runner.debug }}
