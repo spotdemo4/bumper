@@ -148,7 +148,7 @@
         packages = {
           default = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "bumper";
-            version = "0.6.2";
+            version = "0.7.0";
 
             src = builtins.path {
               name = "root";
