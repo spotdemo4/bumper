@@ -24,7 +24,8 @@ jobs:
       - name: Run checks
         run: nix flake check
 
-  test:
+  test-nix:
+    name: test (nix)
     runs-on: ubuntu-24.04
     steps:
       - name: Initialize
@@ -38,6 +39,23 @@ jobs:
           PUSH: false
           DEBUG: ${{ runner.debug }}
         run: bumper tests
+
+      - name: Print diff
+        run: git --no-pager diff origin/main
+
+  test-docker:
+    name: test (docker)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Initialize
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Run bumper
+        using: spotdemo4/bumper@main
+        env:
+          force: true
+          push: false
+          debug: ${{ runner.debug }}
 
       - name: Print diff
         run: git --no-pager diff origin/main
