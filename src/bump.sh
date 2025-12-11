@@ -96,7 +96,7 @@ function bump_file() {
     info "bumping: $(bold "${file}")"
 
     # change version
-    sd -F "${last_version}" "${next_version}" "${file}"
+    sed -i -e "s/${last_version}/${next_version}/g" "${file}"
 
     # validate change
     if grep -q "${next_version}" "${file}"; then

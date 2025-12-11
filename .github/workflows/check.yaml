@@ -35,7 +35,7 @@ jobs:
       - name: Build
         run: nix build -o result
 
-      - name: Run bumper
+      - name: Run
         env:
           FORCE: true
           PUSH: false
@@ -51,15 +51,21 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Initialize
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: spotdemo4/nix-init@0a2f62e3b132c09b144b6957976f538f79fc81a2 # v1.10.0
 
-      - name: Run bumper
-        uses: spotdemo4/bumper@main
-        with:
-          force: true
-          push: false
-          debug: ${{ runner.debug }}
-          files: tests
+      - name: Build
+        run: nix build .#image -o result
+
+      - name: Load
+        run: docker load -i result
+
+      - name: Run
+        env:
+          FORCE: true
+          PUSH: false
+          DEBUG: ${{ runner.debug }}
+          PATHS: tests
+        uses: docker://bumper:0.6.2
 
       - name: Print diff
         run: git --no-pager diff origin/main

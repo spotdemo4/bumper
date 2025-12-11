@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-if [[ "${DOCKER-}" == "true" ]]; then
-    # https://discourse.nixos.org/t/warning-about-home-ownership/52351
+# https://discourse.nixos.org/t/warning-about-home-ownership/52351
+if [[ "${DOCKER-}" == "true" && -n "${CI-}" ]]; then
     chown -R "${USER}:${USER}" "${HOME}"
 fi
 

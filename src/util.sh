@@ -45,17 +45,20 @@ function success() {
 
 function run() {
     local width
+    local code
 
     if [[ -n "${DEBUG-}" ]]; then
         "${@}" >&2
     elif [[ -n "${CI-}" ]]; then
         printf "%s%s%s%s\n" "::group::" "${color_cmd-}" "${*}" "${color_reset-}" >&2
         "${@}" >&2
+        code=${?}
         printf "%s\n" "::endgroup::" >&2
-    elif width=$(tput cols); then
+
+        return "${code}"
+    elif width=$(tput cols 2> /dev/null); then
         local line
         local clean
-        local code
 
         printf "%s%s%s\n" "${color_cmd-}" "${*}" "${color_reset-}" >&2
 

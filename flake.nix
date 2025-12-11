@@ -162,7 +162,8 @@
 
             runtimeInputs = with pkgs; [
               jq
-              sd
+              ncurses
+              gnused
 
               # rust
               cargo
