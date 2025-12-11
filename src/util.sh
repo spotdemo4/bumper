@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# set TERM to linux in CI environments for tput compatibility
+# default TERM to linux
 if [[ -n "${CI-}" || -z "${TERM-}" ]]; then
     TERM=linux
 fi
@@ -27,10 +27,6 @@ function bold() {
     printf "%s%s%s\n" "${color_bold-}" "${1-}" "${color_reset-}"
 }
 
-function dim() {
-    printf "%s%s%s\n" "${color_dim-}" "${1-}" "${color_reset-}"
-}
-
 function info() {
     printf "%s%s%s\n" "${color_info-}" "${1-}" "${color_reset-}" >&2
 }
@@ -50,6 +46,8 @@ function run() {
     if [[ -n "${DEBUG-}" ]]; then
         "${@}" >&2
     elif [[ -n "${CI-}" ]]; then
+
+        # print command output in collapsible group
         printf "%s%s%s%s\n" "::group::" "${color_cmd-}" "${*}" "${color_reset-}" >&2
         "${@}" >&2
         code=${?}
@@ -60,8 +58,8 @@ function run() {
         local line
         local clean
 
+        # print command output on same line
         printf "%s%s%s\n" "${color_cmd-}" "${*}" "${color_reset-}" >&2
-
         "${@}" 2>&1 | while IFS= read -r line; do
             clean=$(echo -e "${line}" | sed -e 's/\\n//g' -e 's/\\t//g' -e 's/\\r//g' | head -c $((width - 10)))
             printf "\r\033[2K%s%s%s" "${color_dim-}" "${clean}" "${color_reset-}" >&2
@@ -77,18 +75,18 @@ function run() {
 
 function array() {
     local string="$1"
-    local n_array=()
+    local new_array=()
     local array=()
 
     # split by either spaces or newlines
     if [[ "${string}" == *$'\n'* ]]; then
-        readarray -t n_array <<< "${string}"
+        readarray -t new_array <<< "${string}"
     else
-        IFS=" " read -r -a n_array <<< "${string}"
+        IFS=" " read -r -a new_array <<< "${string}"
     fi
 
     # remove empty entries
-    for item in "${n_array[@]}"; do
+    for item in "${new_array[@]}"; do
         if [[ -n "${item}" ]]; then
             array+=( "${item}" )
         fi
