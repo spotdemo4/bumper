@@ -9,10 +9,6 @@ inputs:
   files:
     description: files to bump versions in
     required: false
-  path:
-    description: path(s) to bump versions in
-    required: false
-    default: ${{ github.workspace }}
   major_types:
     description: conventional commit types for MAJOR version bumps
     required: false
@@ -47,7 +43,7 @@ runs:
   using: docker
   image: docker://ghcr.io/spotdemo4/bumper:0.6.1
   env:
-    PATHS: ${{ inputs.path }} ${{ inputs.files }}
+    PATHS: ${{ inputs.files }}
     MAJOR_TYPES: ${{ inputs.major_types }}
     MINOR_TYPES: ${{ inputs.minor_types }}
     PATCH_TYPES: ${{ inputs.patch_types }}
