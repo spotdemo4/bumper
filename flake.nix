@@ -43,7 +43,8 @@
           default = pkgs.mkShell {
             packages = with pkgs; [
               jq
-              sd
+              ncurses
+              gnused
 
               # rust
               cargo

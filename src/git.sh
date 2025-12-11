@@ -112,12 +112,6 @@ function get_impact() {
             fi
         done
 
-        # skip checking for patches if already impactful
-        if [[ -n "${impact}" ]]; then
-            info "skipped (impact): ${commit}"
-            continue
-        fi
-
         for patch_type in "${patch_types[@]}"; do
             if [[ "${type,,}" == "${patch_type,,}" ]]; then
                 info "$(bold "patch:") ${commit}"
