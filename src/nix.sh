@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 
+if [[ "${CI}" == "true" ]]; then
+    # https://discourse.nixos.org/t/warning-about-home-ownership/52351
+    chown -R "${USER}:${USER}" "${HOME}"
+fi
+
+NIX_ARGS=("--extra-experimental-features" "nix-command flakes" "--accept-flake-config" "--no-warn-dirty")
+
 function nix_system () {
     local system
 
