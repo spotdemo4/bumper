@@ -3,25 +3,25 @@
 ![check](https://github.com/spotdemo4/bumper/actions/workflows/check.yaml/badge.svg?branch=main)
 ![vulnerable](https://github.com/spotdemo4/bumper/actions/workflows/vulnerable.yaml/badge.svg?branch=main)
 
-a simple shell script that
+A simple shell script that:
 
 - determines the [semantic versioning](https://semver.org/) impact (major, minor or patch) of the [conventional commits](https://www.conventionalcommits.org) since the last git tag
 - increments the git tag by the impact (v0.0.1 -> PATCH -> v0.0.2)
-- applies the version bump to discovered files (`package.json`, `flake.nix`)
 - applies the version bump to files given as arguments (`bumper [files...]`)
+- applies the version bump in directories given as arguemnts to select files (`package.json`, `Cargo.toml`, `flake.nix`)
 - commits the bumped files and pushes them with the new git tag
 
-this works well as a github action. have it run on every push to main and it will bump the version for every change, or run it on a schedule to increase the version if there were any new changes
+This works well as a github action. Have it run on every push to main and it will bump the version for every change, or run it on a schedule to increase the version if there were any new changes.
 
 ## Usage
 
 ```elm
-bumper [PATH]...
+bumper [paths...]
 ```
 
 ## Why
 
-why create this when there are a million other actions that do something similar? well, most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code. If you know of an action that does what this does but better, let me know!
+Most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. Unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. Of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code. If you know of an action that does what this does but better, let me know!
 
 ## Install
 
