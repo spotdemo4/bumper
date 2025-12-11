@@ -29,7 +29,7 @@ why create this when there are a million other actions that do something similar
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.7.0
+  uses: spotdemo4/bumper@v0.7.1
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
@@ -91,7 +91,7 @@ docker run -it --rm \
   -w /app \
   -v "$(pwd):/app" \
   -v "$HOME/.ssh:/root/.ssh" \
-  ghcr.io/spotdemo4/bumper:0.7.0
+  ghcr.io/spotdemo4/bumper:0.7.1
 ```
 
 ### Downloads
@@ -100,6 +100,6 @@ docker run -it --rm \
 
 requires [jq](https://jqlang.org/), [cargo-edit](https://github.com/killercup/cargo-edit) (rust), [nix-update](https://github.com/Mic92/nix-update) (nix), [nodejs](https://nodejs.org/) (node)
 
-#### [bumper-0.7.0.tar.xz](https://github.com/spotdemo4/bumper/releases/download/v0.7.0/bumper-0.7.0.tar.xz) - bundle
+#### [bumper-0.7.1.tar.xz](https://github.com/spotdemo4/bumper/releases/download/v0.7.1/bumper-0.7.1.tar.xz) - bundle
 
 contains all dependencies, only use if necessary
