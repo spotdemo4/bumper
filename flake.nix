@@ -55,21 +55,12 @@
               # node
               nodejs_latest
 
-              # util
-              bumper
-
               # lint
               shellcheck # bash
               nixfmt # nix
               prettier # json/yaml
             ];
             shellHook = pkgs.shellhook.ref;
-          };
-
-          check = pkgs.mkShell {
-            packages = [
-              packages.default
-            ];
           };
 
           update = pkgs.mkShell {

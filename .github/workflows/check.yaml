@@ -31,15 +31,16 @@ jobs:
     steps:
       - name: Initialize
         uses: spotdemo4/nix-init@0a2f62e3b132c09b144b6957976f538f79fc81a2 # v1.10.0
-        with:
-          shell: check
+
+      - name: Build
+        run: nix build -o result
 
       - name: Run bumper
         env:
           FORCE: true
           PUSH: false
           DEBUG: ${{ runner.debug }}
-        run: bumper tests
+        run: result/bin/bumper tests
 
       - name: Print diff
         run: git --no-pager diff origin/main
@@ -58,6 +59,7 @@ jobs:
           force: true
           push: false
           debug: ${{ runner.debug }}
+          files: tests
 
       - name: Print diff
         run: git --no-pager diff origin/main
