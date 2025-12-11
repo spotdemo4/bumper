@@ -25,6 +25,7 @@ jobs:
         run: nix flake check
 
   test-nix:
+    if: ${{ ! startsWith(github.event.head_commit.message, 'bump:') }}
     name: test (nix)
     runs-on: ubuntu-24.04
     steps:
@@ -44,6 +45,7 @@ jobs:
         run: git --no-pager diff origin/main
 
   test-docker:
+    if: ${{ ! startsWith(github.event.head_commit.message, 'bump:') }}
     name: test (docker)
     runs-on: ubuntu-24.04
     steps:
