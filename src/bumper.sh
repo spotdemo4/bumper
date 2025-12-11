@@ -101,9 +101,6 @@ if [[ "${COMMIT}" == "false" ]]; then
 fi
 info "committing: v${last_version} -> v${next_version}"
 run git commit -m "bump: v${last_version} -> v${next_version}"
-
-# tag
-info "creating tag: v${next_version}"
 run git tag -a "v${next_version}" -m "bump: v${last_version} -> v${next_version}"
 
 # push

@@ -58,7 +58,7 @@ function get_impact() {
     # get semver impact from commits
     # https://www.conventionalcommits.org/en/v1.0.0/
     readarray -t commits < <(git log --pretty=format:"%s" "${last_hash}..HEAD")
-    info "$(bold "checking ${#commits[@]} commits since last tag (${last_version})")"
+    info "$(bold "checking ${#commits[@]} commits since last tag (v${last_version})")"
     for commit in "${commits[@]}"; do
         local prefix
         local type
