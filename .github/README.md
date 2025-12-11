@@ -15,15 +15,8 @@ this works well as a github action. have it run on every push to main and it wil
 
 ## Usage
 
-```console
-$ bumper action.yaml
-impact: patch
-0.0.1 -> 0.0.2
-changed: action.yaml
-
-committing: v0.0.1 -> v0.0.2
-creating tag: v0.0.2
-pushing changes to origin main
+```elm
+bumper [PATH]...
 ```
 
 ## Why
@@ -64,19 +57,7 @@ why create this when there are a million other actions that do something similar
       ci
 ```
 
-### Binary
-
-[bumper-0.7.0.tar.xz](https://github.com/spotdemo4/bumper/releases/download/v0.7.0/bumper-0.7.0.tar.xz)
-
-### Image
-
-```elm
-docker run -it --rm -v "$(pwd):/app" -v "$HOME/.ssh:/root/.ssh" -w /app ghcr.io/spotdemo4/bumper:0.7.0
-```
-
 ### Nix
-
-#### CLI
 
 ```elm
 nix run github:spotdemo4/bumper
@@ -94,9 +75,31 @@ inputs = {
 
 outputs = { bumper, ... }: {
     devShells."${system}".default = pkgs.mkShell {
-        packages = with pkgs; [
+        packages = [
             bumper."${system}".default
         ];
     };
 }
 ```
+
+also available from the [nix user repository](https://nur.nix-community.org/repos/trev/) as `nur.repos.trev.bumper`
+
+### Docker
+
+```elm
+docker run -it --rm \
+  -w /app \
+  -v "$(pwd):/app" \
+  -v "$HOME/.ssh:/root/.ssh" \
+  ghcr.io/spotdemo4/bumper:0.7.0
+```
+
+### Downloads
+
+#### [bumper.sh](/src/bumper.sh) - bash script
+
+requires [jq](https://jqlang.org/), [cargo-edit](https://github.com/killercup/cargo-edit) (rust), [nix-update](https://github.com/Mic92/nix-update) (nix), [nodejs](https://nodejs.org/) (node)
+
+#### [bumper-0.7.0.tar.xz](https://github.com/spotdemo4/bumper/releases/download/v0.7.0/bumper-0.7.0.tar.xz) - bundle
+
+contains all dependencies, only use if necessary

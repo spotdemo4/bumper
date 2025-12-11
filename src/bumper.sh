@@ -31,9 +31,9 @@ if [[ "$#" -gt 0 ]]; then
     PATHS+=( "${@}" )
 fi
 
-# use current dir if no paths provided
-if [[ "${#PATHS[@]}" -eq 0 ]]; then
-    PATHS=( "$(pwd)" )
+# use current dir if no paths provided or in CI
+if [[ "${#PATHS[@]}" -eq 0 || -n "${CI-}" ]]; then
+    PATHS+=( "$(pwd)" )
 fi
 
 # validate the git environment is set up correctly
