@@ -13,9 +13,11 @@ if colors=$(tput -T "${TERM}" colors 2> /dev/null); then
 
     if [[ "$colors" -ge 256 ]]; then
         color_info=$(tput -T "${TERM}" setaf 189)
+        color_cmd=$(tput -T "${TERM}" setaf 81)
         color_warn=$(tput -T "${TERM}" setaf 216)
         color_success=$(tput -T "${TERM}" setaf 117)
     elif [[ "$colors" -ge 8 ]]; then
+        color_cmd=$(tput -T "${TERM}" setaf 4)
         color_warn=$(tput -T "${TERM}" setaf 3)
         color_success=$(tput -T "${TERM}" setaf 2)
     fi
@@ -42,28 +44,26 @@ function success() {
 }
 
 function run() {
+    local width
+
     if [[ -n "${DEBUG-}" ]]; then
         "${@}" >&2
     elif [[ -n "${CI-}" ]]; then
-        printf "%s%s%s%s\n" "::group::" "${color_success-}" "${*}" "${color_reset-}" >&2
+        printf "%s%s%s%s\n" "::group::" "${color_cmd-}" "${*}" "${color_reset-}" >&2
         "${@}" >&2
         printf "%s\n" "::endgroup::" >&2
-    elif tput cols &> /dev/null; then
-        local width
+    elif width=$(tput cols); then
         local line
         local clean
         local code
 
-        width=$(tput cols)
-
-        printf "\r\033[2K%s%s%s" "${color_success-}" "${*}" "${color_reset-}" >&2
+        printf "%s%s%s\n" "${color_cmd-}" "${*}" "${color_reset-}" >&2
 
         "${@}" 2>&1 | while IFS= read -r line; do
             clean=$(echo -e "${line}" | sed -e 's/\\n//g' -e 's/\\t//g' -e 's/\\r//g' | head -c $((width - 10)))
             printf "\r\033[2K%s%s%s" "${color_dim-}" "${clean}" "${color_reset-}" >&2
         done
         code=${PIPESTATUS[0]}
-
         printf "\r\033[2K" >&2
 
         return "${code}"
