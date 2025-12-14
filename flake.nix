@@ -51,6 +51,7 @@
               cargo-edit
 
               # nix
+              nix
               nix-update
 
               # node
@@ -171,6 +172,7 @@
               cargo-edit
 
               # nix
+              nix
               nix-update
 
               # node
@@ -205,7 +207,7 @@
             dontFixup = true;
 
             meta = {
-              description = "git semantic version bumper";
+              description = "Git semantic version bumper";
               mainProgram = "bumper";
               homepage = "https://github.com/spotdemo4/bumper";
               changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
@@ -220,8 +222,8 @@
 
             fromImage = pkgs.image.nix;
             contents = with pkgs; [
-              packages.default
               dockerTools.caCertificates
+              packages.default
             ];
 
             created = "now";
