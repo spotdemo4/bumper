@@ -17,12 +17,12 @@ jobs:
     steps:
       - name: Checkout
         id: checkout
-        uses: spotdemo4/better-checkout@eaec73409dbe842ad8446ee818976878b0e9108d # v0.0.2
+        uses: spotdemo4/better-checkout@ff40a2af98474e67fcb548837329b66e419fc7d3 # v0.1.0
         with:
           app-id: ${{ vars.CLIENT_ID }}
           private-key: ${{ secrets.PRIVATE_KEY }}
 
       - name: Release
-        uses: spotdemo4/nix-flake-release@af7259a68ea30d029220a19eea905da0eca80c1b # v0.4.4
+        uses: spotdemo4/nix-flake-release@705a37cf5f4a18304b19c853cf9abc575a71a757 # v0.6.0
         with:
           github_token: ${{ steps.checkout.outputs.token }}
