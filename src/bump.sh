@@ -43,7 +43,7 @@ function bump_dir() {
                 readarray -t packages < <(nix_packages "${system}")
                 if [[ ${#packages[@]} -eq 0 ]]; then
                     warn "no packages found in '${file}' for system '${system}'"
-                    exit 1
+                    continue
                 fi
 
                 for package in "${packages[@]}"; do
