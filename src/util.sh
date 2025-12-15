@@ -1,28 +1,5 @@
 #!/usr/bin/env bash
 
-# default TERM to linux
-if [[ -n "${CI-}" || -z "${TERM-}" ]]; then
-    TERM=linux
-fi
-
-# color support
-if colors=$(tput -T "${TERM}" colors 2> /dev/null); then
-    color_reset=$(tput -T "${TERM}" sgr0)
-    color_bold=$(tput -T "${TERM}" bold)
-    color_dim=$(tput -T "${TERM}" dim)
-
-    if [[ "$colors" -ge 256 ]]; then
-        color_info=$(tput -T "${TERM}" setaf 189)
-        color_cmd=$(tput -T "${TERM}" setaf 81)
-        color_warn=$(tput -T "${TERM}" setaf 216)
-        color_success=$(tput -T "${TERM}" setaf 117)
-    elif [[ "$colors" -ge 8 ]]; then
-        color_cmd=$(tput -T "${TERM}" setaf 4)
-        color_warn=$(tput -T "${TERM}" setaf 3)
-        color_success=$(tput -T "${TERM}" setaf 2)
-    fi
-fi
-
 function bold() {
     printf "%s%s%s\n" "${color_bold-}" "${1-}" "${color_reset-}"
 }
@@ -99,3 +76,26 @@ function array() {
 
     printf "%s\n" "${array[@]}"
 }
+
+# default TERM to linux
+if [[ -n "${CI-}" || -z "${TERM-}" ]]; then
+    TERM=linux
+fi
+
+# color support
+if colors=$(tput -T "${TERM}" colors 2> /dev/null); then
+    color_reset=$(tput -T "${TERM}" sgr0)
+    color_bold=$(tput -T "${TERM}" bold)
+    color_dim=$(tput -T "${TERM}" dim)
+
+    if [[ "$colors" -ge 256 ]]; then
+        color_info=$(tput -T "${TERM}" setaf 189)
+        color_cmd=$(tput -T "${TERM}" setaf 81)
+        color_warn=$(tput -T "${TERM}" setaf 216)
+        color_success=$(tput -T "${TERM}" setaf 117)
+    elif [[ "$colors" -ge 8 ]]; then
+        color_cmd=$(tput -T "${TERM}" setaf 4)
+        color_warn=$(tput -T "${TERM}" setaf 3)
+        color_success=$(tput -T "${TERM}" setaf 2)
+    fi
+fi

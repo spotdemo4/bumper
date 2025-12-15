@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
 
-# https://discourse.nixos.org/t/warning-about-home-ownership/52351
-if [[ "${DOCKER-}" == "true" && -n "${CI-}" ]]; then
-    chown -R "${USER}:${USER}" "${HOME}"
-fi
-
-NIX_ARGS=("--extra-experimental-features" "nix-command flakes" "--accept-flake-config" "--no-warn-dirty")
-
 function nix_system () {
     local system
 
@@ -26,3 +19,10 @@ function nix_packages () {
 
     echo "${packages_json}"
 }
+
+NIX_ARGS=("--extra-experimental-features" "nix-command flakes" "--accept-flake-config" "--no-warn-dirty")
+
+# https://discourse.nixos.org/t/warning-about-home-ownership/52351
+if [[ "${DOCKER-}" == "true" && -n "${CI-}" ]]; then
+    chown -R "${USER}:${USER}" "${HOME}"
+fi
