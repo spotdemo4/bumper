@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: spotdemo4/better-checkout@ff40a2af98474e67fcb548837329b66e419fc7d3 # v0.1.0
+        uses: spotdemo4/better-checkout@139a6bb432f1b15445f011440ced8b231dc01c5a # v0.1.0
         with:
           app_id: ${{ vars.CLIENT_ID }}
           app_key: ${{ secrets.PRIVATE_KEY }}
