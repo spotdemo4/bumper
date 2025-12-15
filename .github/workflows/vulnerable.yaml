@@ -20,14 +20,8 @@ jobs:
       - name: Run flake-checker
         run: flake-checker -f
 
-      - name: Build
-        run: nix build -o result
-
-      - name: Run vulnix
-        uses: spotdemo4/vulnix-action@c614a37ec8850272bf58e0f821f3028aa32e5c4b # v1.0.1
-        with:
-          path: result
-          score: 7
+      - name: Run nix-scan
+        run: nix-scan
 
   actions:
     runs-on: ubuntu-24.04
@@ -38,4 +32,4 @@ jobs:
           shell: vulnerable
 
       - name: Run octoscan
-        run: octoscan scan --verbose .github
+        run: octoscan scan .github

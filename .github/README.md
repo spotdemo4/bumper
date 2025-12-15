@@ -21,7 +21,7 @@ bumper [paths...]
 
 ## Why
 
-Most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. Unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. Of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code. If you know of an action that does what this does but better, let me know!
+Most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. Unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. Of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code.
 
 ## Install
 
@@ -100,6 +100,17 @@ docker run -it --rm \
 
 requires [jq](https://jqlang.org/), [cargo-edit](https://github.com/killercup/cargo-edit) (rust), [nix-update](https://github.com/Mic92/nix-update) (nix), [nodejs](https://nodejs.org/) (node)
 
-#### [bumper-0.7.1.tar.xz](https://github.com/spotdemo4/bumper/releases/download/v0.7.1/bumper-0.7.1.tar.xz) - bundle
+```elm
+git clone https://github.com/spotdemo4/bumper &&
+./bumper/src/bumper.sh
+```
+
+#### [bumper-0.7.1.tar.xz](https://github.com/spotdemo4/nix-scan/releases/latest/download/bumper-0.7.1.tar.xz) - bundle
 
 contains all dependencies, only use if necessary
+
+```elm
+wget https://github.com/spotdemo4/nix-scan/releases/latest/download/bumper-0.7.1.tar.xz &&
+tar xf bumper-0.7.1.tar.xz &&
+./release
+```

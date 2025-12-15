@@ -25,4 +25,4 @@ jobs:
       - name: Release
         uses: spotdemo4/nix-flake-release@af7259a68ea30d029220a19eea905da0eca80c1b # v0.4.4
         with:
-          GITHUB_TOKEN: ${{ steps.checkout.outputs.token }}
+          github_token: ${{ steps.checkout.outputs.token }}
