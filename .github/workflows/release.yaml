@@ -19,8 +19,8 @@ jobs:
         id: checkout
         uses: spotdemo4/better-checkout@ff40a2af98474e67fcb548837329b66e419fc7d3 # v0.1.0
         with:
-          app-id: ${{ vars.CLIENT_ID }}
-          private-key: ${{ secrets.PRIVATE_KEY }}
+          app_id: ${{ vars.CLIENT_ID }}
+          app_key: ${{ secrets.PRIVATE_KEY }}
 
       - name: Release
         uses: spotdemo4/nix-flake-release@705a37cf5f4a18304b19c853cf9abc575a71a757 # v0.6.0
