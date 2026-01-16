@@ -22,6 +22,7 @@ MINOR_TYPES="${MINOR_TYPES:-"feat"}"
 PATCH_TYPES="${PATCH_TYPES:-"fix"}"
 SKIP_SCOPES="${SKIP_SCOPES:-"ci"}"
 COMMIT="${COMMIT:-true}"
+TAG="${TAG:-true}"
 PUSH="${PUSH:-true}"
 FORCE="${FORCE:-false}"
 ALLOW_DIRTY="${ALLOW_DIRTY:-false}"
@@ -88,25 +89,28 @@ for bump_path in "${PATHS[@]}"; do
 done
 info
 
-# check for staged changes
-if git diff --staged --quiet; then
-    warn "$(bold "no changes to commit")"
-    exit 1
-fi
-
 # commit
 if [[ "${COMMIT}" == "false" ]]; then
-    success "skipping commit, tag and push"
-    exit 0
+    success "skipping commit"
+elif git diff --staged --quiet; then
+    warn "$(bold "no changes to commit")"
+else
+    info "committing: v${last_version} -> v${next_version}"
+    run git commit -m "bump: v${last_version} -> v${next_version}"
 fi
-info "committing: v${last_version} -> v${next_version}"
-run git commit -m "bump: v${last_version} -> v${next_version}"
-run git tag -a "v${next_version}" -m "bump: v${last_version} -> v${next_version}"
+
+# tag
+if [[ "${TAG}" == "false" ]]; then
+    success "skipping tag"
+else
+    info "tagging: v${next_version}"
+    run git tag -a "v${next_version}" -m "bump: v${last_version} -> v${next_version}"
+fi
 
 # push
 if [[ "${PUSH}" == "false" ]]; then
     success "skipping push"
-    exit 0
+else
+    success "pushing changes to ${branch}"
+    run git push --atomic origin "${branch}" "v${next_version}"
 fi
-success "pushing changes to ${branch}"
-run git push --atomic origin "${branch}" "v${next_version}"
