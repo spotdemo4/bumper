@@ -25,6 +25,10 @@ inputs:
     description: commit changes after bumping
     required: false
     default: "true"
+  tag:
+    description: tag changes after committing
+    required: false
+    default: "true"
   push:
     description: push changes after bumping
     required: false
@@ -49,6 +53,7 @@ runs:
     PATCH_TYPES: ${{ inputs.patch_types }}
     SKIP_SCOPES: ${{ inputs.skip_scopes }}
     COMMIT: ${{ inputs.commit }}
+    TAG: ${{ inputs.tag }}
     PUSH: ${{ inputs.push }}
     FORCE: ${{ inputs.force }}
     ALLOW_DIRTY: ${{ inputs.allow_dirty }}
