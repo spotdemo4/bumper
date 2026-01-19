@@ -82,7 +82,7 @@ for bump_path in "${PATHS[@]}"; do
     if [[ -f "${bump_path}" ]]; then
         bump_file "${bump_path}" "${last_version}" "${next_version}"
     elif [[ -d "${bump_path}" ]]; then
-        bump_dir "${bump_path}" "${next_version}"
+        bump_dir "${bump_path}" "${last_version}" "${next_version}"
     else
         warn "file or directory not found: ${bump_path}"
     fi

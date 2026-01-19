@@ -2,7 +2,8 @@
 
 function bump_dir() {
     local dir="$1"
-    local next_version="$2"
+    local last_version="$2"
+    local next_version="$3"
 
     local search=()
     readarray -t search < <(git ls-files "${dir}")
@@ -74,6 +75,30 @@ function bump_dir() {
                 fi
 
                 popd &> /dev/null || true
+                ;;
+
+            # default
+            *)
+                # only check all files in interactive mode
+                if [[ $- != *i* ]]; then
+                    continue
+                fi
+
+                # check if file contains the version
+                if ! grep -q "${next_version}" "${file}"; then
+                    continue
+                fi
+
+                info "bump $(bold "${file}")? (y/n): "
+                read -r answer
+                case "${answer,,}" in
+                    y | yes)
+                        bump_file "${file}" "${last_version}" "${next_version}"
+                        ;;
+                    *)
+                        info "skipped: $(bold "${file}")"
+                        ;;
+                esac
                 ;;
         esac
     done
