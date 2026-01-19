@@ -45,7 +45,7 @@ inputs:
 
 runs:
   using: docker
-  image: docker://ghcr.io/spotdemo4/bumper:0.8.1
+  image: docker://ghcr.io/spotdemo4/bumper:0.8.2
   env:
     PATHS: ${{ inputs.files }}
     MAJOR_TYPES: ${{ inputs.major_types }}
