@@ -9,8 +9,6 @@
 
   // repository
   "extends": ["config:recommended"],
-  "branchPrefix": "renovate/",
-  "dependencyDashboardTitle": "Dependency Dashboard",
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true,
@@ -25,11 +23,11 @@
       "automerge": true
     },
     {
-      "groupName": "Nix Inputs",
+      "groupName": "nix inputs",
       "matchManagers": ["nix"]
     },
     {
-      "groupName": "GitHub Actions",
+      "groupName": "github actions",
       "matchManagers": ["github-actions"]
     }
   ]
