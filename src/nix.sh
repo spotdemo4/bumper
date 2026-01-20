@@ -31,12 +31,14 @@ if [[ "${DOCKER-}" == "true" && -n "${CI-}" ]]; then
 fi
 
 # https://nix.dev/manual/nix/latest/command-ref/conf-file
-read -r -d '' NIX_CONFIG <<EOF
-extra-experimental-features = nix-command flakes
-accept-flake-config = true
-warn-dirty = false
-always-allow-substitutes = true
-fallback = true
-EOF
+NIX_CONFIG="extra-experimental-features = nix-command flakes"$'\n'
+NIX_CONFIG+="accept-flake-config = true"$'\n'
+NIX_CONFIG+="warn-dirty = false"$'\n'
+NIX_CONFIG+="always-allow-substitutes = true"$'\n'
+NIX_CONFIG+="fallback = true"$'\n'
+
+if [[ -n "${GITHUB_TOKEN-}" ]]; then
+    NIX_CONFIG+="access-tokens = github.com=${GITHUB_TOKEN}"$'\n'
+fi
 
 export NIX_CONFIG
