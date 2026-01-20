@@ -37,31 +37,36 @@
             trev.overlays.images
           ];
         };
+        fs = pkgs.lib.fileset;
+        deps = with pkgs; [
+          jq
+          ncurses
+          gnused
+
+          # rust
+          cargo
+          cargo-edit
+
+          # nix
+          nix
+          nix-update
+
+          # node
+          nodejs_latest
+        ];
       in
       rec {
         devShells = {
           default = pkgs.mkShell {
-            packages = with pkgs; [
-              jq
-              ncurses
-              gnused
-
-              # rust
-              cargo
-              cargo-edit
-
-              # nix
-              nix
-              nix-update
-
-              # node
-              nodejs_latest
-
-              # lint
-              shellcheck # bash
-              nixfmt # nix
-              prettier # json/yaml
-            ];
+            packages =
+              with pkgs;
+              [
+                # lint
+                shellcheck # bash
+                nixfmt # nix
+                prettier # json/yaml
+              ]
+              ++ deps;
             shellHook = pkgs.shellhook.ref;
           };
 
@@ -75,7 +80,6 @@
             packages = with pkgs; [
               # nix
               flake-checker
-              nix-scan
 
               # actions
               octoscan
@@ -84,28 +88,58 @@
         };
 
         checks = pkgs.lib.mkChecks {
-          bash = {
-            src = packages.default;
+          shellcheck = {
+            src = fs.toSource {
+              root = ./.;
+              fileset = fs.unions [
+                (fs.fileFilter (file: file.hasExt "sh") ./.)
+                ./.shellcheckrc
+              ];
+            };
             deps = with pkgs; [
               shellcheck
             ];
             script = ''
-              shellcheck src/*.sh
+              shellcheck **/*.sh
             '';
           };
 
-          action = {
-            src = ./.;
+          actions = {
+            src = fs.toSource {
+              root = ./.;
+              fileset = fs.unions [
+                ./action.yaml
+                ./.github/workflows
+              ];
+            };
             deps = with pkgs; [
               action-validator
+              octoscan
             ];
             script = ''
-              action-validator action.yaml
+              action-validator **/*.yaml
+              octoscan scan .
+            '';
+          };
+
+          renovate = {
+            src = fs.toSource {
+              root = ./.github;
+              fileset = ./.github/renovate.json;
+            };
+            deps = with pkgs; [
+              renovate
+            ];
+            script = ''
+              renovate-config-validator renovate.json
             '';
           };
 
           nix = {
-            src = ./.;
+            src = fs.toSource {
+              root = ./.;
+              fileset = fs.fileFilter (file: file.hasExt "nix") ./.;
+            };
             deps = with pkgs; [
               nixfmt-tree
             ];
@@ -114,19 +148,16 @@
             '';
           };
 
-          actions = {
-            src = ./.;
+          prettier = {
+            src = fs.toSource {
+              root = ./.;
+              fileset = fs.fileFilter (file: file.hasExt "yaml" || file.hasExt "json" || file.hasExt "md") ./.;
+            };
             deps = with pkgs; [
               prettier
-              action-validator
-              octoscan
-              renovate
             ];
             script = ''
-              prettier --check "**/*.json" "**/*.yaml"
-              action-validator .github/**/*.yaml
-              octoscan scan .github
-              renovate-config-validator .github/renovate.json
+              prettier --check .
             '';
           };
         };
@@ -140,9 +171,12 @@
             pname = "bumper";
             version = "0.8.3";
 
-            src = builtins.path {
-              name = "root";
-              path = ./.;
+            src = fs.toSource {
+              root = ./.;
+              fileset = fs.unions [
+                (fs.fileFilter (file: file.hasExt "sh") ./.)
+                ./.shellcheckrc
+              ];
             };
 
             nativeBuildInputs = with pkgs; [
@@ -150,22 +184,7 @@
               shellcheck
             ];
 
-            runtimeInputs = with pkgs; [
-              jq
-              ncurses
-              gnused
-
-              # rust
-              cargo
-              cargo-edit
-
-              # nix
-              nix
-              nix-update
-
-              # node
-              nodejs_latest
-            ];
+            runtimeInputs = deps;
 
             unpackPhase = ''
               cp -a "$src/." .
