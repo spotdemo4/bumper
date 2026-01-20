@@ -65,6 +65,9 @@
                 shellcheck # bash
                 nixfmt # nix
                 prettier # json/yaml
+
+                # util
+                bumper
               ]
               ++ deps;
             shellHook = pkgs.shellhook.ref;
