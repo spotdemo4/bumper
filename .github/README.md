@@ -87,7 +87,7 @@ also available from the [nix user repository](https://nur.nix-community.org/repo
 ### Docker
 
 ```elm
-docker run -it --rm \
+docker run -it \
   -w /app \
   -v "$(pwd):/app" \
   -v "$HOME/.ssh:/root/.ssh" \
@@ -98,19 +98,18 @@ docker run -it --rm \
 
 #### [bumper.sh](/src/bumper.sh) - bash script
 
-requires [jq](https://jqlang.org/), [cargo-edit](https://github.com/killercup/cargo-edit) (rust), [nix-update](https://github.com/Mic92/nix-update) (nix), [nodejs](https://nodejs.org/) (node)
+requires [jq](https://jqlang.org/), [cargo-edit](https://github.com/killercup/cargo-edit) (rust), [nix-update](https://github.com/Mic92/nix-update) (nix), [nodejs](https://nodejs.org/) (node), [uv](https://docs.astral.sh/uv/) (python)
 
 ```elm
 git clone https://github.com/spotdemo4/bumper &&
 ./bumper/src/bumper.sh
 ```
 
-#### [bumper-0.10.0.tar.xz](https://github.com/spotdemo4/nix-scan/releases/latest/download/bumper-0.10.0.tar.xz) - bundle
+#### [bumper_0.10.0_linux_amd64](https://github.com/spotdemo4/bumper/releases/download/v0.10.0/bumper_0.10.0_linux_amd64) - bundle
 
 contains all dependencies, only use if necessary
 
 ```elm
-wget https://github.com/spotdemo4/nix-scan/releases/latest/download/bumper-0.10.0.tar.xz &&
-tar xf bumper-0.10.0.tar.xz &&
-./release
+wget https://github.com/spotdemo4/bumper/releases/download/v0.10.0/bumper_0.10.0_linux_amd64 &&
+./bumper_0.10.0_linux_amd64
 ```
