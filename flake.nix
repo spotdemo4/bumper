@@ -171,7 +171,7 @@
         packages = {
           default = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "bumper";
-            version = "0.9.1";
+            version = "0.9.2";
 
             src = fs.toSource {
               root = ./.;
