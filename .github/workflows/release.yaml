@@ -28,3 +28,4 @@ jobs:
         uses: spotdemo4/nix-flake-release@0c86612c508785f8c4753b6803948bf54265c07a # v0.9.1
         with:
           github_token: ${{ steps.checkout.outputs.token }}
+          bundle: portable
