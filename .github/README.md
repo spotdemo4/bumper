@@ -29,7 +29,7 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.9.2
+  uses: spotdemo4/bumper@v0.10.0
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
@@ -91,7 +91,7 @@ docker run -it --rm \
   -w /app \
   -v "$(pwd):/app" \
   -v "$HOME/.ssh:/root/.ssh" \
-  ghcr.io/spotdemo4/bumper:0.9.2
+  ghcr.io/spotdemo4/bumper:0.10.0
 ```
 
 ### Downloads
@@ -105,12 +105,12 @@ git clone https://github.com/spotdemo4/bumper &&
 ./bumper/src/bumper.sh
 ```
 
-#### [bumper-0.9.2.tar.xz](https://github.com/spotdemo4/nix-scan/releases/latest/download/bumper-0.9.2.tar.xz) - bundle
+#### [bumper-0.10.0.tar.xz](https://github.com/spotdemo4/nix-scan/releases/latest/download/bumper-0.10.0.tar.xz) - bundle
 
 contains all dependencies, only use if necessary
 
 ```elm
-wget https://github.com/spotdemo4/nix-scan/releases/latest/download/bumper-0.9.2.tar.xz &&
-tar xf bumper-0.9.2.tar.xz &&
+wget https://github.com/spotdemo4/nix-scan/releases/latest/download/bumper-0.10.0.tar.xz &&
+tar xf bumper-0.10.0.tar.xz &&
 ./release
 ```
