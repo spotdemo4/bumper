@@ -100,9 +100,14 @@ function get_impact() {
             if [[ "${type,,}" == "${major_type,,}" ]]; then
                 info "$(bold "major:") ${commit}"
                 impact="major"
-                break 2
+                continue 2
             fi
         done
+
+        if [[ "${impact}" == "major" ]]; then
+            info "skipped (unimpressive): ${commit}"
+            continue
+        fi
 
         for minor_type in "${minor_types[@]}"; do
             if [[ "${type,,}" == "${minor_type,,}" ]]; then
@@ -111,6 +116,11 @@ function get_impact() {
                 continue 2
             fi
         done
+
+        if [[ "${impact}" == "minor" ]]; then
+            info "skipped (unimpressive): ${commit}"
+            continue
+        fi
 
         for patch_type in "${patch_types[@]}"; do
             if [[ "${type,,}" == "${patch_type,,}" ]]; then
