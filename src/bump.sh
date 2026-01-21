@@ -77,6 +77,25 @@ function bump_dir() {
                 popd &> /dev/null || true
                 ;;
 
+            # python
+            ?(*/)uv.lock)
+                info "bumping: $(bold "${file}")"
+
+                if ! pushd "$(dirname "${file}")" &> /dev/null; then
+                    warn "could not change directory to $(dirname "${file}")"
+                    continue
+                fi
+
+                if run uv version "${next_version}"; then
+                    git add uv.lock
+                    git add pyproject.toml || true
+                else
+                    warn "$(bold "'uv version' failed")"
+                fi
+
+                popd &> /dev/null || true
+                ;;
+
             # default
             *)
                 # only check all files in interactive mode

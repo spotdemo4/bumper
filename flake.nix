@@ -52,6 +52,9 @@
 
           # node
           nodejs_latest
+
+          # python
+          uv
         ];
       in
       rec {
