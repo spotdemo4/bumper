@@ -20,7 +20,7 @@
         {
           default = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "test";
-            version = "0.10.0";
+            version = "0.10.1";
 
             src = builtins.path {
               name = "root";
@@ -32,7 +32,7 @@
 
           another = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "test2";
-            version = "0.10.0";
+            version = "0.10.1";
 
             src = builtins.path {
               name = "root";
