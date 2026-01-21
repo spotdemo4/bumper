@@ -26,7 +26,7 @@ inputs:
     required: false
     default: "true"
   tag:
-    description: tag changes after committing
+    description: tag changes after bumping
     required: false
     default: "true"
   push:
@@ -42,6 +42,7 @@ inputs:
   debug:
     description: enable debug logging
     required: false
+    default: ${{ runner.debug }}
 
 runs:
   using: docker

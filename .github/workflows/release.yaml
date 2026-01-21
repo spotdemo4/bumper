@@ -16,8 +16,8 @@ jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        id: checkout
+      - id: checkout
+        name: Checkout
         uses: spotdemo4/better-checkout@47df133e9f043cd08660fed5a09b6c20232ce909 # v0.2.0
         with:
           app-id: ${{ vars.CLIENT_ID }}
@@ -25,6 +25,6 @@ jobs:
           fetch-depth: 0
 
       - name: Release
-        uses: spotdemo4/nix-flake-release@e8c1501c44777b2f0c62885990bc20b2ab449e18 # v0.8.7
+        uses: spotdemo4/nix-flake-release@0c86612c508785f8c4753b6803948bf54265c07a # v0.9.1
         with:
           github_token: ${{ steps.checkout.outputs.token }}
