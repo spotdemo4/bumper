@@ -86,7 +86,7 @@ function bump_dir() {
                     continue
                 fi
 
-                if run uv version "${next_version}"; then
+                if run uv version --no-sync --no-python-downloads --python "$(which python)" "${next_version}"; then
                     git add uv.lock
                     git add pyproject.toml || true
                 else

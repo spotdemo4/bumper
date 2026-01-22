@@ -54,6 +54,7 @@
           nodejs_latest
 
           # python
+          python3
           uv
         ];
       in
