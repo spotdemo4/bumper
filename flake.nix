@@ -61,6 +61,7 @@
       rec {
         devShells = {
           default = pkgs.mkShell {
+            name = "dev";
             packages =
               with pkgs;
               [
@@ -77,12 +78,14 @@
           };
 
           update = pkgs.mkShell {
+            name = "update";
             packages = with pkgs; [
               renovate
             ];
           };
 
           vulnerable = pkgs.mkShell {
+            name = "vulnerable";
             packages = with pkgs; [
               # nix
               flake-checker
