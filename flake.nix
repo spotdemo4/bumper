@@ -58,10 +58,11 @@
           uv
         ];
       in
-      rec {
+      {
         devShells = {
           default = pkgs.mkShell {
             name = "dev";
+            shellHook = pkgs.shellhook.ref;
             packages =
               with pkgs;
               [
@@ -74,7 +75,6 @@
                 bumper
               ]
               ++ deps;
-            shellHook = pkgs.shellhook.ref;
           };
 
           update = pkgs.mkShell {
@@ -175,7 +175,7 @@
           dev.script = "./src/bumper.sh";
         };
 
-        packages = {
+        packages = with pkgs.lib; rec {
           default = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "bumper";
             version = "0.10.2";
@@ -204,7 +204,7 @@
             configurePhase = ''
               chmod +w src
               sed -i '1c\#!${pkgs.runtimeShell}' src/bumper.sh
-              sed -i '2c\export PATH="${pkgs.lib.makeBinPath finalAttrs.runtimeInputs}:$PATH"' src/bumper.sh
+              sed -i '2c\export PATH="${makeBinPath finalAttrs.runtimeInputs}:$PATH"' src/bumper.sh
             '';
 
             doCheck = true;
@@ -227,33 +227,32 @@
               mainProgram = "bumper";
               homepage = "https://github.com/spotdemo4/bumper";
               changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
-              license = pkgs.lib.licenses.mit;
-              platforms = pkgs.lib.platforms.all;
+              license = licenses.mit;
+              platforms = platforms.all;
             };
           });
 
           image = pkgs.dockerTools.buildLayeredImage {
-            name = packages.default.pname;
-            tag = packages.default.version;
+            name = default.pname;
+            tag = default.version;
 
             fromImage = pkgs.image.nix;
             contents = with pkgs; [
               dockerTools.caCertificates
-              packages.default
             ];
 
             created = "now";
-            meta = packages.default.meta;
+            meta = default.meta;
 
             config = {
-              Cmd = [ "${pkgs.lib.meta.getExe packages.default}" ];
+              Entrypoint = [ "${meta.getExe default}" ];
               Env = [ "DOCKER=true" ];
               Labels = {
-                "org.opencontainers.image.source" = packages.default.meta.homepage;
-                "org.opencontainers.image.version" = packages.default.version;
-                "org.opencontainers.image.licenses" = packages.default.meta.license.spdxId;
-                "org.opencontainers.image.title" = packages.default.pname;
-                "org.opencontainers.image.description" = packages.default.meta.description;
+                "org.opencontainers.image.title" = default.pname;
+                "org.opencontainers.image.description" = default.meta.description;
+                "org.opencontainers.image.source" = default.meta.homepage;
+                "org.opencontainers.image.version" = default.version;
+                "org.opencontainers.image.licenses" = default.meta.license.spdxId;
               };
             };
           };
