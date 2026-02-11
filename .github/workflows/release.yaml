@@ -10,22 +10,34 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
   packages: write
 
 jobs:
   release:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - macos-26
+    runs-on: ${{ matrix.image }}
     steps:
-      - id: checkout
-        name: Checkout
-        uses: spotdemo4/better-checkout@9a8cc716065857724440d98bc9b2bc08be8ab4bd # v0.5.0
+      - id: init
+        name: Initialize
+        uses: spotdemo4/nix-init@e07a64840e6c1dcc886aef6cc971f4f263bb9884 # v1.28.0
         with:
-          app-id: ${{ vars.CLIENT_ID }}
-          private-key: ${{ secrets.PRIVATE_KEY }}
-          fetch-depth: 0
+          app_id: ${{ vars.CLIENT_ID }}
+          app_key: ${{ secrets.PRIVATE_KEY }}
+          fetch_depth: 0
+          shell: release
 
-      - name: Release
-        uses: spotdemo4/nix-flake-release@60164d8b0fb80ffb0b0f52b52395081fb868be18 # v0.11.2
-        with:
-          github_token: ${{ steps.checkout.outputs.token }}
-          bundle: portable
+      - name: Run flake-release
+        run: flake-release
+        env:
+          GITHUB_TOKEN: ${{ steps.init.outputs.token }}
+          REGISTRY: ghcr.io
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          BUNDLE: appimage

@@ -19,22 +19,24 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   bump:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: spotdemo4/better-checkout@9a8cc716065857724440d98bc9b2bc08be8ab4bd # v0.5.0
+      - name: Initialize
+        uses: spotdemo4/nix-init@e07a64840e6c1dcc886aef6cc971f4f263bb9884 # v1.28.0
         with:
-          app-id: ${{ vars.CLIENT_ID }}
-          private-key: ${{ secrets.PRIVATE_KEY }}
-          fetch-depth: 0
+          app_id: ${{ vars.CLIENT_ID }}
+          app_key: ${{ secrets.PRIVATE_KEY }}
+          fetch_depth: 0
+          shell: bump
 
       - name: Bump
-        uses: spotdemo4/bumper@46848d484d4ee3db19fd598b14cbb9b8cefb0e89 # v0.10.2
-        with:
-          force: ${{ inputs.force }}
-          files: |-
+        run: bumper
+        env:
+          FORCE: ${{ inputs.force }}
+          PATHS: |-
             action.yaml
             .github/README.md

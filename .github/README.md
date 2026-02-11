@@ -74,9 +74,9 @@ inputs = {
 };
 
 outputs = { bumper, ... }: {
-    devShells."${system}".default = pkgs.mkShell {
+    devShells.x86_64-linux.default = pkgs.mkShell {
         packages = [
-            bumper."${system}".default
+            bumper.x86_64-linux.default
         ];
     };
 }
