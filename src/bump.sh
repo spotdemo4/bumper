@@ -74,29 +74,39 @@ function bump_dir() {
             # rust
             ?(*/)Cargo.toml)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${file}"
+
+                path="${repo_root}/${file}"
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${path}"
                 ;;
 
             ?(*/)Cargo.lock)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${file}"
+
+                path="${repo_root}/${file}"
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${path}"
                 ;;
 
             # python
             ?(*/)uv.lock)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${file}"
+
+                path="${repo_root}/${file}"
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${path}"
                 ;;
 
             ?(*/)pyproject.toml)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${file}"
+
+                path="${repo_root}/${file}"
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${path}"
                 ;;
 
             # zig
             ?(*/)build.zig.zon)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/\.version = \"(.*)\"/.version = \"${next_version}\"/" "${file}"
+                
+                path="${repo_root}/${file}"
+                sed -i -r "s/\.version = \"(.*)\"/.version = \"${next_version}\"/" "${path}"
                 ;;
 
             # default
