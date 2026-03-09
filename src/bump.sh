@@ -5,6 +5,9 @@ function bump_dir() {
     local last_version="$2"
     local next_version="$3"
 
+    local repo_root
+    repo_root=$(git rev-parse --show-toplevel)
+
     local search=()
     readarray -t search < <(git ls-files "${dir}")
     for file in "${search[@]}"; do
@@ -43,7 +46,7 @@ function bump_dir() {
             ?(*/)package.json)
                 info "bumping: $(bold "${file}")"
 
-                path=$(realpath "${file}")
+                path="${repo_root}/${file}"
                 tmpfile=$(mktemp)
 
                 if jq ".version = \"${next_version}\"" "${path}" > "${tmpfile}"; then
@@ -57,7 +60,7 @@ function bump_dir() {
             ?(*/)package-lock.json)
                 info "bumping: $(bold "${file}")"
 
-                path=$(realpath "${file}")
+                path="${repo_root}/${file}"
                 tmpfile=$(mktemp)
                 
                 if jq ".version = \"${next_version}\" | .packages[\"\"].version = \"${next_version}\"" "${path}" > "${tmpfile}"; then
