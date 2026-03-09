@@ -43,19 +43,11 @@
           ncurses
           gnused
 
-          # rust
-          cargo
-          cargo-edit
-
           # nix
           nix-update
 
           # node
-          nodejs_latest
-
-          # python
-          python315
-          uv
+          nodejs_latest # TODO: use jq or something
         ];
       in
       {
@@ -111,44 +103,38 @@
 
         checks = pkgs.lib.mkChecks {
           shellcheck = {
-            src = fs.toSource {
-              root = ./.;
-              fileset = fs.unions [
-                (fs.fileFilter (file: file.hasExt "sh") ./.)
-                ./.shellcheckrc
-              ];
-            };
+            root = ./.;
+            fileset = fs.unions [
+              (fs.fileFilter (file: file.hasExt "sh") ./.)
+              ./.shellcheckrc
+            ];
             deps = with pkgs; [
               shellcheck
             ];
-            script = ''
-              shellcheck **/*.sh
+            forEach = ''
+              shellcheck $file
             '';
           };
 
           actions = {
-            src = fs.toSource {
-              root = ./.;
-              fileset = fs.unions [
-                ./action.yaml
-                ./.github/workflows
-              ];
-            };
+            root = ./.;
+            fileset = fs.unions [
+              ./action.yaml
+              ./.github/workflows
+            ];
             deps = with pkgs; [
               action-validator
               octoscan
             ];
-            script = ''
-              action-validator **/*.yaml
-              octoscan scan .
+            forEach = ''
+              action-validator $file
+              octoscan scan $file
             '';
           };
 
           renovate = {
-            src = fs.toSource {
-              root = ./.github;
-              fileset = ./.github/renovate.json;
-            };
+            root = ./.github;
+            fileset = ./.github/renovate.json;
             deps = with pkgs; [
               renovate
             ];
@@ -158,28 +144,24 @@
           };
 
           nix = {
-            src = fs.toSource {
-              root = ./.;
-              fileset = fs.fileFilter (file: file.hasExt "nix") ./.;
-            };
+            root = ./.;
+            filter = file: file.hasExt "nix";
             deps = with pkgs; [
-              nixfmt-tree
+              nixfmt
             ];
-            script = ''
-              treefmt --ci
+            forEach = ''
+              nixfmt --check $file
             '';
           };
 
           prettier = {
-            src = fs.toSource {
-              root = ./.;
-              fileset = fs.fileFilter (file: file.hasExt "yaml" || file.hasExt "json" || file.hasExt "md") ./.;
-            };
+            root = ./.;
+            filter = file: file.hasExt "yaml" || file.hasExt "json" || file.hasExt "md";
             deps = with pkgs; [
               prettier
             ];
-            script = ''
-              prettier --check .
+            forEach = ''
+              prettier --check $file
             '';
           };
         };

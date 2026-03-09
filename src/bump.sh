@@ -61,39 +61,29 @@ function bump_dir() {
             # rust
             ?(*/)Cargo.toml)
                 info "bumping: $(bold "${file}")"
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" Cargo.toml
+                ;;
 
-                if ! pushd "$(dirname "${file}")" &> /dev/null; then
-                    warn "could not change directory to $(dirname "${file}")"
-                    continue
-                fi
-
-                if run cargo-set-version set-version "${next_version}"; then
-                    git add Cargo.toml
-                    git add Cargo.lock || true
-                else
-                    warn "$(bold "'cargo-set-version' failed")"
-                fi
-
-                popd &> /dev/null || true
+            ?(*/)Cargo.lock)
+                info "bumping: $(bold "${file}")"
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" Cargo.lock
                 ;;
 
             # python
             ?(*/)uv.lock)
                 info "bumping: $(bold "${file}")"
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" uv.lock
+                ;;
 
-                if ! pushd "$(dirname "${file}")" &> /dev/null; then
-                    warn "could not change directory to $(dirname "${file}")"
-                    continue
-                fi
+            ?(*/)pyproject.toml)
+                info "bumping: $(bold "${file}")"
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" pyproject.toml
+                ;;
 
-                if run uv version --no-sync --no-python-downloads --python "$(which python)" "${next_version}"; then
-                    git add uv.lock
-                    git add pyproject.toml || true
-                else
-                    warn "$(bold "'uv version' failed")"
-                fi
-
-                popd &> /dev/null || true
+            # zig
+            ?(*/)build.zig.zon)
+                info "bumping: $(bold "${file}")"
+                sed -i -r "s/\.version = \"(.*)\"/.version = \"${next_version}\"/" build.zig.zon
                 ;;
 
             # default
