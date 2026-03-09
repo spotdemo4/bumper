@@ -29,7 +29,7 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.10.4
+  uses: spotdemo4/bumper@v0.11.0
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
@@ -91,12 +91,12 @@ docker run -it \
   -w /app \
   -v "$(pwd):/app" \
   -v "$HOME/.ssh:/root/.ssh" \
-  ghcr.io/spotdemo4/bumper:0.10.4
+  ghcr.io/spotdemo4/bumper:0.11.0
 ```
 
 ### Downloads
 
-#### [bumper.sh](https://github.com/spotdemo4/bumper/releases/download/v0.10.4/bumper.sh) - bash script
+#### [bumper.sh](https://github.com/spotdemo4/bumper/releases/download/v0.11.0/bumper.sh) - bash script
 
 requires [jq](https://jqlang.org/) and [nix-update](https://github.com/Mic92/nix-update) (if updating nix flakes)
 
@@ -105,11 +105,11 @@ chmod +x bumper.sh &&
 ./bumper.sh
 ```
 
-#### [bumper_0.10.4_linux_amd64](https://github.com/spotdemo4/bumper/releases/download/v0.10.4/bumper_0.10.4_linux_amd64) - bundle
+#### [bumper_0.11.0_linux_amd64](https://github.com/spotdemo4/bumper/releases/download/v0.11.0/bumper_0.11.0_linux_amd64) - bundle
 
 contains all dependencies
 
 ```shell
-wget https://github.com/spotdemo4/bumper/releases/download/v0.10.4/bumper_0.10.4_linux_amd64 &&
-./bumper_0.10.4_linux_amd64
+wget https://github.com/spotdemo4/bumper/releases/download/v0.11.0/bumper_0.11.0_linux_amd64 &&
+./bumper_0.11.0_linux_amd64
 ```
