@@ -43,9 +43,11 @@ function bump_dir() {
             ?(*/)package.json)
                 info "bumping: $(bold "${file}")"
 
+                path=$(realpath "${file}")
                 tmpfile=$(mktemp)
-                if jq ".version = \"${next_version}\"" "${file}" > "${tmpfile}"; then
-                    mv "${tmpfile}" "${file}"
+
+                if jq ".version = \"${next_version}\"" "${path}" > "${tmpfile}"; then
+                    mv "${tmpfile}" "${path}"
                 else
                     warn "failed to update version in ${file}"
                     rm "${tmpfile}"
@@ -55,9 +57,11 @@ function bump_dir() {
             ?(*/)package-lock.json)
                 info "bumping: $(bold "${file}")"
 
+                path=$(realpath "${file}")
                 tmpfile=$(mktemp)
-                if jq ".version = \"${next_version}\" | .packages[\"\"].version = \"${next_version}\"" "${file}" > "${tmpfile}"; then
-                    mv "${tmpfile}" "${file}"
+                
+                if jq ".version = \"${next_version}\" | .packages[\"\"].version = \"${next_version}\"" "${path}" > "${tmpfile}"; then
+                    mv "${tmpfile}" "${path}"
                 else
                     warn "failed to update version in ${file}"
                     rm "${tmpfile}"
@@ -67,29 +71,29 @@ function bump_dir() {
             # rust
             ?(*/)Cargo.toml)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" Cargo.toml
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${file}"
                 ;;
 
             ?(*/)Cargo.lock)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" Cargo.lock
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${file}"
                 ;;
 
             # python
             ?(*/)uv.lock)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" uv.lock
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${file}"
                 ;;
 
             ?(*/)pyproject.toml)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" pyproject.toml
+                sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${file}"
                 ;;
 
             # zig
             ?(*/)build.zig.zon)
                 info "bumping: $(bold "${file}")"
-                sed -i -r "s/\.version = \"(.*)\"/.version = \"${next_version}\"/" build.zig.zon
+                sed -i -r "s/\.version = \"(.*)\"/.version = \"${next_version}\"/" "${file}"
                 ;;
 
             # default
