@@ -39,15 +39,12 @@
         };
         fs = pkgs.lib.fileset;
         deps = with pkgs; [
-          jq
           ncurses
           gnused
+          jq
 
           # nix
           nix-update
-
-          # node
-          nodejs_latest # TODO: use jq or something
         ];
       in
       {

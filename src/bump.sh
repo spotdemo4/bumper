@@ -9,25 +9,6 @@ function bump_dir() {
     readarray -t search < <(git ls-files "${dir}")
     for file in "${search[@]}"; do
         case "${file}" in
-            # node
-            ?(*/)package.json)
-                info "bumping: $(bold "${file}")"
-
-                if ! pushd "$(dirname "${file}")" &> /dev/null; then
-                    warn "could not change directory to $(dirname "${file}")"
-                    continue
-                fi
-
-                if run npm version "${next_version}" --no-git-tag-version --allow-same-version; then
-                    git add package.json
-                    git add package-lock.json || true
-                else
-                    warn "$(bold "'npm version' failed")"
-                fi
-
-                popd &> /dev/null || true
-                ;;
-
             # nix
             ?(*/)flake.nix)
                 info "bumping: $(bold "${file}")"
@@ -56,6 +37,31 @@ function bump_dir() {
                 git add flake.nix
 
                 popd &> /dev/null || true
+                ;;
+
+            # node
+            ?(*/)package.json)
+                info "bumping: $(bold "${file}")"
+
+                tmpfile=$(mktemp)
+                if jq ".version = \"${next_version}\"" "${file}" > "${tmpfile}"; then
+                    mv "${tmpfile}" "${file}"
+                else
+                    warn "failed to update version in ${file}"
+                    rm "${tmpfile}"
+                fi
+                ;;
+            
+            ?(*/)package-lock.json)
+                info "bumping: $(bold "${file}")"
+
+                tmpfile=$(mktemp)
+                if jq ".version = \"${next_version}\" | .packages[\"\"].version = \"${next_version}\"" "${file}" > "${tmpfile}"; then
+                    mv "${tmpfile}" "${file}"
+                else
+                    warn "failed to update version in ${file}"
+                    rm "${tmpfile}"
+                fi
                 ;;
 
             # rust

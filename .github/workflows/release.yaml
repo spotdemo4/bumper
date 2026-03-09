@@ -33,7 +33,7 @@ jobs:
           fetch_depth: 0
           shell: release
 
-      - name: Run flake-release
+      - name: Publish to GitHub
         run: flake-release
         env:
           GITHUB_TOKEN: ${{ steps.init.outputs.token }}
@@ -41,3 +41,16 @@ jobs:
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           BUNDLE: appimage
+
+      - name: Publish to GitHub (script)
+        if: matrix.image == 'ubuntu-24.04'
+        env:
+          GH_TOKEN: ${{ steps.init.outputs.token }}
+        run: |
+          # Publishing bash script
+
+          echo "Inlining sources"
+          ./.github/inline.sh ./src/bumper.sh > bumper.sh
+
+          echo "Uploading to GitHub"
+          gh release upload "$(git describe --tags --abbrev=0)" bumper.sh

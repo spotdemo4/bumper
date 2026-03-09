@@ -96,20 +96,20 @@ docker run -it \
 
 ### Downloads
 
-#### [bumper.sh](/src/bumper.sh) - bash script
+#### [bumper.sh](https://github.com/spotdemo4/bumper/releases/download/v0.10.4/bumper.sh) - bash script
 
-requires [jq](https://jqlang.org/), [cargo-edit](https://github.com/killercup/cargo-edit) (rust), [nix-update](https://github.com/Mic92/nix-update) (nix), [nodejs](https://nodejs.org/) (node), [uv](https://docs.astral.sh/uv/) (python)
+requires [jq](https://jqlang.org/) and [nix-update](https://github.com/Mic92/nix-update) (if updating nix flakes)
 
-```elm
-git clone https://github.com/spotdemo4/bumper &&
-./bumper/src/bumper.sh
+```shell
+chmod +x bumper.sh &&
+./bumper.sh
 ```
 
 #### [bumper_0.10.4_linux_amd64](https://github.com/spotdemo4/bumper/releases/download/v0.10.4/bumper_0.10.4_linux_amd64) - bundle
 
-contains all dependencies, only use if necessary
+contains all dependencies
 
-```elm
+```shell
 wget https://github.com/spotdemo4/bumper/releases/download/v0.10.4/bumper_0.10.4_linux_amd64 &&
 ./bumper_0.10.4_linux_amd64
 ```
