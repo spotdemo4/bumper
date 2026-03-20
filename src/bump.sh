@@ -55,6 +55,8 @@ function bump_dir() {
                     warn "failed to update version in ${file}"
                     rm "${tmpfile}"
                 fi
+
+                git add "${path}"
                 ;;
             
             ?(*/)package-lock.json)
@@ -69,6 +71,8 @@ function bump_dir() {
                     warn "failed to update version in ${file}"
                     rm "${tmpfile}"
                 fi
+
+                git add "${path}"
                 ;;
 
             # rust
@@ -77,6 +81,8 @@ function bump_dir() {
 
                 path="${repo_root}/${file}"
                 sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${path}"
+
+                git add "${path}"
                 ;;
 
             ?(*/)Cargo.lock)
@@ -84,6 +90,8 @@ function bump_dir() {
 
                 path="${repo_root}/${file}"
                 sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${path}"
+
+                git add "${path}"
                 ;;
 
             # python
@@ -92,6 +100,8 @@ function bump_dir() {
 
                 path="${repo_root}/${file}"
                 sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${path}"
+
+                git add "${path}"
                 ;;
 
             ?(*/)pyproject.toml)
@@ -99,6 +109,8 @@ function bump_dir() {
 
                 path="${repo_root}/${file}"
                 sed -i -r "s/^version = \"(.*)\"/version = \"${next_version}\"/" "${path}"
+
+                git add "${path}"
                 ;;
 
             # zig
@@ -107,6 +119,8 @@ function bump_dir() {
                 
                 path="${repo_root}/${file}"
                 sed -i -r "s/\.version = \"(.*)\"/.version = \"${next_version}\"/" "${path}"
+
+                git add "${path}"
                 ;;
 
             # default
