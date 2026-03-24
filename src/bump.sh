@@ -47,14 +47,7 @@ function bump_dir() {
                 info "bumping: $(bold "${file}")"
 
                 path="${repo_root}/${file}"
-                tmpfile=$(mktemp)
-
-                if jq ".version = \"${next_version}\"" "${path}" > "${tmpfile}"; then
-                    mv "${tmpfile}" "${path}"
-                else
-                    warn "failed to update version in ${file}"
-                    rm "${tmpfile}"
-                fi
+                sed -i "s/\"version\": \".*\"/\"version\": \"${next_version}\"/" "${path}"
 
                 git add "${path}"
                 ;;
@@ -63,14 +56,14 @@ function bump_dir() {
                 info "bumping: $(bold "${file}")"
 
                 path="${repo_root}/${file}"
-                tmpfile=$(mktemp)
                 
-                if jq ".version = \"${next_version}\" | .packages[\"\"].version = \"${next_version}\"" "${path}" > "${tmpfile}"; then
-                    mv "${tmpfile}" "${path}"
-                else
-                    warn "failed to update version in ${file}"
-                    rm "${tmpfile}"
-                fi
+                # Get the line numbers of the first two "version" lines
+                lines=$(grep -n '"version":' "${path}" | head -2 | cut -d: -f1)
+
+                # Replace on those specific lines
+                for line in $lines; do
+                    sed -i "${line}s/\"version\": \".*\"/\"version\": \"${next_version}\"/" "${path}"
+                done
 
                 git add "${path}"
                 ;;
