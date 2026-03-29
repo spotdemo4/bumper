@@ -191,6 +191,14 @@
                 ];
               };
 
+              nativeBuildInputs = with pkgs; [
+                pkg-config
+              ];
+
+              buildInputs = with pkgs; [
+                openssl
+              ];
+
               cargoLock.lockFile = ./Cargo.lock;
 
               meta = {
