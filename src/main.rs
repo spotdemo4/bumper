@@ -10,8 +10,8 @@ use std::process::ExitCode;
 use bump::{bump_dir, bump_file};
 use config::load_config;
 use git_ops::{
-    current_branch, ensure_clean_repo, get_impact, latest_tag, repo_root, run_git_command,
-    staged_files,
+    current_branch, ensure_clean_repo, get_impact, git_commit, git_push, git_tag, latest_tag,
+    repo_root, run_git_command, staged_files,
 };
 use model::AppResult;
 use versioning::next_version;
@@ -89,7 +89,7 @@ fn run() -> AppResult<()> {
         println!("no changes to commit");
     } else {
         let message = format!("bump: v{last_version} -> v{next_version}");
-        run_git_command(&repo_root, &["commit", "-m", &message])?;
+        git_commit(&repo, &message)?;
     }
 
     if !config.tag {
@@ -97,14 +97,14 @@ fn run() -> AppResult<()> {
     } else {
         let message = format!("bump: v{last_version} -> v{next_version}");
         let tag = format!("v{next_version}");
-        run_git_command(&repo_root, &["tag", "-a", &tag, "-m", &message])?;
+        git_tag(&repo, &tag, &message)?;
     }
 
     if !config.push {
         println!("skipping push");
     } else {
         let tag = format!("v{next_version}");
-        run_git_command(&repo_root, &["push", "--atomic", "origin", &branch, &tag])?;
+        git_push(&repo, &branch, &tag)?;
     }
 
     Ok(())

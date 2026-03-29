@@ -224,3 +224,75 @@ pub fn run_git_command(repo_root: &Path, args: &[&str]) -> AppResult<()> {
         Err(format!("git {} failed", args.join(" ")))
     }
 }
+
+pub fn git_commit(repo: &Repository, message: &str) -> AppResult<()> {
+    let sig = repo
+        .signature()
+        .map_err(|e| format!("failed to get git signature: {e}"))?;
+    let mut index = repo
+        .index()
+        .map_err(|e| format!("failed to open git index: {e}"))?;
+    let tree_oid = index
+        .write_tree()
+        .map_err(|e| format!("failed to write tree: {e}"))?;
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(|e| format!("failed to find tree: {e}"))?;
+    let parent = repo
+        .head()
+        .and_then(|h| h.peel_to_commit())
+        .map_err(|e| format!("failed to get HEAD commit: {e}"))?;
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+        .map_err(|e| format!("failed to create commit: {e}"))?;
+    Ok(())
+}
+
+pub fn git_tag(repo: &Repository, tag_name: &str, message: &str) -> AppResult<()> {
+    let sig = repo
+        .signature()
+        .map_err(|e| format!("failed to get git signature: {e}"))?;
+    let head_commit = repo
+        .head()
+        .and_then(|h| h.peel_to_commit())
+        .map_err(|e| format!("failed to get HEAD commit: {e}"))?;
+    repo.tag(tag_name, head_commit.as_object(), &sig, message, false)
+        .map_err(|e| format!("failed to create tag '{tag_name}': {e}"))?;
+    Ok(())
+}
+
+pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
+    let mut remote = repo
+        .find_remote("origin")
+        .map_err(|e| format!("failed to find remote 'origin': {e}"))?;
+    let branch_ref = format!("refs/heads/{branch}:refs/heads/{branch}");
+    let tag_ref = format!("refs/tags/{tag}:refs/tags/{tag}");
+
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(|url, username, allowed| {
+        let user = username.unwrap_or("git");
+        if allowed.contains(git2::CredentialType::SSH_KEY) {
+            return git2::Cred::ssh_key_from_agent(user);
+        }
+        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+            if let Ok(config) = git2::Config::open_default() {
+                return git2::Cred::credential_helper(&config, url, username);
+            }
+        }
+        if allowed.contains(git2::CredentialType::DEFAULT) {
+            return git2::Cred::default();
+        }
+        Err(git2::Error::from_str("no suitable credentials"))
+    });
+
+    let mut push_options = git2::PushOptions::new();
+    push_options.remote_callbacks(callbacks);
+    push_options.remote_push_options(&["atomic"]);
+
+    remote
+        .push(
+            &[branch_ref.as_str(), tag_ref.as_str()],
+            Some(&mut push_options),
+        )
+        .map_err(|e| format!("failed to push to origin: {e}"))?;
+    Ok(())
+}
