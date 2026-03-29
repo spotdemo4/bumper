@@ -198,21 +198,19 @@
                 ];
               };
 
+              cargoLock.lockFile = ./Cargo.lock;
+
               nativeBuildInputs = with pkgs; [
                 autoPatchelfHook
                 pkg-config
               ];
+
               buildInputs = with pkgs; [
                 libgcc
                 openssl
               ];
 
-              nativeCheckInputs = with pkgs; [
-                git
-              ];
               doCheck = false;
-
-              cargoLock.lockFile = ./Cargo.lock;
 
               meta = {
                 description = "Git semantic version bumper";

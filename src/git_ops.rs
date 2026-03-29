@@ -273,10 +273,10 @@ pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
         if allowed.contains(git2::CredentialType::SSH_KEY) {
             return git2::Cred::ssh_key_from_agent(user);
         }
-        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-            if let Ok(config) = git2::Config::open_default() {
-                return git2::Cred::credential_helper(&config, url, username);
-            }
+        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
+            && let Ok(config) = git2::Config::open_default()
+        {
+            return git2::Cred::credential_helper(&config, url, username);
         }
         if allowed.contains(git2::CredentialType::DEFAULT) {
             return git2::Cred::default();

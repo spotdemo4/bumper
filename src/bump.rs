@@ -1,84 +1,25 @@
-use git2::Repository;
 use std::fs;
 use std::path::Path;
 
-use crate::git_ops::{list_tracked_files_under, stage_path};
-use crate::model::AppResult;
+type AppResult<T> = Result<T, String>;
 
-pub fn bump_dir(
-    repo: &Repository,
-    repo_root: &Path,
-    directory: &Path,
-    old_version: &str,
-    new_version: &str,
-) -> AppResult<()> {
-    let files = list_tracked_files_under(repo, repo_root, directory)?;
-
-    for absolute in files {
-        if !absolute.is_file() {
-            continue;
-        }
-        let _ = bump_typed_file(repo, repo_root, &absolute, old_version, new_version)?;
-    }
-
-    Ok(())
-}
-
-pub fn bump_file(
-    repo: &Repository,
-    repo_root: &Path,
-    file: &Path,
-    old_version: &str,
-    new_version: &str,
-) -> AppResult<()> {
-    if bump_typed_file(repo, repo_root, file, old_version, new_version)? {
-        return Ok(());
-    }
-
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    if !source.contains(old_version) {
-        return Err(format!("no occurrences found in {}", file.display()));
-    }
-
-    let replaced = source.replace(old_version, new_version);
-    if replaced == source {
-        return Err(format!("failed to replace version in {}", file.display()));
-    }
-
-    fs::write(file, replaced).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    stage_path(repo, repo_root, file)
-}
-
-fn bump_typed_file(
-    repo: &Repository,
-    repo_root: &Path,
-    file: &Path,
-    old_version: &str,
-    new_version: &str,
-) -> AppResult<bool> {
+pub fn apply_typed_change(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
     let name = file
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("invalid file path '{}'", file.display()))?;
 
-    let changed = match name {
-        "flake.nix" | "flake.lock" => replace_literal(file, old_version, new_version)?,
-        "package.json" => bump_package_json(file, new_version)?,
-        "package-lock.json" => bump_package_lock_json(file, new_version)?,
-        "Cargo.toml" => bump_toml_path(file, &["package", "version"], new_version)?,
-        "pyproject.toml" => bump_toml_path(file, &["project", "version"], new_version)?,
-        "uv.lock" => replace_literal(file, old_version, new_version)?,
-        "Cargo.lock" => replace_literal(file, old_version, new_version)?,
-        "build.zig.zon" => replace_line_value(file, ".version", new_version)?,
-        _ => return Ok(false),
-    };
-
-    if changed {
-        stage_path(repo, repo_root, file)?;
+    match name {
+        "flake.nix" => replace_literal(file, old_version, new_version),
+        "package.json" => bump_package_json(file, new_version),
+        "package-lock.json" => bump_package_lock_json(file, new_version),
+        "Cargo.toml" => bump_toml_path(file, &["package", "version"], new_version),
+        "pyproject.toml" => bump_toml_path(file, &["project", "version"], new_version),
+        "uv.lock" => replace_literal(file, old_version, new_version),
+        "Cargo.lock" => replace_literal(file, old_version, new_version),
+        "build.zig.zon" => replace_line_value(file, ".version", new_version),
+        _ => Ok(false),
     }
-
-    Ok(changed)
 }
 
 fn replace_literal(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {

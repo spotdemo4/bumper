@@ -1,17 +1,18 @@
-mod bump;
 mod config;
 mod git_ops;
 mod model;
 mod versioning;
 
+use bumper::bump::apply_typed_change;
 use git2::Repository;
+use std::fs;
+use std::path::Path;
 use std::process::ExitCode;
 
-use bump::{bump_dir, bump_file};
 use config::load_config;
 use git_ops::{
     current_branch, ensure_clean_repo, get_impact, git_commit, git_push, git_tag, latest_tag,
-    repo_root, run_git_command, staged_files,
+    list_tracked_files_under, repo_root, run_git_command, stage_path, staged_files,
 };
 use model::AppResult;
 use versioning::next_version;
@@ -108,4 +109,58 @@ fn run() -> AppResult<()> {
     }
 
     Ok(())
+}
+
+fn bump_dir(
+    repo: &Repository,
+    repo_root: &Path,
+    directory: &Path,
+    old_version: &str,
+    new_version: &str,
+) -> AppResult<()> {
+    let files = list_tracked_files_under(repo, repo_root, directory)?;
+    for absolute in files {
+        if !absolute.is_file() {
+            continue;
+        }
+        let _ = bump_typed_file(repo, repo_root, &absolute, old_version, new_version)?;
+    }
+    Ok(())
+}
+
+fn bump_file(
+    repo: &Repository,
+    repo_root: &Path,
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+) -> AppResult<()> {
+    if bump_typed_file(repo, repo_root, file, old_version, new_version)? {
+        return Ok(());
+    }
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    if !source.contains(old_version) {
+        return Err(format!("no occurrences found in {}", file.display()));
+    }
+    let replaced = source.replace(old_version, new_version);
+    if replaced == source {
+        return Err(format!("failed to replace version in {}", file.display()));
+    }
+    fs::write(file, replaced).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    stage_path(repo, repo_root, file)
+}
+
+fn bump_typed_file(
+    repo: &Repository,
+    repo_root: &Path,
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+) -> AppResult<bool> {
+    let changed = apply_typed_change(file, old_version, new_version)?;
+    if changed {
+        stage_path(repo, repo_root, file)?;
+    }
+    Ok(changed)
 }
