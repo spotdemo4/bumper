@@ -66,16 +66,12 @@
           bump = pkgs.mkShell {
             packages = with pkgs; [
               bumper
-              rustToolchain
-              openssl
-              pkg-config
             ];
           };
 
           release = pkgs.mkShell {
             packages = with pkgs; [
               flake-release
-              rustToolchain
             ];
           };
 
@@ -197,7 +193,6 @@
                   ./tests
                 ];
               };
-
               cargoLock.lockFile = ./Cargo.lock;
 
               nativeBuildInputs = with pkgs; [
@@ -231,8 +226,8 @@
           };
         });
 
-        formatter = pkgs.nixfmt-tree;
         schemas = trev.schemas;
+        formatter = pkgs.nixfmt-tree;
       }
     );
 }
