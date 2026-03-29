@@ -98,8 +98,14 @@
         checks = pkgs.mkChecks {
           rust = {
             src = self.packages.${system}.default;
-            deps = [ rustToolchain ];
+            deps = with pkgs; [
+              rustToolchain
+              openssl
+              pkg-config
+              git
+            ];
             script = ''
+              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
               cargo fmt --check
               cargo test --offline
               cargo clippy --offline -- -D warnings
@@ -192,6 +198,7 @@
                   ./Cargo.toml
                   ./rust-toolchain.toml
                   ./main.rs
+                  ./tests
                 ];
               };
 

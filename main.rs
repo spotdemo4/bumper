@@ -708,3 +708,172 @@ fn run_git_command(repo_root: &Path, args: &[&str]) -> AppResult<()> {
         Err(format!("git {} failed", args.join(" ")))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn run_git(cwd: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .status()
+            .expect("failed to run git command");
+        assert!(status.success(), "git command failed: {}", args.join(" "));
+    }
+
+    fn copy_dir_recursive(src: &Path, dst: &Path) {
+        fs::create_dir_all(dst).expect("failed to create destination directory");
+        for entry in fs::read_dir(src).expect("failed to read source directory") {
+            let entry = entry.expect("failed to read directory entry");
+            let path = entry.path();
+            let target = dst.join(entry.file_name());
+            if path.is_dir() {
+                copy_dir_recursive(&path, &target);
+            } else {
+                fs::copy(&path, &target).expect("failed to copy fixture file");
+            }
+        }
+    }
+
+    fn setup_case_repo(case_name: &str) -> (PathBuf, Repository) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("bumper-tests-{case_name}-{nanos}"));
+        fs::create_dir_all(&root).expect("failed to create temp root");
+
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join(case_name);
+        let case_dir = root.join(case_name);
+        copy_dir_recursive(&fixture, &case_dir);
+
+        run_git(&root, &["init"]);
+        run_git(&root, &["config", "user.name", "bumper-tests"]);
+        run_git(
+            &root,
+            &["config", "user.email", "bumper-tests@example.invalid"],
+        );
+        run_git(&root, &["add", "."]);
+        run_git(&root, &["commit", "-m", "chore: init"]);
+
+        let repo = Repository::open(&root).expect("failed to open test repository");
+        (root, repo)
+    }
+
+    fn default_types() -> (
+        HashSet<String>,
+        HashSet<String>,
+        HashSet<String>,
+        HashSet<String>,
+    ) {
+        (
+            HashSet::from(["breaking change".to_string()]),
+            HashSet::from(["feat".to_string()]),
+            HashSet::from(["fix".to_string()]),
+            HashSet::from(["ci".to_string()]),
+        )
+    }
+
+    fn run_case_bump(repo: &Repository, root: &Path, case_name: &str, tag_version: &str) {
+        run_git(
+            root,
+            &["tag", "-a", &format!("v{tag_version}"), "-m", "tag"],
+        );
+        run_git(
+            root,
+            &["commit", "--allow-empty", "-m", "feat: case change"],
+        );
+
+        let (_, last_tag_commit) = latest_tag(repo).expect("failed to read latest tag");
+        let (major, minor, patch, skip) = default_types();
+
+        let impact = get_impact(repo, last_tag_commit, &major, &minor, &patch, &skip, false)
+            .expect("failed to compute impact")
+            .expect("expected impact to be detected");
+        assert_eq!(impact, Impact::Minor);
+
+        let next = next_version(tag_version, impact).expect("failed to compute next version");
+        assert_eq!(next, "0.12.0");
+
+        bump_dir(repo, root, &root.join(case_name), tag_version, &next)
+            .expect("failed to bump fixture directory");
+    }
+
+    #[test]
+    fn bumps_node_case() {
+        let (root, repo) = setup_case_repo("node");
+        run_case_bump(&repo, &root, "node", "0.11.0");
+
+        let package_json =
+            fs::read_to_string(root.join("node/package.json")).expect("read package.json");
+        let package_lock = fs::read_to_string(root.join("node/package-lock.json"))
+            .expect("read package-lock.json");
+
+        assert!(package_json.contains("\"version\": \"0.12.0\""));
+        assert!(package_lock.contains("\"version\": \"0.12.0\""));
+    }
+
+    #[test]
+    fn bumps_python_case() {
+        let (root, repo) = setup_case_repo("python");
+        run_case_bump(&repo, &root, "python", "0.11.0");
+
+        let pyproject =
+            fs::read_to_string(root.join("python/pyproject.toml")).expect("read pyproject.toml");
+        let uv_lock = fs::read_to_string(root.join("python/uv.lock")).expect("read uv.lock");
+
+        assert!(pyproject.contains("version = \"0.12.0\""));
+        assert!(uv_lock.contains("version = \"0.12.0\""));
+    }
+
+    #[test]
+    fn bumps_rust_case() {
+        let (root, repo) = setup_case_repo("rust");
+        run_case_bump(&repo, &root, "rust", "0.11.0");
+
+        let cargo_toml = fs::read_to_string(root.join("rust/Cargo.toml")).expect("read Cargo.toml");
+        let cargo_lock = fs::read_to_string(root.join("rust/Cargo.lock")).expect("read Cargo.lock");
+
+        assert!(cargo_toml.contains("version = \"0.12.0\""));
+        assert!(cargo_lock.contains("version = \"0.12.0\""));
+    }
+
+    #[test]
+    fn bumps_zig_case() {
+        let (root, repo) = setup_case_repo("zig");
+        run_case_bump(&repo, &root, "zig", "0.11.0");
+
+        let zon = fs::read_to_string(root.join("zig/build.zig.zon")).expect("read build.zig.zon");
+        assert!(zon.contains(".version = \"0.12.0\","));
+    }
+
+    #[test]
+    fn bumps_nix_case() {
+        let (root, repo) = setup_case_repo("nix");
+
+        // Ensure flake.lock also has a replaceable semantic version marker.
+        let lock_path = root.join("nix/flake.lock");
+        let lock_source = fs::read_to_string(&lock_path).expect("read flake.lock");
+        let lock_source = lock_source.replacen(
+            "\"version\": 7",
+            "\"bumperVersion\": \"0.11.2\",\n  \"version\": 7",
+            1,
+        );
+        fs::write(&lock_path, lock_source).expect("write flake.lock");
+
+        run_git(&root, &["add", "nix/flake.lock"]);
+        run_git(&root, &["commit", "-m", "chore: add flake lock marker"]);
+
+        run_case_bump(&repo, &root, "nix", "0.11.2");
+
+        let flake_nix = fs::read_to_string(root.join("nix/flake.nix")).expect("read flake.nix");
+        let flake_lock = fs::read_to_string(root.join("nix/flake.lock")).expect("read flake.lock");
+
+        assert!(flake_nix.contains("version = \"0.12.0\""));
+        assert!(flake_lock.contains("\"bumperVersion\": \"0.12.0\""));
+    }
+}
