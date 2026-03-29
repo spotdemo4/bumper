@@ -49,6 +49,8 @@
             packages = with pkgs; [
               # rust
               rustToolchain
+              openssl
+              pkg-config
 
               # formatters
               nixfmt
@@ -65,6 +67,8 @@
             packages = with pkgs; [
               bumper
               rustToolchain
+              openssl
+              pkg-config
             ];
           };
 
