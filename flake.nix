@@ -98,12 +98,10 @@
         checks = pkgs.mkChecks {
           rust = {
             src = self.packages.${system}.default;
-            deps = [
+            packages = [
               rustToolchain
             ];
             script = ''
-              export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
-
               cargo fmt --check
               cargo test --offline
               cargo clippy --offline -- -D warnings
@@ -113,7 +111,7 @@
           nix = {
             root = ./.;
             filter = file: file.hasExt "nix";
-            deps = with pkgs; [
+            packages = with pkgs; [
               nixfmt
             ];
             forEach = ''
@@ -124,7 +122,7 @@
           renovate = {
             root = ./.github;
             fileset = ./.github/renovate.json;
-            deps = with pkgs; [
+            packages = with pkgs; [
               renovate
             ];
             script = ''
@@ -138,7 +136,7 @@
               ./action.yaml
               ./.github/workflows
             ];
-            deps = with pkgs; [
+            packages = with pkgs; [
               action-validator
               octoscan
             ];
@@ -151,7 +149,7 @@
           tombi = {
             root = ./.;
             filter = file: file.hasExt "toml";
-            deps = with pkgs; [
+            packages = with pkgs; [
               tombi
             ];
             forEach = ''
@@ -163,7 +161,7 @@
           prettier = {
             root = ./.;
             filter = file: file.hasExt "yaml" || file.hasExt "json" || file.hasExt "md";
-            deps = with pkgs; [
+            packages = with pkgs; [
               prettier
             ];
             forEach = ''
@@ -201,18 +199,18 @@
               };
 
               nativeBuildInputs = with pkgs; [
+                autoPatchelfHook
                 pkg-config
               ];
               buildInputs = with pkgs; [
+                libgcc
                 openssl
               ];
 
               nativeCheckInputs = with pkgs; [
                 git
               ];
-              checkInputs = with pkgs; [
-                openssl
-              ];
+              doCheck = false;
 
               cargoLock.lockFile = ./Cargo.lock;
 
