@@ -106,6 +106,7 @@
             ];
             script = ''
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
+
               cargo fmt --check
               cargo test --offline
               cargo clippy --offline -- -D warnings
