@@ -22,51 +22,34 @@
 
   outputs =
     {
-      nixpkgs,
+      self,
       trev,
       ...
     }:
     trev.libs.mkFlake (
-      system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [
-            trev.overlays.packages
-            trev.overlays.libs
-            trev.overlays.images
-          ];
-        };
-        fs = pkgs.lib.fileset;
-        deps = with pkgs; [
-          ncurses
-          gnused
-          jq
-
-          # nix
-          nix-update
-        ];
-      in
-      {
+      system: pkgs: {
         devShells = {
           default = pkgs.mkShell {
             shellHook = pkgs.shellhook.ref;
-            packages =
-              with pkgs;
-              [
-                # lint
-                shellcheck
+            packages = with pkgs; [
+              # deps
+              ncurses
+              gnused
+              jq
+              nix-update
 
-                # format
-                nixfmt
-                prettier
+              # lint
+              shellcheck
 
-                # util
-                bumper
-                flake-release
-                renovate
-              ]
-              ++ deps;
+              # format
+              nixfmt
+              prettier
+
+              # util
+              bumper
+              flake-release
+              renovate
+            ];
           };
 
           bump = pkgs.mkShell {
@@ -89,21 +72,18 @@
 
           vulnerable = pkgs.mkShell {
             packages = with pkgs; [
-              # nix
-              flake-checker
-
-              # actions
-              octoscan
+              flake-checker # nix
+              octoscan # actions
             ];
           };
         };
 
-        checks = pkgs.lib.mkChecks {
+        checks = pkgs.mkChecks {
           shellcheck = {
             root = ./.;
-            fileset = fs.unions [
-              (fs.fileFilter (file: file.hasExt "sh") ./.)
+            fileset = pkgs.lib.fileset.unions [
               ./.shellcheckrc
+              (pkgs.lib.fileset.fileFilter (file: file.hasExt "sh") ./.)
             ];
             deps = with pkgs; [
               shellcheck
@@ -115,7 +95,7 @@
 
           actions = {
             root = ./.;
-            fileset = fs.unions [
+            fileset = pkgs.lib.fileset.unions [
               ./action.yaml
               ./.github/workflows
             ];
@@ -163,93 +143,77 @@
           };
         };
 
-        apps = pkgs.lib.mkApps {
-          dev.script = "./src/bumper.sh";
+        apps = pkgs.mkApps {
+          dev = "./src/bumper.sh";
         };
 
-        packages = with pkgs.lib; rec {
-          default = pkgs.stdenv.mkDerivation (finalAttrs: {
-            pname = "bumper";
-            version = "0.11.2";
+        packages.default = pkgs.stdenv.mkDerivation (finalAttrs: {
+          pname = "bumper";
+          version = "0.11.2";
 
-            src = fs.toSource {
-              root = ./.;
-              fileset = fs.unions [
-                (fs.fileFilter (file: file.hasExt "sh") ./.)
-                ./.shellcheckrc
-              ];
-            };
-
-            nativeBuildInputs = with pkgs; [
-              makeWrapper
-              shellcheck
+          src = pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions [
+              (pkgs.lib.fileset.fileFilter (file: file.hasExt "sh") ./.)
+              ./.shellcheckrc
             ];
-
-            runtimeInputs = deps;
-
-            unpackPhase = ''
-              cp -a "$src/." .
-            '';
-
-            dontBuild = true;
-
-            configurePhase = ''
-              chmod +w src
-              sed -i '1c\#!${pkgs.runtimeShell}' src/bumper.sh
-              sed -i '2c\export PATH="${makeBinPath finalAttrs.runtimeInputs}:$PATH"' src/bumper.sh
-            '';
-
-            doCheck = true;
-            checkPhase = ''
-              shellcheck src/*.sh
-            '';
-
-            installPhase = ''
-              mkdir -p $out/lib/bumper
-              cp -R src/*.sh $out/lib/bumper
-
-              mkdir -p $out/bin
-              makeWrapper "$out/lib/bumper/bumper.sh" "$out/bin/bumper"
-            '';
-
-            dontFixup = true;
-
-            meta = {
-              description = "Git semantic version bumper";
-              mainProgram = "bumper";
-              homepage = "https://github.com/spotdemo4/bumper";
-              changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
-              license = licenses.mit;
-              platforms = platforms.all;
-            };
-          });
-
-          image = pkgs.dockerTools.buildLayeredImage {
-            name = default.pname;
-            tag = default.version;
-
-            fromImage = pkgs.image.nix;
-            contents = with pkgs; [
-              dockerTools.caCertificates
-            ];
-
-            created = "now";
-            meta = default.meta;
-
-            config = {
-              Entrypoint = [ "${meta.getExe default}" ];
-              Env = [ "DOCKER=true" ];
-              Labels = {
-                "org.opencontainers.image.title" = default.pname;
-                "org.opencontainers.image.description" = default.meta.description;
-                "org.opencontainers.image.source" = default.meta.homepage;
-                "org.opencontainers.image.version" = default.version;
-                "org.opencontainers.image.licenses" = default.meta.license.spdxId;
-              };
-            };
           };
+
+          nativeBuildInputs = with pkgs; [
+            makeWrapper
+            shellcheck
+          ];
+
+          runtimeInputs = with pkgs; [
+            # deps
+            ncurses
+            gnused
+            jq
+            nix-update
+          ];
+
+          unpackPhase = ''
+            cp -a "$src/." .
+          '';
+
+          dontBuild = true;
+
+          configurePhase = ''
+            chmod +w src
+            sed -i '1c\#!${pkgs.runtimeShell}' src/bumper.sh
+            sed -i '2c\export PATH="${pkgs.lib.makeBinPath finalAttrs.runtimeInputs}:$PATH"' src/bumper.sh
+          '';
+
+          doCheck = true;
+          checkPhase = ''
+            shellcheck src/*.sh
+          '';
+
+          installPhase = ''
+            mkdir -p $out/lib/bumper
+            cp -R src/*.sh $out/lib/bumper
+
+            mkdir -p $out/bin
+            makeWrapper "$out/lib/bumper/bumper.sh" "$out/bin/bumper"
+          '';
+
+          dontFixup = true;
+
+          meta = {
+            description = "Git semantic version bumper";
+            mainProgram = "bumper";
+            license = pkgs.lib.licenses.mit;
+            platforms = pkgs.lib.platforms.all;
+            homepage = "https://github.com/spotdemo4/bumper";
+            changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
+          };
+        });
+
+        images.default = pkgs.mkImage self.packages.${system}.default {
+          contents = with pkgs; [ dockerTools.caCertificates ];
         };
 
+        schemas = trev.schemas;
         formatter = pkgs.nixfmt-tree;
       }
     );
