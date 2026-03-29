@@ -98,11 +98,8 @@
         checks = pkgs.mkChecks {
           rust = {
             src = self.packages.${system}.default;
-            deps = with pkgs; [
+            deps = [
               rustToolchain
-              openssl
-              pkg-config
-              git
             ];
             script = ''
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:$LD_LIBRARY_PATH"
@@ -206,8 +203,14 @@
               nativeBuildInputs = with pkgs; [
                 pkg-config
               ];
-
               buildInputs = with pkgs; [
+                openssl
+              ];
+
+              nativeCheckInputs = with pkgs; [
+                git
+              ];
+              checkInputs = with pkgs; [
                 openssl
               ];
 
