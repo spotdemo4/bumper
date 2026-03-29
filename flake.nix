@@ -1,18 +1,24 @@
 {
-  description = "bumper";
+  description = "rust template";
 
   nixConfig = {
     extra-substituters = [
       "https://nix.trev.zip"
+      "https://nix-community.cachix.org"
     ];
     extra-trusted-public-keys = [
       "trev:I39N/EsnHkvfmsbx8RUW+ia5dOzojTQNCTzKYij1chU="
+      "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
     ];
   };
 
   inputs = {
     systems.url = "github:nix-systems/default";
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     trev = {
       url = "github:spotdemo4/nur";
       inputs.systems.follows = "systems";
@@ -23,89 +29,87 @@
   outputs =
     {
       self,
+      fenix,
       trev,
       ...
     }:
     trev.libs.mkFlake (
-      system: pkgs: {
+      system: init:
+      let
+        pkgs = init.appendOverlays [ fenix.overlays.default ];
+        rustToolchain = pkgs.fenix.fromToolchainFile {
+          file = ./rust-toolchain.toml;
+          sha256 = "sha256-qqF33vNuAdU5vua96VKVIwuc43j4EFeEXbjQ6+l4mO4=";
+        };
+      in
+      {
         devShells = {
           default = pkgs.mkShell {
             shellHook = pkgs.shellhook.ref;
             packages = with pkgs; [
-              # deps
-              ncurses
-              gnused
-              jq
-              nix-update
+              # rust
+              rustToolchain
 
-              # lint
-              shellcheck
-
-              # format
+              # formatters
               nixfmt
               prettier
+              tombi
 
               # util
               bumper
               flake-release
-              renovate
             ];
           };
 
           bump = pkgs.mkShell {
             packages = with pkgs; [
               bumper
+              rustToolchain
             ];
           };
 
           release = pkgs.mkShell {
             packages = with pkgs; [
               flake-release
+              rustToolchain
             ];
           };
 
           update = pkgs.mkShell {
             packages = with pkgs; [
               renovate
+              cargo # rust
             ];
           };
 
           vulnerable = pkgs.mkShell {
             packages = with pkgs; [
-              flake-checker # nix
+              cargo-audit # rust
+              flake-checker # flake
               octoscan # actions
             ];
           };
         };
 
         checks = pkgs.mkChecks {
-          shellcheck = {
-            root = ./.;
-            fileset = pkgs.lib.fileset.unions [
-              ./.shellcheckrc
-              (pkgs.lib.fileset.fileFilter (file: file.hasExt "sh") ./.)
-            ];
-            deps = with pkgs; [
-              shellcheck
-            ];
-            forEach = ''
-              shellcheck $file
+          rust = {
+            src = self.packages.${system}.default;
+            deps = [ rustToolchain ];
+            script = ''
+              cargo fmt --check
+              cargo test --offline
+              cargo clippy --offline -- -D warnings
             '';
           };
 
-          actions = {
+          nix = {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [
-              ./action.yaml
-              ./.github/workflows
-            ];
+            filter = file: file.hasExt "nix";
             deps = with pkgs; [
-              action-validator
-              octoscan
+              nixfmt
             ];
             forEach = ''
-              action-validator $file
-              octoscan scan $file
+              nixfmt --check "$file"
             '';
           };
 
@@ -120,14 +124,31 @@
             '';
           };
 
-          nix = {
+          actions = {
             root = ./.;
-            filter = file: file.hasExt "nix";
+            fileset = pkgs.lib.fileset.unions [
+              ./action.yaml
+              ./.github/workflows
+            ];
             deps = with pkgs; [
-              nixfmt
+              action-validator
+              octoscan
             ];
             forEach = ''
-              nixfmt --check $file
+              action-validator "$file"
+              octoscan scan "$file"
+            '';
+          };
+
+          tombi = {
+            root = ./.;
+            filter = file: file.hasExt "toml";
+            deps = with pkgs; [
+              tombi
+            ];
+            forEach = ''
+              tombi format --offline --check "$file"
+              tombi lint --offline --error-on-warnings "$file"
             '';
           };
 
@@ -138,83 +159,61 @@
               prettier
             ];
             forEach = ''
-              prettier --check $file
+              prettier --check "$file"
             '';
           };
         };
 
         apps = pkgs.mkApps {
-          dev = "./src/bumper.sh";
+          dev = "cargo run";
         };
 
-        packages.default = pkgs.stdenv.mkDerivation (finalAttrs: {
-          pname = "bumper";
-          version = "0.11.2";
+        packages = pkgs.mkPackages pkgs (
+          pkgs:
+          let
+            rustPlatform = pkgs.makeRustPlatform {
+              cargo = rustToolchain;
+              rustc = rustToolchain;
+            };
+          in
+          {
+            default = rustPlatform.buildRustPackage (finalAttrs: {
+              pname = "bumper";
+              version = "0.11.2";
 
-          src = pkgs.lib.fileset.toSource {
-            root = ./.;
-            fileset = pkgs.lib.fileset.unions [
-              (pkgs.lib.fileset.fileFilter (file: file.hasExt "sh") ./.)
-              ./.shellcheckrc
-            ];
-          };
+              src = pkgs.lib.fileset.toSource {
+                root = ./.;
+                fileset = pkgs.lib.fileset.unions [
+                  ./Cargo.lock
+                  ./Cargo.toml
+                  ./rust-toolchain.toml
+                  ./main.rs
+                ];
+              };
 
-          nativeBuildInputs = with pkgs; [
-            makeWrapper
-            shellcheck
-          ];
+              cargoLock.lockFile = ./Cargo.lock;
 
-          runtimeInputs = with pkgs; [
-            # deps
-            ncurses
-            gnused
-            jq
-            nix-update
-          ];
+              meta = {
+                description = "Git semantic version bumper";
+                mainProgram = "bumper";
+                license = pkgs.lib.licenses.mit;
+                platforms = pkgs.lib.platforms.all;
+                homepage = "https://github.com/spotdemo4/bumper";
+                changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
+                downloadPage = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
+              };
+            });
+          }
+        );
 
-          unpackPhase = ''
-            cp -a "$src/." .
-          '';
-
-          dontBuild = true;
-
-          configurePhase = ''
-            chmod +w src
-            sed -i '1c\#!${pkgs.runtimeShell}' src/bumper.sh
-            sed -i '2c\export PATH="${pkgs.lib.makeBinPath finalAttrs.runtimeInputs}:$PATH"' src/bumper.sh
-          '';
-
-          doCheck = true;
-          checkPhase = ''
-            shellcheck src/*.sh
-          '';
-
-          installPhase = ''
-            mkdir -p $out/lib/bumper
-            cp -R src/*.sh $out/lib/bumper
-
-            mkdir -p $out/bin
-            makeWrapper "$out/lib/bumper/bumper.sh" "$out/bin/bumper"
-          '';
-
-          dontFixup = true;
-
-          meta = {
-            description = "Git semantic version bumper";
-            mainProgram = "bumper";
-            license = pkgs.lib.licenses.mit;
-            platforms = pkgs.lib.platforms.all;
-            homepage = "https://github.com/spotdemo4/bumper";
-            changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
+        images = pkgs.mkImages pkgs (pkgs: {
+          default = pkgs.mkImage self.packages.${system}.default {
+            contents = with pkgs; [ dockerTools.caCertificates ];
           };
         });
 
-        images.default = pkgs.mkImage self.packages.${system}.default {
-          contents = with pkgs; [ dockerTools.caCertificates ];
-        };
-
-        schemas = trev.schemas;
         formatter = pkgs.nixfmt-tree;
+        schemas = trev.schemas;
       }
     );
 }

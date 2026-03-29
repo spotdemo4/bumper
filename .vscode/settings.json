@@ -2,7 +2,13 @@
   "editor.formatOnSave": true,
   "files.associations": {
     "renovate.json": "jsonc",
-    ".envrc.project": "dotenv"
+    ".envrc.project": "dotenv",
+    ".envrc": "dotenv"
+  },
+
+  // rust
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
   },
 
   // nix
@@ -10,6 +16,11 @@
   "nix.serverPath": "nixd",
   "[nix]": {
     "editor.defaultFormatter": "jnoortheen.nix-ide"
+  },
+
+  // toml
+  "[toml]": {
+    "editor.defaultFormatter": "tombi-toml.tombi"
   },
 
   // json
