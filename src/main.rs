@@ -4,9 +4,6 @@ mod git_ops;
 mod model;
 mod versioning;
 
-#[cfg(test)]
-mod case_tests;
-
 use git2::Repository;
 use std::process::ExitCode;
 

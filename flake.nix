@@ -198,7 +198,7 @@
                   ./Cargo.lock
                   ./Cargo.toml
                   ./rust-toolchain.toml
-                  ./main.rs
+                  ./src
                   ./tests
                 ];
               };

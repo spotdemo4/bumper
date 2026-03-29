@@ -5,7 +5,7 @@ edition = "2024"
 
 [[bin]]
 name = "bumper"
-path = "main.rs"
+path = "src/main.rs"
 
 [dependencies]
 git2 = "0.20.4"
