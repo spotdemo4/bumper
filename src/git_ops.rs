@@ -1,7 +1,6 @@
 use git2::{Oid, Repository, StatusOptions};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::model::{AppResult, Impact};
 
@@ -211,20 +210,6 @@ pub fn staged_files(repo: &Repository) -> AppResult<Vec<PathBuf>> {
     Ok(staged)
 }
 
-pub fn run_git_command(repo_root: &Path, args: &[&str]) -> AppResult<()> {
-    let status = Command::new("git")
-        .current_dir(repo_root)
-        .args(args)
-        .status()
-        .map_err(|e| format!("failed to run git {}: {e}", args.join(" ")))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("git {} failed", args.join(" ")))
-    }
-}
-
 pub fn git_commit(repo: &Repository, message: &str) -> AppResult<()> {
     let sig = repo
         .signature()
@@ -260,13 +245,7 @@ pub fn git_tag(repo: &Repository, tag_name: &str, message: &str) -> AppResult<()
     Ok(())
 }
 
-pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
-    let mut remote = repo
-        .find_remote("origin")
-        .map_err(|e| format!("failed to find remote 'origin': {e}"))?;
-    let branch_ref = format!("refs/heads/{branch}:refs/heads/{branch}");
-    let tag_ref = format!("refs/tags/{tag}:refs/tags/{tag}");
-
+fn make_remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
     let mut callbacks = git2::RemoteCallbacks::new();
     callbacks.credentials(|url, username, allowed| {
         let user = username.unwrap_or("git");
@@ -283,7 +262,35 @@ pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
         }
         Err(git2::Error::from_str("no suitable credentials"))
     });
+    callbacks
+}
 
+pub fn git_fetch(repo: &Repository) -> AppResult<()> {
+    let remotes = repo
+        .remotes()
+        .map_err(|e| format!("failed to list remotes: {e}"))?;
+    for name in remotes.iter().flatten() {
+        let mut remote = repo
+            .find_remote(name)
+            .map_err(|e| format!("failed to find remote '{name}': {e}"))?;
+        let mut opts = git2::FetchOptions::new();
+        opts.remote_callbacks(make_remote_callbacks());
+        opts.download_tags(git2::AutotagOption::All);
+        remote
+            .fetch(&[] as &[&str], Some(&mut opts), None)
+            .map_err(|e| format!("failed to fetch from '{name}': {e}"))?;
+    }
+    Ok(())
+}
+
+pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
+    let mut remote = repo
+        .find_remote("origin")
+        .map_err(|e| format!("failed to find remote 'origin': {e}"))?;
+    let branch_ref = format!("refs/heads/{branch}:refs/heads/{branch}");
+    let tag_ref = format!("refs/tags/{tag}:refs/tags/{tag}");
+
+    let callbacks = make_remote_callbacks();
     let mut push_options = git2::PushOptions::new();
     push_options.remote_callbacks(callbacks);
     push_options.remote_push_options(&["atomic"]);

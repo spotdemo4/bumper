@@ -11,8 +11,8 @@ use std::process::ExitCode;
 
 use config::load_config;
 use git_ops::{
-    current_branch, ensure_clean_repo, get_impact, git_commit, git_push, git_tag, latest_tag,
-    list_tracked_files_under, repo_root, run_git_command, stage_path, staged_files,
+    current_branch, ensure_clean_repo, get_impact, git_commit, git_fetch, git_push, git_tag,
+    latest_tag, list_tracked_files_under, repo_root, stage_path, staged_files,
 };
 use model::AppResult;
 use versioning::next_version;
@@ -40,7 +40,7 @@ fn run() -> AppResult<()> {
         ensure_clean_repo(&repo)?;
     }
 
-    run_git_command(&repo_root, &["fetch", "--all", "--tags", "--quiet"])?;
+    git_fetch(&repo)?;
 
     let branch = current_branch(&repo)?;
     let (last_tag_name, last_tag_commit) = latest_tag(&repo)?;
