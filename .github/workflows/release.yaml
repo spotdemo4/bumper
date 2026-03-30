@@ -15,14 +15,7 @@ permissions:
 
 jobs:
   release:
-    strategy:
-      fail-fast: false
-      matrix:
-        image:
-          - ubuntu-24.04
-          - ubuntu-24.04-arm
-          - macos-26
-    runs-on: ${{ matrix.image }}
+    runs-on: ubuntu-24.04
     steps:
       - id: init
         name: Initialize
@@ -40,3 +33,12 @@ jobs:
           REGISTRY: ghcr.io
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGES: |-
+            packages.x86_64-linux.default.x86_64-linux
+            packages.x86_64-linux.default.aarch64-linux
+            packages.x86_64-linux.default.armv7l-linux
+            packages.x86_64-linux.default.armv6l-linux
+            packages.x86_64-linux.default.x86_64-windows
+            images.x86_64-linux.default.x86_64-linux
+            images.x86_64-linux.default.aarch64-linux
+            images.x86_64-linux.default.armv7l-linux

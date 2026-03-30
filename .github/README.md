@@ -3,8 +3,6 @@
 ![check](https://github.com/spotdemo4/bumper/actions/workflows/check.yaml/badge.svg?branch=main)
 ![vulnerable](https://github.com/spotdemo4/bumper/actions/workflows/vulnerable.yaml/badge.svg?branch=main)
 
-A simple shell script that:
-
 - determines the [semantic versioning](https://semver.org/) impact (major, minor or patch) of the [conventional commits](https://www.conventionalcommits.org) since the last git tag
 - increments the git tag by the impact (v0.0.1 -> PATCH -> v0.0.2)
 - applies the version bump to files given as arguments (`bumper [files...]`)
