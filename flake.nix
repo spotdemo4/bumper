@@ -15,10 +15,6 @@
   inputs = {
     systems.url = "github:nix-systems/default";
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
-    fenix = {
-      url = "github:nix-community/fenix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     trev = {
       url = "github:spotdemo4/nur";
       inputs.systems.follows = "systems";
@@ -29,26 +25,22 @@
   outputs =
     {
       self,
-      fenix,
       trev,
       ...
     }:
     trev.libs.mkFlake (
-      system: init:
-      let
-        pkgs = init.appendOverlays [ fenix.overlays.default ];
-        rustToolchain = pkgs.fenix.fromToolchainFile {
-          file = ./rust-toolchain.toml;
-          sha256 = "sha256-qqF33vNuAdU5vua96VKVIwuc43j4EFeEXbjQ6+l4mO4=";
-        };
-      in
-      {
+      system: pkgs: {
         devShells = {
           default = pkgs.mkShell {
             shellHook = pkgs.shellhook.ref;
             packages = with pkgs; [
               # rust
-              rustToolchain
+              rustc
+              cargo
+              clippy
+              rustfmt
+
+              # deps
               openssl
               pkg-config
 
@@ -94,8 +86,9 @@
         checks = pkgs.mkChecks {
           rust = {
             src = self.packages.${system}.default;
-            packages = [
-              rustToolchain
+            packages = with pkgs; [
+              rustfmt
+              clippy
             ];
             script = ''
               cargo fmt --check
@@ -170,55 +163,46 @@
           dev = "cargo run";
         };
 
-        packages = pkgs.mkPackages pkgs (
-          pkgs:
-          let
-            rustPlatform = pkgs.makeRustPlatform {
-              cargo = rustToolchain;
-              rustc = rustToolchain;
+        packages = pkgs.mkPackages pkgs (pkgs: {
+          default = pkgs.rustPlatform.buildRustPackage (finalAttrs: {
+            pname = "bumper";
+            version = "0.11.2";
+
+            src = pkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = pkgs.lib.fileset.unions [
+                ./Cargo.lock
+                ./Cargo.toml
+                ./rust-toolchain.toml
+                ./src
+                ./tests
+              ];
             };
-          in
-          {
-            default = rustPlatform.buildRustPackage (finalAttrs: {
-              pname = "bumper";
-              version = "0.11.2";
+            cargoLock.lockFile = ./Cargo.lock;
 
-              src = pkgs.lib.fileset.toSource {
-                root = ./.;
-                fileset = pkgs.lib.fileset.unions [
-                  ./Cargo.lock
-                  ./Cargo.toml
-                  ./rust-toolchain.toml
-                  ./src
-                  ./tests
-                ];
-              };
-              cargoLock.lockFile = ./Cargo.lock;
+            nativeBuildInputs = [
+              pkgs.pkg-config
+            ]
+            ++ pkgs.lib.optional (
+              !pkgs.stdenv.hostPlatform.isStatic && pkgs.stdenv.hostPlatform.isLinux
+            ) pkgs.autoPatchelfHook;
 
-              nativeBuildInputs = with pkgs; [
-                autoPatchelfHook
-                pkg-config
-              ];
+            buildInputs = with pkgs; [
+              libgcc
+              openssl
+            ];
 
-              buildInputs = with pkgs; [
-                libgcc
-                openssl
-              ];
-
-              doCheck = false;
-
-              meta = {
-                description = "Git semantic version bumper";
-                mainProgram = "bumper";
-                license = pkgs.lib.licenses.mit;
-                platforms = pkgs.lib.platforms.all;
-                homepage = "https://github.com/spotdemo4/bumper";
-                changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
-                downloadPage = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
-              };
-            });
-          }
-        );
+            meta = {
+              description = "Git semantic version bumper";
+              mainProgram = "bumper";
+              license = pkgs.lib.licenses.mit;
+              platforms = pkgs.lib.platforms.all;
+              homepage = "https://github.com/spotdemo4/bumper";
+              changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
+              downloadPage = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
+            };
+          });
+        });
 
         images = pkgs.mkImages pkgs (pkgs: {
           default = pkgs.mkImage self.packages.${system}.default {
