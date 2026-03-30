@@ -1,6 +1,7 @@
 use git2::{Oid, Repository, StatusOptions};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::model::{AppResult, Impact};
 
@@ -265,22 +266,49 @@ fn make_remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
     callbacks
 }
 
+const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+
 pub fn git_fetch(repo: &Repository) -> AppResult<()> {
-    let remotes = repo
+    let repo_path = repo_root(repo)?;
+    let remotes_array = repo
         .remotes()
         .map_err(|e| format!("failed to list remotes: {e}"))?;
-    for name in remotes.iter().flatten() {
-        let mut remote = repo
-            .find_remote(name)
-            .map_err(|e| format!("failed to find remote '{name}': {e}"))?;
-        let mut opts = git2::FetchOptions::new();
-        opts.remote_callbacks(make_remote_callbacks());
-        opts.download_tags(git2::AutotagOption::All);
-        remote
-            .fetch(&[] as &[&str], Some(&mut opts), None)
-            .map_err(|e| format!("failed to fetch from '{name}': {e}"))?;
+    let remotes: Vec<String> = remotes_array
+        .iter()
+        .flatten()
+        .map(|s: &str| s.to_string())
+        .collect();
+    for name in remotes {
+        let path = repo_path.clone();
+        let remote_name = name.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(fetch_from_remote(&path, &remote_name));
+        });
+        match rx.recv_timeout(FETCH_TIMEOUT) {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(format!(
+                    "fetch from '{name}' timed out after {FETCH_TIMEOUT:?}"
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+fn fetch_from_remote(repo_path: &Path, name: &str) -> AppResult<()> {
+    let repo =
+        git2::Repository::open(repo_path).map_err(|e| format!("failed to open repository: {e}"))?;
+    let mut remote = repo
+        .find_remote(name)
+        .map_err(|e| format!("failed to find remote '{name}': {e}"))?;
+    let mut opts = git2::FetchOptions::new();
+    opts.remote_callbacks(make_remote_callbacks());
+    opts.download_tags(git2::AutotagOption::All);
+    remote
+        .fetch(&[] as &[&str], Some(&mut opts), None)
+        .map_err(|e| format!("failed to fetch from '{name}': {e}"))
 }
 
 pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
