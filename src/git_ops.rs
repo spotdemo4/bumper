@@ -248,19 +248,28 @@ pub fn git_tag(repo: &Repository, tag_name: &str, message: &str) -> AppResult<()
 
 fn make_remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
     let mut callbacks = git2::RemoteCallbacks::new();
-    // Track which credential types have already been tried. libgit2 calls this
-    // callback again after a failure — if it offers a type we've already tried,
-    // bail immediately to avoid an infinite retry loop.
+    // SSH is retried up to twice: first via the agent, then via a key file.
+    // Other credential types are tried once each, tracked by bitmask.
+    let ssh_attempts = std::cell::Cell::new(0u8);
     let tried = std::cell::Cell::new(git2::CredentialType::empty());
     callbacks.credentials(move |url, username, allowed| {
+        let user = username.unwrap_or("git");
+        if allowed.contains(git2::CredentialType::SSH_KEY) {
+            let n = ssh_attempts.get();
+            ssh_attempts.set(n + 1);
+            if n == 0 {
+                return git2::Cred::ssh_key_from_agent(user);
+            }
+            if n == 1
+                && let Some(key_path) = find_ssh_key()
+            {
+                return git2::Cred::ssh_key(user, None, &key_path, None);
+            }
+            return Err(git2::Error::from_str("SSH authentication failed"));
+        }
         let remaining = allowed & !tried.get();
         if remaining.is_empty() {
             return Err(git2::Error::from_str("authentication failed"));
-        }
-        let user = username.unwrap_or("git");
-        if remaining.contains(git2::CredentialType::SSH_KEY) {
-            tried.set(tried.get() | git2::CredentialType::SSH_KEY);
-            return git2::Cred::ssh_key_from_agent(user);
         }
         if remaining.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
             && let Ok(config) = git2::Config::open_default()
@@ -275,6 +284,18 @@ fn make_remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
         Err(git2::Error::from_str("no suitable credentials"))
     });
     callbacks
+}
+
+fn find_ssh_key() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let ssh_dir = std::path::Path::new(&home).join(".ssh");
+    for name in &["id_ed25519", "id_ecdsa", "id_rsa"] {
+        let path = ssh_dir.join(name);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
