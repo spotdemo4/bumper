@@ -6,6 +6,11 @@
     ".envrc": "dotenv"
   },
 
+  // ai
+  "chat.tools.terminal.autoApprove": {
+    "nix flake check": true
+  },
+
   // rust
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
