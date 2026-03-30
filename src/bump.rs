@@ -1,5 +1,8 @@
+use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
+
+use regex::Regex;
 
 type AppResult<T> = Result<T, String>;
 
@@ -28,27 +31,18 @@ pub fn apply_typed_change(file: &Path, old_version: &str, new_version: &str) -> 
     }
 }
 
-/// Reads `[section].name` from a TOML manifest file using a simple line scan,
-/// avoiding any TOML parse dependency (consistent with how `replace_toml_section_key_line` works).
 fn read_toml_name(path: &Path, section: &str) -> AppResult<String> {
     let source = fs::read_to_string(path)
         .map_err(|e| format!("failed to read '{}': {e}", path.display()))?;
-    let section_header = format!("[{section}]");
-    let mut in_section = false;
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_section = trimmed == section_header;
-            continue;
-        }
-        if in_section
-            && let Some(rest) = trimmed.strip_prefix("name = \"")
-            && let Some(name) = rest.strip_suffix('"')
-        {
-            return Ok(name.to_owned());
-        }
-    }
-    Err(format!("no [{section}].name in '{}'", path.display()))
+    let re = Regex::new(&format!(
+        "(?m)^\\[{}\\][^\\[]*?name = \"([^\"]*)\"",
+        regex::escape(section)
+    ))
+    .unwrap();
+    re.captures(&source)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_owned())
+        .ok_or_else(|| format!("no [{section}].name in '{}'", path.display()))
 }
 
 /// Updates `version` only inside the `[[package]]` block whose `name` matches `package_name`.
@@ -108,6 +102,19 @@ fn bump_package_in_lock(
     Ok(true)
 }
 
+fn regex_replace_file(file: &Path, re: &Regex, replacement: &str) -> AppResult<bool> {
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    match re.replace(&source, replacement) {
+        Cow::Borrowed(_) => Ok(false),
+        Cow::Owned(replaced) => {
+            fs::write(file, replaced)
+                .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            Ok(true)
+        }
+    }
+}
+
 fn replace_literal(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
@@ -121,65 +128,13 @@ fn replace_literal(file: &Path, old_version: &str, new_version: &str) -> AppResu
 }
 
 fn replace_line_value(file: &Path, key: &str, new_version: &str) -> AppResult<bool> {
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let mut changed = false;
-    let mut output = Vec::new();
-
-    for line in source.lines() {
-        if line.trim_start().starts_with(&format!("{key} = \"")) {
-            let indent = line
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>();
-            output.push(format!("{indent}{key} = \"{new_version}\","));
-            changed = true;
-        } else {
-            output.push(line.to_string());
-        }
-    }
-
-    if !changed {
-        return Ok(false);
-    }
-
-    let mut written = output.join("\n");
-    if source.ends_with('\n') {
-        written.push('\n');
-    }
-
-    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
+    let re = Regex::new(&format!(r#"(?m)^(\s*){} = "[^"]*".*$"#, regex::escape(key))).unwrap();
+    regex_replace_file(file, &re, &format!(r#"${{1}}{key} = "{new_version}","#))
 }
 
 fn bump_package_json(file: &Path, new_version: &str) -> AppResult<bool> {
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let mut changed = false;
-    let mut output = Vec::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("\"version\"") {
-            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-            let suffix = if trimmed.ends_with(',') { "," } else { "" };
-            output.push(format!("{indent}\"version\": \"{new_version}\"{suffix}"));
-            changed = true;
-        } else {
-            output.push(line.to_string());
-        }
-    }
-
-    if !changed {
-        return Ok(false);
-    }
-
-    let mut written = output.join("\n");
-    if source.ends_with('\n') {
-        written.push('\n');
-    }
-    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
+    let re = Regex::new(r#"(?m)^(\s*)"version":\s*"[^"]*"(,?)$"#).unwrap();
+    regex_replace_file(file, &re, &format!(r#"${{1}}"version": "{new_version}"$2"#))
 }
 
 fn bump_package_lock_json(file: &Path, new_version: &str) -> AppResult<bool> {
@@ -262,8 +217,8 @@ fn bump_package_lock_json(file: &Path, new_version: &str) -> AppResult<bool> {
 fn bump_toml_path(file: &Path, path: &[&str], new_version: &str) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let mut parsed = match source.parse::<toml::Value>() {
-        Ok(parsed) => parsed,
+    let mut doc: toml_edit::DocumentMut = match source.parse() {
+        Ok(doc) => doc,
         Err(_) => {
             if path.len() == 2 {
                 return replace_toml_section_key_line(file, &source, path[0], path[1], new_version);
@@ -272,16 +227,16 @@ fn bump_toml_path(file: &Path, path: &[&str], new_version: &str) -> AppResult<bo
         }
     };
 
-    let mut target = &mut parsed;
+    let mut item = doc.as_item_mut();
     for key in path.iter().take(path.len() - 1) {
-        let Some(next) = target.get_mut(*key) else {
+        let Some(next) = item.get_mut(*key) else {
             return Ok(false);
         };
-        target = next;
+        item = next;
     }
 
     let leaf = path[path.len() - 1];
-    let Some(value) = target.get_mut(leaf) else {
+    let Some(value) = item.get_mut(leaf) else {
         return Ok(false);
     };
 
@@ -289,8 +244,8 @@ fn bump_toml_path(file: &Path, path: &[&str], new_version: &str) -> AppResult<bo
         return Ok(false);
     }
 
-    *value = toml::Value::String(new_version.to_string());
-    fs::write(file, parsed.to_string())
+    *value = toml_edit::value(new_version);
+    fs::write(file, doc.to_string())
         .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
     Ok(true)
 }
@@ -302,40 +257,19 @@ fn replace_toml_section_key_line(
     key: &str,
     new_version: &str,
 ) -> AppResult<bool> {
-    let mut in_section = false;
-    let mut changed = false;
-    let mut output = Vec::new();
-
-    for line in source.lines() {
-        let trimmed = line.trim();
-
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_section = &trimmed[1..trimmed.len() - 1] == section;
-            output.push(line.to_string());
-            continue;
-        }
-
-        if in_section && trimmed.starts_with(&format!("{key} = \"")) {
-            let indent = line
-                .chars()
-                .take_while(|c| c.is_whitespace())
-                .collect::<String>();
-            output.push(format!("{indent}{key} = \"{new_version}\""));
-            changed = true;
-        } else {
-            output.push(line.to_string());
+    let re = Regex::new(&format!(
+        r#"(?m)(^\[{}\][^\[]*?){} = "[^"]*""#,
+        regex::escape(section),
+        regex::escape(key)
+    ))
+    .unwrap();
+    let replacement = format!(r#"${{1}}{key} = "{new_version}""#);
+    match re.replace(source, replacement.as_str()) {
+        Cow::Borrowed(_) => Ok(false),
+        Cow::Owned(replaced) => {
+            fs::write(file, replaced)
+                .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            Ok(true)
         }
     }
-
-    if !changed {
-        return Ok(false);
-    }
-
-    let mut written = output.join("\n");
-    if source.ends_with('\n') {
-        written.push('\n');
-    }
-
-    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
 }
