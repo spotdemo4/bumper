@@ -173,7 +173,6 @@
               fileset = pkgs.lib.fileset.unions [
                 ./Cargo.lock
                 ./Cargo.toml
-                ./rust-toolchain.toml
                 ./src
                 ./tests
               ];
