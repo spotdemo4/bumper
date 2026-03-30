@@ -10,6 +10,17 @@ permissions:
   id-token: write
 
 jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: spotdemo4/nix-init@a1102545049d8b87856d304cd8a6f88796c9a102 # v1.40.0
+        with:
+          shell: vulnerable
+
+      - name: Run cargo audit
+        run: cargo-audit audit
+
   nix:
     runs-on: ubuntu-latest
     steps:
