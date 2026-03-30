@@ -248,25 +248,28 @@ pub fn git_tag(repo: &Repository, tag_name: &str, message: &str) -> AppResult<()
 
 fn make_remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
     let mut callbacks = git2::RemoteCallbacks::new();
-    // `tried` guards against libgit2's credential-retry loop: if auth fails,
-    // libgit2 calls this callback again with the same credential types. Without
-    // the guard the callback loops indefinitely, appearing to hang.
-    let tried = std::cell::Cell::new(false);
+    // Track which credential types have already been tried. libgit2 calls this
+    // callback again after a failure — if it offers a type we've already tried,
+    // bail immediately to avoid an infinite retry loop.
+    let tried = std::cell::Cell::new(git2::CredentialType::empty());
     callbacks.credentials(move |url, username, allowed| {
-        if tried.get() {
+        let remaining = allowed & !tried.get();
+        if remaining.is_empty() {
             return Err(git2::Error::from_str("authentication failed"));
         }
-        tried.set(true);
         let user = username.unwrap_or("git");
-        if allowed.contains(git2::CredentialType::SSH_KEY) {
+        if remaining.contains(git2::CredentialType::SSH_KEY) {
+            tried.set(tried.get() | git2::CredentialType::SSH_KEY);
             return git2::Cred::ssh_key_from_agent(user);
         }
-        if allowed.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
+        if remaining.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
             && let Ok(config) = git2::Config::open_default()
         {
+            tried.set(tried.get() | git2::CredentialType::USER_PASS_PLAINTEXT);
             return git2::Cred::credential_helper(&config, url, username);
         }
-        if allowed.contains(git2::CredentialType::DEFAULT) {
+        if remaining.contains(git2::CredentialType::DEFAULT) {
+            tried.set(tried.get() | git2::CredentialType::DEFAULT);
             return git2::Cred::default();
         }
         Err(git2::Error::from_str("no suitable credentials"))
