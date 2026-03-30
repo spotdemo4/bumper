@@ -155,44 +155,107 @@ fn replace_line_value(file: &Path, key: &str, new_version: &str) -> AppResult<bo
 fn bump_package_json(file: &Path, new_version: &str) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let mut parsed = json::parse(&source)
-        .map_err(|e| format!("failed to parse JSON '{}': {e}", file.display()))?;
-
-    if parsed["version"].as_str() == Some(new_version) {
-        return Ok(false);
-    }
-
-    parsed["version"] = json::JsonValue::String(new_version.to_string());
-    fs::write(file, parsed.pretty(2))
-        .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
-}
-
-fn bump_package_lock_json(file: &Path, new_version: &str) -> AppResult<bool> {
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let mut parsed = json::parse(&source)
-        .map_err(|e| format!("failed to parse JSON '{}': {e}", file.display()))?;
-
     let mut changed = false;
-    if parsed["version"].as_str() != Some(new_version) {
-        parsed["version"] = json::JsonValue::String(new_version.to_string());
-        changed = true;
-    }
+    let mut output = Vec::new();
 
-    if parsed["packages"][""].is_object()
-        && parsed["packages"][""]["version"].as_str() != Some(new_version)
-    {
-        parsed["packages"][""]["version"] = json::JsonValue::String(new_version.to_string());
-        changed = true;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("\"version\"") {
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            let suffix = if trimmed.ends_with(',') { "," } else { "" };
+            output.push(format!("{indent}\"version\": \"{new_version}\"{suffix}"));
+            changed = true;
+        } else {
+            output.push(line.to_string());
+        }
     }
 
     if !changed {
         return Ok(false);
     }
 
-    fs::write(file, parsed.pretty(2))
-        .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    let mut written = output.join("\n");
+    if source.ends_with('\n') {
+        written.push('\n');
+    }
+    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    Ok(true)
+}
+
+fn bump_package_lock_json(file: &Path, new_version: &str) -> AppResult<bool> {
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+
+    // package-lock.json has two version fields to update:
+    // 1. The top-level "version" (appears before "packages")
+    // 2. The "version" inside packages[""] (the root package entry)
+    //
+    // A state machine ensures only those two occurrences are touched,
+    // leaving dependency versions under other package entries untouched.
+    #[derive(PartialEq)]
+    enum State {
+        Root,
+        InPackages,
+        InRootPkg,
+        Done,
+    }
+
+    let mut state = State::Root;
+    let mut root_brace_depth: u32 = 0;
+    let mut changed = false;
+    let mut output = Vec::new();
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+
+        let replace_this_version = match state {
+            State::Root if trimmed.starts_with("\"version\"") => true,
+            State::Root => {
+                if trimmed.starts_with("\"packages\"") {
+                    state = State::InPackages;
+                }
+                false
+            }
+            State::InPackages => {
+                if trimmed == "\"\":" || trimmed == "\"\": {" {
+                    state = State::InRootPkg;
+                    root_brace_depth = if trimmed.ends_with('{') { 1 } else { 0 };
+                }
+                false
+            }
+            State::InRootPkg => {
+                root_brace_depth += trimmed.chars().filter(|&c| c == '{').count() as u32;
+                root_brace_depth = root_brace_depth
+                    .saturating_sub(trimmed.chars().filter(|&c| c == '}').count() as u32);
+                if root_brace_depth == 0 {
+                    state = State::Done;
+                    false
+                } else {
+                    trimmed.starts_with("\"version\"")
+                }
+            }
+            State::Done => false,
+        };
+
+        if replace_this_version {
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            let suffix = if trimmed.ends_with(',') { "," } else { "" };
+            output.push(format!("{indent}\"version\": \"{new_version}\"{suffix}"));
+            changed = true;
+        } else {
+            output.push(line.to_string());
+        }
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+
+    let mut written = output.join("\n");
+    if source.ends_with('\n') {
+        written.push('\n');
+    }
+    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
     Ok(true)
 }
 
