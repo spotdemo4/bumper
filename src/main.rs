@@ -40,11 +40,17 @@ fn run() -> AppResult<()> {
         ensure_clean_repo(&repo)?;
     }
 
+    println!("fetching latest tags from remote...");
     git_fetch(&repo)?;
 
+    println!("determining next version...");
     let branch = current_branch(&repo)?;
+
     let (last_tag_name, last_tag_commit) = latest_tag(&repo)?;
+    println!("last tag: {last_tag_name} (commit {last_tag_commit})");
+
     let last_version = last_tag_name.trim_start_matches('v').to_string();
+    println!("last version: v{last_version}");
 
     let impact = get_impact(
         &repo,
@@ -55,13 +61,12 @@ fn run() -> AppResult<()> {
         &config.skip_scopes,
         config.force,
     )?;
-
     let Some(impact) = impact else {
         println!("no new impactful commits since last tag (v{last_version})");
         return Ok(());
     };
-
     println!("impact: {}", impact.as_str());
+
     let next_version = next_version(&last_version, impact)?;
     println!("v{last_version} -> v{next_version}");
 
