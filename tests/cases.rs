@@ -37,36 +37,36 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 fn node_case_updates_package_files() {
     let dir = copy_fixture("node");
 
-    apply_typed_change(&dir.join("package.json"), "0.11.0", "0.12.0").expect("bump package.json");
-    apply_typed_change(&dir.join("package-lock.json"), "0.11.0", "0.12.0")
+    apply_typed_change(&dir.join("package.json"), "0.13.0", "0.14.0").expect("bump package.json");
+    apply_typed_change(&dir.join("package-lock.json"), "0.13.0", "0.14.0")
         .expect("bump package-lock.json");
 
     let package_json = fs::read_to_string(dir.join("package.json")).expect("read package.json");
     let package_lock =
         fs::read_to_string(dir.join("package-lock.json")).expect("read package-lock.json");
 
-    assert!(package_json.contains("\"version\": \"0.12.0\""));
-    assert!(package_lock.contains("\"version\": \"0.12.0\""));
+    assert!(package_json.contains("\"version\": \"0.14.0\""));
+    assert!(package_lock.contains("\"version\": \"0.14.0\""));
 }
 
 #[test]
 fn python_case_updates_project_files() {
     let dir = copy_fixture("python");
 
-    apply_typed_change(&dir.join("pyproject.toml"), "0.11.0", "0.12.0")
+    apply_typed_change(&dir.join("pyproject.toml"), "0.13.0", "0.14.0")
         .expect("bump pyproject.toml");
-    apply_typed_change(&dir.join("uv.lock"), "0.11.0", "0.12.0").expect("bump uv.lock");
+    apply_typed_change(&dir.join("uv.lock"), "0.13.0", "0.14.0").expect("bump uv.lock");
 
     let pyproject = fs::read_to_string(dir.join("pyproject.toml")).expect("read pyproject.toml");
     let uv_lock = fs::read_to_string(dir.join("uv.lock")).expect("read uv.lock");
 
-    assert!(pyproject.contains("version = \"0.12.0\""));
+    assert!(pyproject.contains("version = \"0.14.0\""));
     assert!(
-        uv_lock.contains("version = \"0.12.0\""),
+        uv_lock.contains("version = \"0.14.0\""),
         "test package should be bumped"
     );
     assert!(
-        uv_lock.contains("version = \"0.11.0\""),
+        uv_lock.contains("version = \"0.13.0\""),
         "dep with same old version should not be changed"
     );
 }
@@ -75,19 +75,19 @@ fn python_case_updates_project_files() {
 fn rust_case_updates_cargo_files() {
     let dir = copy_fixture("rust");
 
-    apply_typed_change(&dir.join("Cargo.toml"), "0.11.0", "0.12.0").expect("bump Cargo.toml");
-    apply_typed_change(&dir.join("Cargo.lock"), "0.11.0", "0.12.0").expect("bump Cargo.lock");
+    apply_typed_change(&dir.join("Cargo.toml"), "0.13.0", "0.14.0").expect("bump Cargo.toml");
+    apply_typed_change(&dir.join("Cargo.lock"), "0.13.0", "0.14.0").expect("bump Cargo.lock");
 
     let cargo_toml = fs::read_to_string(dir.join("Cargo.toml")).expect("read Cargo.toml");
     let cargo_lock = fs::read_to_string(dir.join("Cargo.lock")).expect("read Cargo.lock");
 
-    assert!(cargo_toml.contains("version = \"0.12.0\""));
+    assert!(cargo_toml.contains("version = \"0.14.0\""));
     assert!(
-        cargo_lock.contains("version = \"0.12.0\""),
+        cargo_lock.contains("version = \"0.14.0\""),
         "test package should be bumped"
     );
     assert!(
-        cargo_lock.contains("version = \"0.11.0\""),
+        cargo_lock.contains("version = \"0.13.0\""),
         "dep with same old version should not be changed"
     );
 }
@@ -96,18 +96,18 @@ fn rust_case_updates_cargo_files() {
 fn zig_case_updates_zon_file() {
     let dir = copy_fixture("zig");
 
-    apply_typed_change(&dir.join("build.zig.zon"), "0.10.4", "0.11.0").expect("bump build.zig.zon");
+    apply_typed_change(&dir.join("build.zig.zon"), "0.13.0", "0.14.0").expect("bump build.zig.zon");
 
     let zon = fs::read_to_string(dir.join("build.zig.zon")).expect("read build.zig.zon");
-    assert!(zon.contains(".version = \"0.11.0\","));
+    assert!(zon.contains(".version = \"0.14.0\","));
 }
 
 #[test]
 fn nix_case_updates_flake_files() {
     let dir = copy_fixture("nix");
 
-    apply_typed_change(&dir.join("flake.nix"), "0.11.2", "0.12.0").expect("bump flake.nix");
+    apply_typed_change(&dir.join("flake.nix"), "0.13.0", "0.14.0").expect("bump flake.nix");
 
     let flake_nix = fs::read_to_string(dir.join("flake.nix")).expect("read flake.nix");
-    assert!(flake_nix.contains("version = \"0.12.0\""));
+    assert!(flake_nix.contains("version = \"0.14.0\""));
 }

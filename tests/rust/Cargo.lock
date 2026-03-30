@@ -4,10 +4,10 @@ version = 4
 
 [[package]]
 name = "dep"
-version = "0.11.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abc123"
 
 [[package]]
 name = "test"
-version = "0.11.0"
+version = "0.13.0"

@@ -38,5 +38,8 @@ jobs:
         env:
           FORCE: ${{ inputs.force }}
           PATHS: |-
+            Cargo.toml
+            Cargo.lock
+            flake.nix
             action.yaml
             .github/README.md
