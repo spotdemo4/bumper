@@ -37,7 +37,6 @@
               # rust
               rustc
               cargo
-              clippy
               rustfmt
 
               # deps
@@ -45,8 +44,13 @@
               pkg-config
 
               # formatters
+              treefmt
+              rustfmt
               nixfmt
               prettier
+
+              # linters
+              clippy
               tombi
 
               # util

@@ -8,7 +8,8 @@
 
   // ai
   "chat.tools.terminal.autoApprove": {
-    "nix flake check": true
+    "nix flake check": true,
+    "treefmt": true
   },
 
   // rust

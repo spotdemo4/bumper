@@ -1,0 +1,13 @@
+[formatter.nix]
+command = "nixfmt"
+includes = ["*.nix"]
+
+[formatter.rust]
+command = "rustfmt"
+options = ["--edition", "2024"]
+includes = ["*.rs"]
+
+[formatter.prettier]
+command = "prettier"
+options = ["--write"]
+includes = ["*.yaml", "*.json", "*.md"]
