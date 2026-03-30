@@ -248,7 +248,15 @@ pub fn git_tag(repo: &Repository, tag_name: &str, message: &str) -> AppResult<()
 
 fn make_remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
     let mut callbacks = git2::RemoteCallbacks::new();
-    callbacks.credentials(|url, username, allowed| {
+    // `tried` guards against libgit2's credential-retry loop: if auth fails,
+    // libgit2 calls this callback again with the same credential types. Without
+    // the guard the callback loops indefinitely, appearing to hang.
+    let tried = std::cell::Cell::new(false);
+    callbacks.credentials(move |url, username, allowed| {
+        if tried.get() {
+            return Err(git2::Error::from_str("authentication failed"));
+        }
+        tried.set(true);
         let user = username.unwrap_or("git");
         if allowed.contains(git2::CredentialType::SSH_KEY) {
             return git2::Cred::ssh_key_from_agent(user);
