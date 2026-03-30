@@ -61,7 +61,14 @@ fn python_case_updates_project_files() {
     let uv_lock = fs::read_to_string(dir.join("uv.lock")).expect("read uv.lock");
 
     assert!(pyproject.contains("version = \"0.12.0\""));
-    assert!(uv_lock.contains("version = \"0.12.0\""));
+    assert!(
+        uv_lock.contains("version = \"0.12.0\""),
+        "test package should be bumped"
+    );
+    assert!(
+        uv_lock.contains("version = \"0.11.0\""),
+        "dep with same old version should not be changed"
+    );
 }
 
 #[test]
@@ -75,7 +82,14 @@ fn rust_case_updates_cargo_files() {
     let cargo_lock = fs::read_to_string(dir.join("Cargo.lock")).expect("read Cargo.lock");
 
     assert!(cargo_toml.contains("version = \"0.12.0\""));
-    assert!(cargo_lock.contains("version = \"0.12.0\""));
+    assert!(
+        cargo_lock.contains("version = \"0.12.0\""),
+        "test package should be bumped"
+    );
+    assert!(
+        cargo_lock.contains("version = \"0.11.0\""),
+        "dep with same old version should not be changed"
+    );
 }
 
 #[test]
