@@ -166,7 +166,7 @@
         packages = pkgs.mkPackages pkgs (pkgs: {
           default = pkgs.rustPlatform.buildRustPackage (finalAttrs: {
             pname = "bumper";
-            version = "0.11.2";
+            version = "0.12.0";
 
             src = pkgs.lib.fileset.toSource {
               root = ./.;
