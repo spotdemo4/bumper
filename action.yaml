@@ -46,7 +46,7 @@ inputs:
 
 runs:
   using: docker
-  image: docker://ghcr.io/spotdemo4/bumper:0.14.2
+  image: docker://ghcr.io/spotdemo4/bumper:0.14.3
   env:
     GITHUB_TOKEN: ${{ github.token }}
     PATHS: ${{ inputs.files }}
