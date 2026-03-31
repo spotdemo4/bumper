@@ -11,4 +11,4 @@ path = "src/main.rs"
 clap = { version = "4", features = ["derive"] }
 git2 = "0.20.4"
 regex = "1"
-toml_edit = "0.22"
+toml_edit = "0.25"
