@@ -32,8 +32,10 @@ fn run() -> AppResult<()> {
     let repo = Repository::discover(".").map_err(|e| format!("not a git repository: {e}"))?;
     let repo_root = repo_root(&repo)?;
 
-    if config.paths.is_empty() || config.ci {
+    if config.paths.is_empty() {
         config.paths = vec![repo_root.clone()];
+    } else if config.ci {
+        config.paths.push(repo_root.clone());
     }
 
     if !config.allow_dirty {
