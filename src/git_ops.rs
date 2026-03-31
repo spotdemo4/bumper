@@ -271,11 +271,16 @@ fn make_remote_callbacks<'a>() -> git2::RemoteCallbacks<'a> {
         if remaining.is_empty() {
             return Err(git2::Error::from_str("authentication failed"));
         }
-        if remaining.contains(git2::CredentialType::USER_PASS_PLAINTEXT)
-            && let Ok(config) = git2::Config::open_default()
-        {
+        if remaining.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
             tried.set(tried.get() | git2::CredentialType::USER_PASS_PLAINTEXT);
-            return git2::Cred::credential_helper(&config, url, username);
+            // GITHUB_TOKEN is the standard credential in CI (set by actions/checkout
+            // via http.extraheader, which libgit2 does not read natively).
+            if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+                return git2::Cred::userpass_plaintext("x-access-token", &token);
+            }
+            if let Ok(config) = git2::Config::open_default() {
+                return git2::Cred::credential_helper(&config, url, username);
+            }
         }
         if remaining.contains(git2::CredentialType::DEFAULT) {
             tried.set(tried.get() | git2::CredentialType::DEFAULT);
