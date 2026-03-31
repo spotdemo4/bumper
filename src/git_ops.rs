@@ -154,7 +154,7 @@ pub fn list_tracked_files_under(
             continue;
         };
         let relative = Path::new(path);
-        if relative.starts_with(dir_relative) {
+        if relative.parent() == Some(dir_relative) {
             files.push(repo_root.join(relative));
         }
     }
