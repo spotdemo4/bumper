@@ -170,7 +170,7 @@
         packages = pkgs.mkPackages pkgs (pkgs: {
           default = pkgs.rustPlatform.buildRustPackage (finalAttrs: {
             pname = "bumper";
-            version = "0.14.1";
+            version = "0.14.2";
 
             src = pkgs.lib.fileset.toSource {
               root = ./.;
