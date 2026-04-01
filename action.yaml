@@ -39,6 +39,9 @@ inputs:
   allow_dirty:
     description: allow a dirty working directory
     required: false
+  github_token:
+    description: GitHub token with permissions to fetch, push and tag
+    default: ${{ github.token }}
   debug:
     description: enable debug logging
     required: false
@@ -48,7 +51,6 @@ runs:
   using: docker
   image: docker://ghcr.io/spotdemo4/bumper:0.14.3
   env:
-    GITHUB_TOKEN: ${{ github.token }}
     PATHS: ${{ inputs.files }}
     MAJOR_TYPES: ${{ inputs.major_types }}
     MINOR_TYPES: ${{ inputs.minor_types }}
@@ -59,4 +61,5 @@ runs:
     PUSH: ${{ inputs.push }}
     FORCE: ${{ inputs.force }}
     ALLOW_DIRTY: ${{ inputs.allow_dirty }}
+    GITHUB_TOKEN: ${{ inputs.github_token }}
     DEBUG: ${{ inputs.debug }}
