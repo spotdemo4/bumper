@@ -29,7 +29,18 @@ fn main() -> ExitCode {
 
 fn run() -> AppResult<()> {
     let mut config = load_config();
-    let repo = Repository::discover(".").map_err(|e| format!("not a git repository: {e}"))?;
+    let repo = Repository::discover(".")
+        .or_else(|e| {
+            // In Docker with bind-mounted repos the directory may be owned by a different
+            // user. Retry with owner validation disabled only when that is the actual cause.
+            if e.class() == git2::ErrorClass::Config && e.code() == git2::ErrorCode::Owner {
+                unsafe { git2::opts::set_verify_owner_validation(false) }.map_err(|_| e)?;
+                Repository::discover(".")
+            } else {
+                Err(e)
+            }
+        })
+        .map_err(|e| format!("not a git repository: {e}"))?;
     let repo_root = repo_root(&repo)?;
 
     if config.paths.is_empty() {

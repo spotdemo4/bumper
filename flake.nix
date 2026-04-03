@@ -33,6 +33,7 @@
         devShells = {
           default = pkgs.mkShell {
             shellHook = pkgs.shellhook.ref;
+            RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
             packages = with pkgs; [
               # rust
               rustc
@@ -43,15 +44,15 @@
               openssl
               pkg-config
 
+              # linters
+              clippy
+              tombi
+
               # formatters
               treefmt
               rustfmt
               nixfmt
               prettier
-
-              # linters
-              clippy
-              tombi
 
               # util
               bumper
