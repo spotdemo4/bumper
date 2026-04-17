@@ -92,7 +92,6 @@ pub fn load_config() -> Config {
         push,
         force: cli.force || parse_bool_env("FORCE", false),
         allow_dirty: cli.allow_dirty || parse_bool_env("ALLOW_DIRTY", false),
-        ci: env::var("CI").is_ok(),
     }
 }
 

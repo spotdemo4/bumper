@@ -45,7 +45,7 @@ fn run() -> AppResult<()> {
 
     if config.paths.is_empty() {
         config.paths = vec![repo_root.clone()];
-    } else if config.ci {
+    } else {
         config.paths.push(repo_root.clone());
     }
 

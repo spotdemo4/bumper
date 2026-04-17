@@ -15,7 +15,6 @@ pub struct Config {
     pub push: bool,
     pub force: bool,
     pub allow_dirty: bool,
-    pub ci: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
