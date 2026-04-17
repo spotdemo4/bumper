@@ -38,7 +38,6 @@
               # rust
               rustc
               cargo
-              rustfmt
 
               # deps
               openssl
@@ -49,14 +48,12 @@
               tombi
 
               # formatters
-              treefmt
               rustfmt
               nixfmt
               prettier
 
               # util
               bumper
-              flake-release
             ];
           };
 
@@ -115,7 +112,7 @@
 
           renovate = {
             root = ./.github;
-            fileset = ./.github/renovate.json;
+            files = ./.github/renovate.json;
             packages = with pkgs; [
               renovate
             ];
@@ -126,10 +123,11 @@
 
           actions = {
             root = ./.;
-            fileset = pkgs.lib.fileset.unions [
+            files = [
               ./action.yaml
               ./.github/workflows
             ];
+            filter = file: file.hasExt "yaml";
             packages = with pkgs; [
               action-validator
               octoscan
@@ -162,6 +160,16 @@
               prettier --check "$file"
             '';
           };
+        };
+
+        formatter = pkgs.treefmt.withConfig {
+          configFile = ./treefmt.toml;
+          runtimeInputs = with pkgs; [
+            rustfmt
+            nixfmt
+            tombi
+            prettier
+          ];
         };
 
         apps = pkgs.mkApps {
@@ -213,7 +221,6 @@
           contents = with pkgs; [ dockerTools.caCertificates ];
         };
 
-        formatter = pkgs.nixfmt-tree;
         schemas = trev.schemas;
       }
     );
