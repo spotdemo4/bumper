@@ -168,14 +168,14 @@
           dev = "cargo run";
         };
 
-        packages = pkgs.mkPackages pkgs (pkgs: {
-          default = pkgs.rustPlatform.buildRustPackage (finalAttrs: {
+        packages.default = pkgs.rustPlatform.buildRustPackage (
+          final: with pkgs.lib; {
             pname = "bumper";
             version = "0.14.6";
 
-            src = pkgs.lib.fileset.toSource {
+            src = fileset.toSource {
               root = ./.;
-              fileset = pkgs.lib.fileset.unions [
+              fileset = fileset.unions [
                 ./Cargo.lock
                 ./Cargo.toml
                 ./src
@@ -187,7 +187,7 @@
             nativeBuildInputs = [
               pkgs.pkg-config
             ]
-            ++ pkgs.lib.optional (
+            ++ optional (
               !pkgs.stdenv.hostPlatform.isStatic && pkgs.stdenv.hostPlatform.isLinux
             ) pkgs.autoPatchelfHook;
 
@@ -199,23 +199,22 @@
             meta = {
               description = "Git semantic version bumper";
               mainProgram = "bumper";
-              license = pkgs.lib.licenses.mit;
-              platforms = pkgs.lib.platforms.all;
+              license = licenses.mit;
+              platforms = platforms.all;
               homepage = "https://github.com/spotdemo4/bumper";
-              changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
-              downloadPage = "https://github.com/spotdemo4/bumper/releases/tag/v${finalAttrs.version}";
+              changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${final.version}";
+              downloadPage = "https://github.com/spotdemo4/bumper/releases/tag/v${final.version}";
             };
-          });
-        });
+          }
+        );
 
-        images = pkgs.mkImages pkgs (pkgs: {
-          default = pkgs.mkImage self.packages.${system}.default {
-            contents = with pkgs; [ dockerTools.caCertificates ];
-          };
-        });
+        images.default = pkgs.mkImage {
+          src = self.packages.${system}.default;
+          contents = with pkgs; [ dockerTools.caCertificates ];
+        };
 
-        schemas = trev.schemas;
         formatter = pkgs.nixfmt-tree;
+        schemas = trev.schemas;
       }
     );
 }
