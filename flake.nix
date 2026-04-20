@@ -54,6 +54,7 @@
 
               # util
               bumper
+              flake-release
             ];
           };
 
@@ -83,6 +84,10 @@
               octoscan # actions
             ];
           };
+        };
+
+        apps = pkgs.mkApps {
+          default = "cargo run";
         };
 
         checks = pkgs.mkChecks {
@@ -172,10 +177,6 @@
           ];
         };
 
-        apps = pkgs.mkApps {
-          dev = "cargo run";
-        };
-
         packages.default = pkgs.rustPlatform.buildRustPackage (
           final: with pkgs.lib; {
             pname = "bumper";
@@ -205,8 +206,8 @@
             ];
 
             meta = {
-              description = "Git semantic version bumper";
               mainProgram = "bumper";
+              description = "Git semantic version bumper";
               license = licenses.mit;
               platforms = platforms.all;
               homepage = "https://github.com/spotdemo4/bumper";

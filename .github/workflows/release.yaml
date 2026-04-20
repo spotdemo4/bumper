@@ -27,9 +27,6 @@ jobs:
         run: flake-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REGISTRY: ghcr.io
-          REGISTRY_USERNAME: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           PACKAGES: |
             images.x86_64-linux.default.aarch64-unknown-linux-musl
             images.x86_64-linux.default.armv7l-unknown-linux-musleabihf
@@ -57,9 +54,6 @@ jobs:
         run: flake-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REGISTRY: ghcr.io
-          REGISTRY_USERNAME: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           PACKAGES: |
             packages.aarch64-darwin.default.arm64-apple-darwin
             packages.aarch64-darwin.default.x86_64-apple-darwin
