@@ -30,10 +30,12 @@
     }:
     trev.libs.mkFlake (
       system: pkgs: {
+
+        # nix develop [#...]
         devShells = {
           default = pkgs.mkShell {
+            RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
             shellHook = pkgs.shellhook.ref;
-            RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
             packages = with pkgs; [
               # rust
               rustc
@@ -43,18 +45,20 @@
               openssl
               pkg-config
 
-              # linters
+              # lint
+              nixd
               clippy
+              cargo-audit
               tombi
 
-              # formatters
-              rustfmt
-              nixfmt
+              # format
+              treefmt
               prettier
+              nixfmt
+              rustfmt
 
               # util
               bumper
-              flake-release
             ];
           };
 
@@ -79,28 +83,91 @@
 
           vulnerable = pkgs.mkShell {
             packages = with pkgs; [
+              flake-checker # nix
+              zizmor # actions
               cargo-audit # rust
-              flake-checker # flake
-              octoscan # actions
             ];
           };
         };
 
+        # nix run [#...]
         apps = pkgs.mkApps {
           default = "cargo run";
+          test = "cargo test";
         };
 
-        checks = pkgs.mkChecks {
-          rust = {
+        # nix build [#...]
+        packages = {
+          default = pkgs.rustPlatform.buildRustPackage (
+            final: with pkgs.lib; {
+              pname = "bumper";
+              version = "0.15.1";
+
+              src = fileset.toSource {
+                root = ./.;
+                fileset = fileset.unions [
+                  ./Cargo.lock
+                  ./Cargo.toml
+                  ./src
+                  ./tests
+                ];
+              };
+              cargoLock.lockFile = ./Cargo.lock;
+
+              nativeBuildInputs =
+                with pkgs;
+                [
+                  pkg-config
+                ]
+                ++ optional (!stdenv.hostPlatform.isStatic && stdenv.hostPlatform.isLinux) autoPatchelfHook;
+
+              buildInputs = with pkgs; [
+                libgcc
+                openssl
+              ];
+
+              meta = {
+                mainProgram = "bumper";
+                description = "Git semantic version bumper";
+                license = licenses.mit;
+                platforms = platforms.all;
+                homepage = "https://github.com/spotdemo4/bumper";
+                changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${final.version}";
+                downloadPage = "https://github.com/spotdemo4/bumper/releases/tag/v${final.version}";
+              };
+            }
+          );
+        };
+
+        # nix build #images.[...]
+        images = {
+          default = pkgs.mkImage {
             src = self.packages.${system}.default;
+            contents = with pkgs; [ dockerTools.caCertificates ];
+          };
+        };
+
+        # nix fmt
+        formatter = pkgs.treefmt.withConfig {
+          configFile = ./treefmt.toml;
+          runtimeInputs = with pkgs; [
+            prettier
+            nixfmt
+            rustfmt
+            tombi
+          ];
+        };
+
+        # nix flake check
+        checks = pkgs.mkChecks {
+          prettier = {
+            root = ./.;
+            filter = file: file.hasExt "yaml" || file.hasExt "json" || file.hasExt "md";
             packages = with pkgs; [
-              rustfmt
-              clippy
+              prettier
             ];
-            script = ''
-              cargo fmt --check
-              cargo test --offline
-              cargo clippy --offline -- -D warnings
+            forEach = ''
+              prettier --check "$file"
             '';
           };
 
@@ -115,9 +182,22 @@
             '';
           };
 
+          actions = {
+            root = ./.github/workflows;
+            filter = file: file.hasExt "yaml";
+            packages = with pkgs; [
+              action-validator
+              zizmor
+            ];
+            forEach = ''
+              action-validator "$file"
+              zizmor --offline "$file"
+            '';
+          };
+
           renovate = {
             root = ./.github;
-            files = ./.github/renovate.json;
+            fileset = ./.github/renovate.json;
             packages = with pkgs; [
               renovate
             ];
@@ -126,20 +206,16 @@
             '';
           };
 
-          actions = {
-            root = ./.;
-            files = [
-              ./action.yaml
-              ./.github/workflows
-            ];
-            filter = file: file.hasExt "yaml";
+          rust = {
+            src = self.packages.${system}.default;
             packages = with pkgs; [
-              action-validator
-              octoscan
+              rustfmt
+              clippy
             ];
-            forEach = ''
-              action-validator "$file"
-              octoscan scan "$file"
+            script = ''
+              cargo test --offline
+              cargo fmt --check
+              cargo clippy --offline -- -D warnings
             '';
           };
 
@@ -154,75 +230,7 @@
               tombi lint --offline --error-on-warnings "$file"
             '';
           };
-
-          prettier = {
-            root = ./.;
-            filter = file: file.hasExt "yaml" || file.hasExt "json" || file.hasExt "md";
-            packages = with pkgs; [
-              prettier
-            ];
-            forEach = ''
-              prettier --check "$file"
-            '';
-          };
         };
-
-        formatter = pkgs.treefmt.withConfig {
-          configFile = ./treefmt.toml;
-          runtimeInputs = with pkgs; [
-            rustfmt
-            nixfmt
-            tombi
-            prettier
-          ];
-        };
-
-        packages.default = pkgs.rustPlatform.buildRustPackage (
-          final: with pkgs.lib; {
-            pname = "bumper";
-            version = "0.15.1";
-
-            src = fileset.toSource {
-              root = ./.;
-              fileset = fileset.unions [
-                ./Cargo.lock
-                ./Cargo.toml
-                ./src
-                ./tests
-              ];
-            };
-            cargoLock.lockFile = ./Cargo.lock;
-
-            nativeBuildInputs = [
-              pkgs.pkg-config
-            ]
-            ++ optional (
-              !pkgs.stdenv.hostPlatform.isStatic && pkgs.stdenv.hostPlatform.isLinux
-            ) pkgs.autoPatchelfHook;
-
-            buildInputs = with pkgs; [
-              libgcc
-              openssl
-            ];
-
-            meta = {
-              mainProgram = "bumper";
-              description = "Git semantic version bumper";
-              license = licenses.mit;
-              platforms = platforms.all;
-              homepage = "https://github.com/spotdemo4/bumper";
-              changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${final.version}";
-              downloadPage = "https://github.com/spotdemo4/bumper/releases/tag/v${final.version}";
-            };
-          }
-        );
-
-        images.default = pkgs.mkImage {
-          src = self.packages.${system}.default;
-          contents = with pkgs; [ dockerTools.caCertificates ];
-        };
-
-        schemas = trev.schemas;
       }
     );
 }

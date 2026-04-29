@@ -2,6 +2,11 @@
 name = "bumper"
 version = "0.15.1"
 edition = "2024"
+rust-version = "1.94.1"
+description = "Git semantic version bumper"
+readme = "README.md"
+repository = "https://github.com/spotdemo4/bumper"
+license-file = "LICENSE"
 
 [[bin]]
 name = "bumper"

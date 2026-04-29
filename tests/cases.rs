@@ -111,3 +111,13 @@ fn nix_case_updates_flake_files() {
     let flake_nix = fs::read_to_string(dir.join("flake.nix")).expect("read flake.nix");
     assert!(flake_nix.contains("version = \"0.14.0\""));
 }
+
+#[test]
+fn gleam_case_updates_gleam_toml() {
+    let dir = copy_fixture("gleam");
+
+    apply_typed_change(&dir.join("gleam.toml"), "0.13.0", "0.14.0").expect("bump gleam.toml");
+
+    let gleam_toml = fs::read_to_string(dir.join("gleam.toml")).expect("read gleam.toml");
+    assert!(gleam_toml.contains("version = \"0.14.0\""));
+}

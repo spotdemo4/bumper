@@ -27,6 +27,7 @@ pub fn apply_typed_change(file: &Path, old_version: &str, new_version: &str) -> 
             bump_package_in_lock(file, old_version, new_version, &name)
         }
         "build.zig.zon" => replace_line_value(file, ".version", new_version),
+        "gleam.toml" => bump_toml_path(file, &["version"], new_version),
         _ => Ok(false),
     }
 }

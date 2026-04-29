@@ -9,7 +9,7 @@ on:
         description: "force"
         required: false
         type: choice
-        default: "false"
+        default: "true"
         options:
           - "true"
           - "false"
@@ -19,11 +19,12 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   bump:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - id: init
         name: Initialize
@@ -39,6 +40,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.init.outputs.token }}
           FORCE: ${{ inputs.force }}
-          PATHS: |-
+          PATHS: |
             action.yaml
-            .github/README.md
+            README.md

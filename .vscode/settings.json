@@ -1,15 +1,44 @@
 {
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
   "editor.formatOnSave": true,
   "files.associations": {
     "renovate.json": "jsonc",
     ".envrc.project": "dotenv",
     ".envrc": "dotenv"
   },
-
-  // ai
+  "explorer.fileNesting.patterns": {
+    ".envrc.project": ".envrc",
+    "flake.nix": "flake.lock,treefmt.toml",
+    "README.md": "*.md,LICENSE"
+  },
+  "json.schemaDownload.trustedDomains": {
+    "https://docs.renovatebot.com/": true
+  },
   "chat.tools.terminal.autoApprove": {
+    "treefmt": true,
+
+    // nix
+    "nix build": true,
     "nix flake check": true,
-    "treefmt": true
+
+    // rust
+    "cargo build": true,
+    "cargo check": true,
+    "cargo clippy": true
+  },
+
+  // nix
+  "nix.enableLanguageServer": true,
+  "nix.serverPath": "nixd",
+  "nix.serverSettings": {
+    "nixd": {
+      "nixpkgs": {
+        "expr": "(builtins.getFlake (builtins.toString ./.)).outputs.nixpkgs.${builtins.currentSystem}"
+      }
+    }
+  },
+  "[nix]": {
+    "editor.defaultFormatter": "jnoortheen.nix-ide"
   },
 
   // rust
@@ -17,23 +46,8 @@
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
   },
 
-  // nix
-  "nix.enableLanguageServer": true,
-  "nix.serverPath": "nixd",
-  "[nix]": {
-    "editor.defaultFormatter": "jnoortheen.nix-ide"
-  },
-
   // toml
   "[toml]": {
     "editor.defaultFormatter": "tombi-toml.tombi"
-  },
-
-  // json
-  "json.schemaDownload.trustedDomains": {
-    "https://docs.renovatebot.com/": true
-  },
-
-  // actions
-  "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
 }

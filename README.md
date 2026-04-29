@@ -1,7 +1,9 @@
 # git version bumper
 
-![check](https://github.com/spotdemo4/bumper/actions/workflows/check.yaml/badge.svg?branch=main)
-![vulnerable](https://github.com/spotdemo4/bumper/actions/workflows/vulnerable.yaml/badge.svg?branch=main)
+[![check](https://img.shields.io/github/actions/workflow/status/spotdemo4/bumper/check.yaml?branch=main&logo=github&logoColor=%23bac2de&label=check&labelColor=%23313244)](https://github.com/spotdemo4/bumper/actions/workflows/check.yaml/)
+[![vulnerable](https://img.shields.io/github/actions/workflow/status/spotdemo4/bumper/vulnerable.yaml?branch=main&logo=github&logoColor=%23bac2de&label=vulnerable&labelColor=%23313244)](https://github.com/spotdemo4/bumper/actions/workflows/vulnerable.yaml)
+[![rust](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fspotdemo4%2Fbumper%2Frefs%2Fheads%2Fmain%2FCargo.toml&query=%24.package.rust-version&logo=rust&logoColor=%23bac2de&label=version&labelColor=%23313244&color=%23D34516)](https://releases.rs/)
+[![flakehub](https://img.shields.io/endpoint?url=https://flakehub.com/f/spotdemo4/bumper/badge&labelColor=%23313244)](https://flakehub.com/flake/spotdemo4/bumper)
 
 - determines the [semantic versioning](https://semver.org/) impact (major, minor or patch) of the [conventional commits](https://www.conventionalcommits.org) since the last git tag
 - increments the git tag by the impact (v0.0.1 -> PATCH -> v0.0.2)
