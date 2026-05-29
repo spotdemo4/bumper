@@ -47,6 +47,7 @@
 
               # lint
               nixd
+              nil
               clippy
               cargo-audit
               tombi
