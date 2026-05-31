@@ -1,5 +1,5 @@
 {
-  description = "rust template";
+  description = "git semantic version bumper";
 
   nixConfig = {
     extra-substituters = [
