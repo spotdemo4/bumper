@@ -34,7 +34,7 @@ pub fn current_branch(repo: &Repository) -> AppResult<String> {
     let head = repo.head().map_err(|e| format!("not on a branch: {e}"))?;
     let shorthand = head
         .shorthand()
-        .ok_or_else(|| "not on a branch".to_string())?;
+        .map_err(|e| format!("failed to read branch name: {e}"))?;
     Ok(shorthand.to_string())
 }
 
@@ -46,7 +46,7 @@ pub fn latest_tag(repo: &Repository) -> AppResult<(String, Oid)> {
     let mut latest: Option<(String, Oid, i64)> = None;
 
     for maybe_name in tags.iter() {
-        let Some(name) = maybe_name else {
+        let Ok(Some(name)) = maybe_name else {
             continue;
         };
 
@@ -97,7 +97,10 @@ pub fn get_impact(
             .find_commit(oid)
             .map_err(|e| format!("failed to load commit {oid}: {e}"))?;
 
-        let Some(summary) = commit.summary() else {
+        let Some(summary) = commit
+            .summary()
+            .map_err(|e| format!("failed to read commit {oid} summary: {e}"))?
+        else {
             continue;
         };
 
@@ -201,7 +204,7 @@ pub fn staged_files(repo: &Repository) -> AppResult<Vec<PathBuf>> {
                 || status.is_index_renamed()
                 || status.is_index_typechange();
             if indexed {
-                entry.path().map(PathBuf::from)
+                entry.path().ok().map(PathBuf::from)
             } else {
                 None
             }
@@ -397,10 +400,10 @@ fn configured_http_extra_headers(repo: &Repository, url: Option<&str>) -> Vec<St
         let Ok(entry) = entry else {
             continue;
         };
-        let Some(name) = entry.name() else {
+        let Ok(name) = entry.name() else {
             continue;
         };
-        let Some(value) = entry.value() else {
+        let Ok(value) = entry.value() else {
             continue;
         };
         if http_extra_header_matches(name, url) {
@@ -458,8 +461,9 @@ pub fn git_fetch(repo: &Repository) -> AppResult<()> {
         .map_err(|e| format!("failed to list remotes: {e}"))?;
     let remotes: Vec<String> = remotes_array
         .iter()
+        .filter_map(Result::ok)
         .flatten()
-        .map(|s: &str| s.to_string())
+        .map(str::to_string)
         .collect();
     for name in remotes {
         let path = repo_path.clone();
@@ -487,7 +491,7 @@ fn fetch_from_remote(repo_path: &Path, name: &str) -> AppResult<()> {
         .find_remote(name)
         .map_err(|e| format!("failed to find remote '{name}': {e}"))?;
     let mut opts = git2::FetchOptions::new();
-    let headers = configured_http_extra_headers(&repo, remote.url());
+    let headers = configured_http_extra_headers(&repo, remote.url().ok());
     if !headers.is_empty() {
         let header_refs: Vec<&str> = headers.iter().map(String::as_str).collect();
         opts.custom_headers(&header_refs);
@@ -506,7 +510,12 @@ pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
     let branch_ref = format!("refs/heads/{branch}:refs/heads/{branch}");
     let tag_ref = format!("refs/tags/{tag}:refs/tags/{tag}");
 
-    let headers = configured_http_extra_headers(repo, remote.pushurl().or_else(|| remote.url()));
+    let url = remote
+        .pushurl()
+        .ok()
+        .flatten()
+        .or_else(|| remote.url().ok());
+    let headers = configured_http_extra_headers(repo, url);
     let callbacks = make_remote_callbacks(repo);
     let mut push_options = git2::PushOptions::new();
     if !headers.is_empty() {
