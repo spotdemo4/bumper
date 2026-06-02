@@ -8,7 +8,7 @@
 - determines the [semantic versioning](https://semver.org/) impact (major, minor or patch) of the [conventional commits](https://www.conventionalcommits.org) since the last git tag
 - increments the git tag by the impact (v0.0.1 -> PATCH -> v0.0.2)
 - applies the version bump to files given as arguments (`bumper [files...]`)
-- applies the version bump in directories given as arguments to supported project files (`package.json`, `package-lock.json`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `uv.lock`, `build.zig.zon`, `gleam.toml`, `flake.nix`, `CMakeLists.txt`)
+- applies the version bump in directories given as arguments to supported project files (`README.md`, `package.json`, `package-lock.json`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `uv.lock`, `build.zig.zon`, `gleam.toml`, `flake.nix`, `CMakeLists.txt`)
 - commits the bumped files and pushes them with the new git tag
 
 This works well as a github action. Have it run on every push to main and it will bump the version for every change, or run it on a schedule to increase the version if there were any new changes.

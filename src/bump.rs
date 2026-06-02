@@ -13,6 +13,7 @@ pub fn apply_typed_change(file: &Path, old_version: &str, new_version: &str) -> 
         .ok_or_else(|| format!("invalid file path '{}'", file.display()))?;
 
     match name {
+        "README.md" => replace_literal(file, old_version, new_version),
         "flake.nix" => replace_literal(file, old_version, new_version),
         "package.json" => bump_package_json(file, new_version),
         "package-lock.json" => bump_package_lock_json(file, new_version),

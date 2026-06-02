@@ -154,3 +154,30 @@ set(DEPENDENCY_VERSION "0.13.0")
     assert!(cmake_lists.contains("cmake_minimum_required(VERSION 3.27)"));
     assert!(cmake_lists.contains("set(DEPENDENCY_VERSION \"0.13.0\")"));
 }
+
+#[test]
+fn readme_case_updates_version_references() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should be after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("bumper-case-readme-{nanos}"));
+    fs::create_dir_all(&dir).expect("create readme fixture directory");
+    fs::write(
+        dir.join("README.md"),
+        r#"# Fixture
+
+Latest tag: v0.13.0
+
+Docker image: ghcr.io/example/fixture:0.13.0
+"#,
+    )
+    .expect("write README.md");
+
+    apply_typed_change(&dir.join("README.md"), "0.13.0", "0.14.0").expect("bump README.md");
+
+    let readme = fs::read_to_string(dir.join("README.md")).expect("read README.md");
+    assert!(readme.contains("v0.14.0"));
+    assert!(readme.contains("fixture:0.14.0"));
+    assert!(!readme.contains("0.13.0"));
+}
