@@ -1,6 +1,8 @@
 use git2::{Oid, Repository, StatusOptions};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use crate::model::{AppResult, Impact};
@@ -157,6 +159,10 @@ pub fn list_tracked_files_under(
             continue;
         };
         let relative = Path::new(path);
+        if is_likely_vendored_path(relative) || has_symlink_component(repo_root, relative) {
+            continue;
+        }
+
         if dir_relative.as_os_str().is_empty() || relative.starts_with(dir_relative) {
             files.push(repo_root.join(relative));
         }
@@ -165,6 +171,35 @@ pub fn list_tracked_files_under(
     files.sort();
     files.dedup();
     Ok(files)
+}
+
+fn is_likely_vendored_path(relative: &Path) -> bool {
+    const VENDORED_DIRS: &[&str] = &["vendor", "node_modules"];
+
+    relative.components().any(|component| {
+        let Component::Normal(name) = component else {
+            return false;
+        };
+
+        VENDORED_DIRS
+            .iter()
+            .any(|vendored| name == OsStr::new(vendored))
+    })
+}
+
+fn has_symlink_component(repo_root: &Path, relative: &Path) -> bool {
+    let mut path = repo_root.to_path_buf();
+    for component in relative.components() {
+        path.push(component.as_os_str());
+        if fs::symlink_metadata(&path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 pub fn stage_path(repo: &Repository, repo_root: &Path, absolute_path: &Path) -> AppResult<()> {
@@ -544,6 +579,63 @@ mod tests {
             .expect("time should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("bumper-{name}-{nanos}"))
+    }
+
+    fn add_index_paths(repo: &Repository, paths: &[&str]) {
+        let mut index = repo.index().expect("open git index");
+        for path in paths {
+            index.add_path(Path::new(path)).expect("add index path");
+        }
+        index.write().expect("write git index");
+    }
+
+    #[test]
+    fn tracked_files_under_skips_likely_vendored_paths() {
+        let dir = temp_path("vendored-paths");
+        let repo = Repository::init(&dir).expect("init repo");
+        std::fs::write(dir.join("README.md"), "version 0.13.0").expect("write README.md");
+        std::fs::create_dir_all(dir.join("cmd/vendor")).expect("create vendor dir");
+        std::fs::write(dir.join("cmd/vendor/README.md"), "version 0.13.0")
+            .expect("write vendored README.md");
+        std::fs::create_dir_all(dir.join("node_modules/pkg")).expect("create node_modules dir");
+        std::fs::write(
+            dir.join("node_modules/pkg/package.json"),
+            r#"{"version":"0.13.0"}"#,
+        )
+        .expect("write vendored package.json");
+        add_index_paths(
+            &repo,
+            &[
+                "README.md",
+                "cmd/vendor/README.md",
+                "node_modules/pkg/package.json",
+            ],
+        );
+
+        let files = list_tracked_files_under(&repo, &dir, &dir).expect("list tracked files");
+
+        assert!(files.contains(&dir.join("README.md")));
+        assert!(!files.contains(&dir.join("cmd/vendor/README.md")));
+        assert!(!files.contains(&dir.join("node_modules/pkg/package.json")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tracked_files_under_skips_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_path("symlink-paths");
+        let repo = Repository::init(&dir).expect("init repo");
+        std::fs::write(dir.join("real-readme.md"), "version 0.13.0").expect("write real file");
+        symlink("real-readme.md", dir.join("README.md")).expect("create symlink");
+        add_index_paths(&repo, &["real-readme.md", "README.md"]);
+
+        let files = list_tracked_files_under(&repo, &dir, &dir).expect("list tracked files");
+
+        assert!(files.contains(&dir.join("real-readme.md")));
+        assert!(!files.contains(&dir.join("README.md")));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
