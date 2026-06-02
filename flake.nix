@@ -70,9 +70,12 @@
           release = pkgs.mkShell {
             packages = with pkgs; [
               flake-release
+
+              # cargo publish
               rustc
               cargo
               openssl
+              pkg-config
             ];
           };
 
