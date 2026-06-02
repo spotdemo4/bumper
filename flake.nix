@@ -102,7 +102,7 @@
           default = pkgs.rustPlatform.buildRustPackage (
             final: with pkgs.lib; {
               pname = "bumper";
-              version = "0.16.3";
+              version = "0.17.0";
 
               src = fileset.toSource {
                 root = ./.;
