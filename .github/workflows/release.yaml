@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: write
@@ -44,7 +44,7 @@ jobs:
           visibility: public
 
   darwin:
-    runs-on: macos-latest
+    runs-on: macos-26
     permissions:
       id-token: write
       contents: write

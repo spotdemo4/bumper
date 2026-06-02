@@ -1,20 +1,15 @@
 #:schema https://www.schemastore.org/treefmt.json
 
-[formatter.prettier]
-command = "prettier"
-options = ["--write"]
-includes = ["*.yaml", "*.json", "*.md"]
-
-[formatter.nix]
-command = "nixfmt"
-includes = ["*.nix"]
-
-[formatter.rust]
+[formatter.rustfmt]
 command = "rustfmt"
 options = ["--edition", "2024"]
 includes = ["*.rs"]
 
-[formatter.toml]
-command = "tombi"
-options = ["format"]
-includes = ["*.toml"]
+[formatter.nixfmt]
+command = "nixfmt"
+includes = ["*.nix"]
+
+[formatter.oxfmt]
+command = "oxfmt"
+options = ["--write"]
+includes = ["*.json", "*.yaml", "*.toml", "*.md"]

@@ -1,8 +1,8 @@
 {
   "recommendations": [
-    "esbenp.prettier-vscode",
     "jnoortheen.nix-ide",
     "rust-lang.rust-analyzer",
+    "oxc.oxc-vscode",
     "tombi-toml.tombi"
   ]
 }

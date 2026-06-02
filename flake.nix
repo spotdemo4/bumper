@@ -4,19 +4,17 @@
   nixConfig = {
     extra-substituters = [
       "https://nix.trev.zip"
-      "https://nix-community.cachix.org"
     ];
     extra-trusted-public-keys = [
       "trev:I39N/EsnHkvfmsbx8RUW+ia5dOzojTQNCTzKYij1chU="
-      "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
     ];
   };
 
   inputs = {
     systems.url = "github:spotdemo4/systems";
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
-    trev = {
-      url = "github:spotdemo4/nur";
+    trevpkgs = {
+      url = "github:spotdemo4/trevpkgs";
       inputs.systems.follows = "systems";
       inputs.nixpkgs.follows = "nixpkgs";
     };
@@ -25,10 +23,10 @@
   outputs =
     {
       self,
-      trev,
+      trevpkgs,
       ...
     }:
-    trev.libs.mkFlake (
+    trevpkgs.libs.mkFlake (
       system: pkgs: {
 
         # nix develop [#...]
@@ -46,20 +44,20 @@
               pkg-config
 
               # lint
-              nixd
-              nil
               clippy
               cargo-audit
-              tombi
+              nixd
+              nil
 
               # format
-              treefmt
-              prettier
-              nixfmt
               rustfmt
+              nixfmt
+              oxfmt
+              treefmt
 
               # util
               bumper
+              fix-hash
             ];
           };
 
@@ -72,6 +70,8 @@
           release = pkgs.mkShell {
             packages = with pkgs; [
               flake-release
+              rustc
+              cargo
             ];
           };
 
@@ -84,9 +84,9 @@
 
           vulnerable = pkgs.mkShell {
             packages = with pkgs; [
+              cargo-audit # rust
               flake-checker # nix
               zizmor # actions
-              cargo-audit # rust
             ];
           };
         };
@@ -152,38 +152,26 @@
         formatter = pkgs.treefmt.withConfig {
           configFile = ./treefmt.toml;
           runtimeInputs = with pkgs; [
-            prettier
-            nixfmt
             rustfmt
-            tombi
+            nixfmt
+            oxfmt
           ];
         };
 
         # nix flake check
         checks = pkgs.mkChecks {
-          prettier = {
-            root = ./.;
-            filter = file: file.hasExt "yaml" || file.hasExt "json" || file.hasExt "md";
-            packages = with pkgs; [
-              prettier
-            ];
-            forEach = ''
-              prettier --check "$file"
-            '';
-          };
-
           nix = {
             root = ./.;
             filter = file: file.hasExt "nix";
             packages = with pkgs; [
               nixfmt
             ];
-            forEach = ''
+            script = ''
               nixfmt --check "$file"
             '';
           };
 
-          actions = {
+          actions-gh = {
             root = ./.github/workflows;
             filter = file: file.hasExt "yaml";
             packages = with pkgs; [
@@ -196,9 +184,20 @@
             '';
           };
 
+          actions-fj = {
+            root = ./.forgejo/workflows;
+            filter = file: file.hasExt "yaml";
+            packages = with pkgs; [
+              zizmor
+            ];
+            forEach = ''
+              zizmor --offline "$file"
+            '';
+          };
+
           renovate = {
-            root = ./.github;
-            fileset = ./.github/renovate.json;
+            root = ./.forgejo;
+            files = ./.forgejo/renovate.json;
             packages = with pkgs; [
               renovate
             ];
@@ -217,15 +216,14 @@
             '';
           };
 
-          tombi = {
+          config = {
             root = ./.;
-            filter = file: file.hasExt "toml";
+            filter = file: file.hasExt "json" || file.hasExt "yaml" || file.hasExt "toml" || file.hasExt "md";
             packages = with pkgs; [
-              tombi
+              oxfmt
             ];
-            forEach = ''
-              tombi format --offline --check "$file"
-              tombi lint --offline --error-on-warnings "$file"
+            script = ''
+              oxfmt --check
             '';
           };
         };

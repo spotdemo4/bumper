@@ -4,18 +4,20 @@
   // self-hosted
   "onboarding": false,
   "requireConfig": "ignored",
-  "platform": "github",
-  "repositories": ["spotdemo4/bumper"],
+  "platform": "forgejo",
+  "endpoint": "https://trev.zip/api/v1",
+  "repositories": ["llc/bumper"],
 
   // repository
   "extends": ["config:recommended"],
+  "addLabels": ["dep"],
+  "nix": {
+    "enabled": true
+  },
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true,
-    "schedule": ["* * * * 0"] // every Sunday
-  },
-  "nix": {
-    "enabled": true
+    "schedule": ["* * * * 0"] // sunday
   },
   "packageRules": [
     {
@@ -24,16 +26,15 @@
     },
     {
       "matchManagers": ["nix"],
-      "groupName": "nix inputs"
+      "addLabels": ["nix"]
     },
     {
       "matchManagers": ["github-actions"],
-      "groupName": "github actions"
+      "addLabels": ["actions"]
     },
     {
       "matchManagers": ["cargo"],
-      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
-      "groupName": "rust crates"
+      "addLabels": ["rust"]
     }
   ]
 }
