@@ -121,3 +121,36 @@ fn gleam_case_updates_gleam_toml() {
     let gleam_toml = fs::read_to_string(dir.join("gleam.toml")).expect("read gleam.toml");
     assert!(gleam_toml.contains("version = \"0.14.0\""));
 }
+
+#[test]
+fn cmake_case_updates_project_version() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should be after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("bumper-case-cmake-{nanos}"));
+    fs::create_dir_all(&dir).expect("create cmake fixture directory");
+    fs::write(
+        dir.join("CMakeLists.txt"),
+        r#"cmake_minimum_required(VERSION 3.27)
+
+project(
+  bumper_cmake
+  VERSION 0.13.0
+  DESCRIPTION "Fixture project for bumper"
+  LANGUAGES C
+)
+
+set(DEPENDENCY_VERSION "0.13.0")
+"#,
+    )
+    .expect("write CMakeLists.txt");
+
+    apply_typed_change(&dir.join("CMakeLists.txt"), "0.13.0", "0.14.0")
+        .expect("bump CMakeLists.txt");
+
+    let cmake_lists = fs::read_to_string(dir.join("CMakeLists.txt")).expect("read CMakeLists.txt");
+    assert!(cmake_lists.contains("VERSION 0.14.0"));
+    assert!(cmake_lists.contains("cmake_minimum_required(VERSION 3.27)"));
+    assert!(cmake_lists.contains("set(DEPENDENCY_VERSION \"0.13.0\")"));
+}

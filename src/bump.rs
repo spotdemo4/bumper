@@ -16,6 +16,7 @@ pub fn apply_typed_change(file: &Path, old_version: &str, new_version: &str) -> 
         "flake.nix" => replace_literal(file, old_version, new_version),
         "package.json" => bump_package_json(file, new_version),
         "package-lock.json" => bump_package_lock_json(file, new_version),
+        "CMakeLists.txt" => bump_cmake_lists(file, new_version),
         "Cargo.toml" => bump_toml_path(file, &["package", "version"], new_version),
         "pyproject.toml" => bump_toml_path(file, &["project", "version"], new_version),
         "uv.lock" => {
@@ -213,6 +214,14 @@ fn bump_package_lock_json(file: &Path, new_version: &str) -> AppResult<bool> {
     }
     fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
     Ok(true)
+}
+
+fn bump_cmake_lists(file: &Path, new_version: &str) -> AppResult<bool> {
+    let re = Regex::new(
+        r#"(?is)(\bproject\s*\([^)]*?\bVERSION[ \t\r\n]+)("?)([0-9]+(?:\.[0-9]+){0,3})("?)([^0-9.])"#,
+    )
+    .unwrap();
+    regex_replace_file(file, &re, &format!("${{1}}${{2}}{new_version}${{4}}${{5}}"))
 }
 
 fn bump_toml_path(file: &Path, path: &[&str], new_version: &str) -> AppResult<bool> {
