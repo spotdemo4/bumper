@@ -72,6 +72,7 @@
               flake-release
               rustc
               cargo
+              openssl
             ];
           };
 
