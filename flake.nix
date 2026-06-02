@@ -136,9 +136,9 @@
                 description = "Git semantic version bumper";
                 license = licenses.mit;
                 platforms = platforms.all;
-                homepage = "https://github.com/spotdemo4/bumper";
-                changelog = "https://github.com/spotdemo4/bumper/releases/tag/v${final.version}";
-                downloadPage = "https://github.com/spotdemo4/bumper/releases/tag/v${final.version}";
+                homepage = "https://trev.zip/llc/bumper";
+                changelog = "https://trev.zip/llc/bumper/releases";
+                downloadPage = "https://trev.zip/llc/bumper/releases/tag/v${final.version}";
               };
             }
           );

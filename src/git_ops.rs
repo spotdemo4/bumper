@@ -755,24 +755,24 @@ mod tests {
     #[test]
     fn http_extra_header_matches_actions_checkout_config() {
         assert!(http_extra_header_matches(
-            "http.https://github.com/.extraheader",
-            "https://github.com/spotdemo4/bumper"
+            "http.https://trev.zip/.extraheader",
+            "https://trev.zip/llc/bumper"
         ));
         assert!(http_extra_header_matches(
             "http.extraheader",
-            "https://github.com/spotdemo4/bumper"
+            "https://trev.zip/llc/bumper"
         ));
         assert!(!http_extra_header_matches(
             "http.https://gitlab.com/.extraheader",
-            "https://github.com/spotdemo4/bumper"
+            "https://trev.zip/llc/bumper"
         ));
         assert!(!http_extra_header_matches(
-            "http.https://github.com.extraheader",
-            "https://github.com.evil/spotdemo4/bumper"
+            "http.https://trev.zip.extraheader",
+            "https://trev.zip.evil/llc/bumper"
         ));
         assert!(!http_extra_header_matches(
-            "http.https://github.com/.extraheader",
-            "git@github.com:spotdemo4/bumper.git"
+            "http.https://trev.zip/.extraheader",
+            "git@trev.zip:llc/bumper.git"
         ));
     }
 
@@ -783,7 +783,7 @@ mod tests {
         let mut config = repo.config().expect("open repo config");
         config
             .set_str(
-                "http.https://github.com/.extraheader",
+                "http.https://trev.zip/.extraheader",
                 "AUTHORIZATION: basic abc",
             )
             .expect("set matching header");
@@ -794,8 +794,7 @@ mod tests {
             )
             .expect("set non-matching header");
 
-        let headers =
-            configured_http_extra_headers(&repo, Some("https://github.com/spotdemo4/bumper.git"));
+        let headers = configured_http_extra_headers(&repo, Some("https://trev.zip/llc/bumper.git"));
 
         assert!(headers.contains(&"AUTHORIZATION: basic abc".to_string()));
         assert!(!headers.contains(&"AUTHORIZATION: basic def".to_string()));

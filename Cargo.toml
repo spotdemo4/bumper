@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.95.0"
 description = "Git semantic version bumper"
 readme = "README.md"
-repository = "https://github.com/spotdemo4/bumper"
+repository = "https://trev.zip/llc/bumper"
 license-file = "LICENSE"
 
 [[bin]]
