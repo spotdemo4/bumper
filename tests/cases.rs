@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bumper::bump::apply_typed_change;
+use bumper::bump::{TypedChange, apply_typed_change};
 
 fn copy_fixture(case_name: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -180,4 +180,97 @@ Docker image: ghcr.io/example/fixture:0.13.0
     assert!(readme.contains("v0.14.0"));
     assert!(readme.contains("fixture:0.14.0"));
     assert!(!readme.contains("0.13.0"));
+}
+
+#[test]
+fn action_yaml_updates_literal_version_references() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should be after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("bumper-case-action-yaml-{nanos}"));
+    fs::create_dir_all(&dir).expect("create action fixture directory");
+    fs::write(
+        dir.join("action.yaml"),
+        r#"name: Fixture 0.13.0
+
+metadata:
+  image: docker://ghcr.io/example/metadata:0.13.0
+
+runs:
+  using: docker
+  image: docker://ghcr.io/example/fixture:v0.13.0-alpine
+  env:
+    FIXTURE_IMAGE: docker://ghcr.io/example/fixture:0.13.0
+    FIXTURE_VERSION: 0.13.0
+"#,
+    )
+    .expect("write action.yaml");
+
+    let changed =
+        apply_typed_change(&dir.join("action.yaml"), "0.13.0", "0.14.0").expect("bump action.yaml");
+
+    let action = fs::read_to_string(dir.join("action.yaml")).expect("read action.yaml");
+    assert_eq!(changed, TypedChange::Changed);
+    assert!(action.contains("image: docker://ghcr.io/example/fixture:v0.14.0-alpine"));
+    assert!(action.contains("name: Fixture 0.14.0"));
+    assert!(action.contains("image: docker://ghcr.io/example/metadata:0.14.0"));
+    assert!(action.contains("FIXTURE_IMAGE: docker://ghcr.io/example/fixture:0.14.0"));
+    assert!(action.contains("FIXTURE_VERSION: 0.14.0"));
+    assert!(!action.contains("0.13.0"));
+}
+
+#[test]
+fn action_yml_preserves_quoted_image_and_comment() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should be after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("bumper-case-action-yml-{nanos}"));
+    fs::create_dir_all(&dir).expect("create action fixture directory");
+    fs::write(
+        dir.join("action.yml"),
+        r#"runs:
+  using: docker
+  image: "docker://registry.example.com:5000/example/fixture:0.13.0" # published image
+"#,
+    )
+    .expect("write action.yml");
+
+    let changed =
+        apply_typed_change(&dir.join("action.yml"), "0.13.0", "0.14.0").expect("bump action.yml");
+
+    let action = fs::read_to_string(dir.join("action.yml")).expect("read action.yml");
+    assert_eq!(changed, TypedChange::Changed);
+    assert!(action.contains(
+        r#"image: "docker://registry.example.com:5000/example/fixture:0.14.0" # published image"#
+    ));
+}
+
+#[test]
+fn action_yaml_literal_replacement_can_update_non_image_values() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should be after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("bumper-case-action-dockerfile-{nanos}"));
+    fs::create_dir_all(&dir).expect("create action fixture directory");
+    fs::write(
+        dir.join("action.yaml"),
+        r#"runs:
+  using: docker
+  image: Dockerfile
+  env:
+    FIXTURE_VERSION: 0.13.0
+"#,
+    )
+    .expect("write action.yaml");
+
+    let changed =
+        apply_typed_change(&dir.join("action.yaml"), "0.13.0", "0.14.0").expect("bump action.yaml");
+
+    let action = fs::read_to_string(dir.join("action.yaml")).expect("read action.yaml");
+    assert_eq!(changed, TypedChange::Changed);
+    assert!(action.contains("image: Dockerfile"));
+    assert!(action.contains("FIXTURE_VERSION: 0.14.0"));
 }

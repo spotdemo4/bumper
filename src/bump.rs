@@ -36,6 +36,8 @@ pub fn apply_typed_change(
     let changed = match name {
         "README.md" => replace_literal(file, old_version, new_version),
         "flake.nix" => replace_literal(file, old_version, new_version),
+        "action.yaml" => replace_literal(file, old_version, new_version),
+        "action.yml" => replace_literal(file, old_version, new_version),
         "package.json" => bump_package_json(file, new_version),
         "package-lock.json" => bump_package_lock_json(file, new_version),
         "CMakeLists.txt" => bump_cmake_lists(file, new_version),
