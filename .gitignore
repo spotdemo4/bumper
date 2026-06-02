@@ -2,11 +2,14 @@
 /.envrc
 /docker-compose*
 
-# build
-/target/
+# agents
+.agents/
+.claude/
+.codex/
 
 # nix
 /result*
 /.direnv/
 
-/old
+# build
+/target/
