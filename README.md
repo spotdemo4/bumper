@@ -1,6 +1,6 @@
 # git version bumper
 
-[![check](https://trev.zipllc/bumper/actions/workflows/check.yaml/badge.svg?branch=main&logo=forgejo&logoColor=%23bac2de&label=check&labelColor=%23313244)](https://trev.zip/llc/bumper/actions?workflow=check.yaml)
+[![check](https://trev.zip/llc/bumper/actions/workflows/check.yaml/badge.svg?branch=main&logo=forgejo&logoColor=%23bac2de&label=check&labelColor=%23313244)](https://trev.zip/llc/bumper/actions?workflow=check.yaml)
 [![vulnerable](https://trev.zip/llc/bumper/actions/workflows/vulnerable.yaml/badge.svg?branch=main&logo=forgejo&logoColor=%23bac2de&label=vulnerable&labelColor=%23313244)](https://trev.zip/llc/bumper/actions?workflow=vulnerable.yaml)
 [![rust](https://img.shields.io/badge/dynamic/toml?url=https://trev.zip/llc/bumper/raw/branch/main/Cargo.toml&query=%24.package.rust-version&logo=rust&logoColor=%23bac2de&label=version&labelColor=%23313244&color=%23D34516)](https://releases.rs/)
 [![flakehub](https://img.shields.io/endpoint?url=https://flakehub.com/f/spotdemo4/bumper/badge&labelColor=%23313244)](https://flakehub.com/flake/spotdemo4/bumper)
