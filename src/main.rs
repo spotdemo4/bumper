@@ -3,7 +3,7 @@ mod git_ops;
 mod model;
 mod versioning;
 
-use bumper::bump::apply_typed_change;
+use bumper::bump::{TypedChange, apply_typed_change};
 use git2::Repository;
 use std::fs;
 use std::path::Path;
@@ -45,8 +45,6 @@ fn run() -> AppResult<()> {
 
     if config.paths.is_empty() {
         config.paths = vec![repo_root.clone()];
-    } else {
-        config.paths.push(repo_root.clone());
     }
 
     if !config.allow_dirty {
@@ -57,12 +55,14 @@ fn run() -> AppResult<()> {
     git_fetch(&repo)?;
 
     println!("determining next version...");
-    let branch = current_branch(&repo)?;
-
     let (last_tag_name, last_tag_commit) = latest_tag(&repo)?;
     println!("last tag: {last_tag_name} (commit {last_tag_commit})");
 
-    let last_version = last_tag_name.trim_start_matches('v').to_string();
+    let last_version = last_tag_name
+        .strip_prefix('v')
+        .or_else(|| last_tag_name.strip_prefix('V'))
+        .unwrap_or(&last_tag_name)
+        .to_string();
     println!("last version: v{last_version}");
 
     let impact = get_impact(
@@ -123,6 +123,7 @@ fn run() -> AppResult<()> {
         println!("skipping push");
     } else {
         let tag = format!("v{next_version}");
+        let branch = current_branch(&repo)?;
         git_push(&repo, &branch, &tag)?;
     }
 
@@ -153,8 +154,9 @@ fn bump_file(
     old_version: &str,
     new_version: &str,
 ) -> AppResult<()> {
-    if bump_typed_file(repo, repo_root, file, old_version, new_version)? {
-        return Ok(());
+    match bump_typed_file(repo, repo_root, file, old_version, new_version)? {
+        TypedChange::Changed | TypedChange::Unchanged => return Ok(()),
+        TypedChange::Unhandled => {}
     }
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
@@ -175,9 +177,9 @@ fn bump_typed_file(
     file: &Path,
     old_version: &str,
     new_version: &str,
-) -> AppResult<bool> {
+) -> AppResult<TypedChange> {
     let changed = apply_typed_change(file, old_version, new_version)?;
-    if changed {
+    if changed == TypedChange::Changed {
         stage_path(repo, repo_root, file)?;
     }
     Ok(changed)

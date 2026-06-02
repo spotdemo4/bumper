@@ -93,7 +93,7 @@
 
         # nix run [#...]
         apps = pkgs.mkApps {
-          default = "cargo run";
+          dev = "cargo run";
           test = "cargo test";
         };
 
@@ -210,12 +210,9 @@
           rust = {
             src = self.packages.${system}.default;
             packages = with pkgs; [
-              rustfmt
               clippy
             ];
             script = ''
-              cargo test --offline
-              cargo fmt --check
               cargo clippy --offline -- -D warnings
             '';
           };

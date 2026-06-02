@@ -6,13 +6,34 @@ use regex::Regex;
 
 type AppResult<T> = Result<T, String>;
 
-pub fn apply_typed_change(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypedChange {
+    Changed,
+    Unchanged,
+    Unhandled,
+}
+
+impl TypedChange {
+    fn from_changed(changed: bool) -> Self {
+        if changed {
+            Self::Changed
+        } else {
+            Self::Unchanged
+        }
+    }
+}
+
+pub fn apply_typed_change(
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+) -> AppResult<TypedChange> {
     let name = file
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("invalid file path '{}'", file.display()))?;
 
-    match name {
+    let changed = match name {
         "README.md" => replace_literal(file, old_version, new_version),
         "flake.nix" => replace_literal(file, old_version, new_version),
         "package.json" => bump_package_json(file, new_version),
@@ -30,8 +51,10 @@ pub fn apply_typed_change(file: &Path, old_version: &str, new_version: &str) -> 
         }
         "build.zig.zon" => replace_line_value(file, ".version", new_version),
         "gleam.toml" => bump_toml_path(file, &["version"], new_version),
-        _ => Ok(false),
-    }
+        _ => return Ok(TypedChange::Unhandled),
+    }?;
+
+    Ok(TypedChange::from_changed(changed))
 }
 
 fn read_toml_name(path: &Path, section: &str) -> AppResult<String> {

@@ -1,11 +1,12 @@
 use git2::{Oid, Repository, StatusOptions};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use crate::model::{AppResult, Impact};
+use crate::versioning::{Version, parse_version};
 
 pub fn repo_root(repo: &Repository) -> AppResult<PathBuf> {
     let path = repo
@@ -45,10 +46,18 @@ pub fn latest_tag(repo: &Repository) -> AppResult<(String, Oid)> {
         .tag_names(None)
         .map_err(|e| format!("failed to list tags: {e}"))?;
 
-    let mut latest: Option<(String, Oid, i64)> = None;
+    let mut release_tags: HashMap<Oid, Vec<(String, Version)>> = HashMap::new();
 
     for maybe_name in tags.iter() {
         let Ok(Some(name)) = maybe_name else {
+            continue;
+        };
+
+        let version_name = name
+            .strip_prefix('v')
+            .or_else(|| name.strip_prefix('V'))
+            .unwrap_or(name);
+        let Ok(version) = parse_version(version_name) else {
             continue;
         };
 
@@ -60,18 +69,38 @@ pub fn latest_tag(repo: &Repository) -> AppResult<(String, Oid)> {
         let commit = object
             .peel_to_commit()
             .map_err(|e| format!("tag '{name}' does not reference a commit: {e}"))?;
-        let time = commit.time().seconds();
+        release_tags
+            .entry(commit.id())
+            .or_default()
+            .push((name.to_string(), version));
+    }
 
-        match &latest {
-            Some((_, _, latest_time)) if *latest_time >= time => {}
-            _ => latest = Some((name.to_string(), commit.id(), time)),
+    if release_tags.is_empty() {
+        return Err(
+            "no semantic version git tags found, please create a vX.Y.Z tag first".to_string(),
+        );
+    }
+
+    let mut walk = repo
+        .revwalk()
+        .map_err(|e| format!("failed to create revwalk: {e}"))?;
+    walk.push_head()
+        .map_err(|e| format!("failed to walk from HEAD: {e}"))?;
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+        .map_err(|e| format!("failed to configure revwalk: {e}"))?;
+
+    for oid in walk {
+        let oid = oid.map_err(|e| format!("failed to walk commit history: {e}"))?;
+        if let Some(tags) = release_tags.get(&oid) {
+            let (name, _) = tags
+                .iter()
+                .max_by_key(|(_, version)| *version)
+                .expect("release tag list should not be empty");
+            return Ok((name.clone(), oid));
         }
     }
 
-    match latest {
-        Some((name, oid, _)) => Ok((name, oid)),
-        None => Err("no git tags found, please create a tag first".to_string()),
-    }
+    Err("no semantic version git tags found reachable from HEAD".to_string())
 }
 
 pub fn get_impact(
@@ -99,12 +128,10 @@ pub fn get_impact(
             .find_commit(oid)
             .map_err(|e| format!("failed to load commit {oid}: {e}"))?;
 
-        let Some(summary) = commit
-            .summary()
-            .map_err(|e| format!("failed to read commit {oid} summary: {e}"))?
-        else {
-            continue;
-        };
+        let message = commit
+            .message()
+            .map_err(|e| format!("failed to read commit {oid} message: {e}"))?;
+        let summary = message.lines().next().unwrap_or("");
 
         let Some((prefix, _)) = summary.split_once(':') else {
             continue;
@@ -122,7 +149,10 @@ pub fn get_impact(
             continue;
         }
 
-        if prefix.trim_end().ends_with('!') || major_types.contains(&typ.to_ascii_lowercase()) {
+        if prefix.trim_end().ends_with('!')
+            || has_breaking_change_footer(message)
+            || major_types.contains(&typ.to_ascii_lowercase())
+        {
             impact = Some(Impact::Major);
             break;
         }
@@ -140,6 +170,13 @@ pub fn get_impact(
     }
 
     Ok(impact)
+}
+
+fn has_breaking_change_footer(message: &str) -> bool {
+    message.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("BREAKING CHANGE:") || trimmed.starts_with("BREAKING-CHANGE:")
+    })
 }
 
 pub fn list_tracked_files_under(
@@ -587,6 +624,83 @@ mod tests {
             index.add_path(Path::new(path)).expect("add index path");
         }
         index.write().expect("write git index");
+    }
+
+    fn commit_file(
+        repo: &Repository,
+        dir: &Path,
+        name: &str,
+        contents: &str,
+        message: &str,
+    ) -> Oid {
+        std::fs::write(dir.join(name), contents).expect("write test file");
+        let mut index = repo.index().expect("open git index");
+        index.add_path(Path::new(name)).expect("add index path");
+        index.write().expect("write git index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("find tree");
+        let sig = git2::Signature::now("Bumper Test", "bumper@example.com").expect("signature");
+        let parents = repo
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_commit().ok())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let parent_refs = parents.iter().collect::<Vec<_>>();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .expect("commit")
+    }
+
+    fn lightweight_tag(repo: &Repository, name: &str, oid: Oid) {
+        let commit = repo.find_commit(oid).expect("find commit");
+        repo.tag_lightweight(name, commit.as_object(), false)
+            .expect("create lightweight tag");
+    }
+
+    #[test]
+    fn latest_tag_uses_nearest_reachable_semver_tag() {
+        let dir = temp_path("latest-semver-tag");
+        let repo = Repository::init(&dir).expect("init repo");
+        let first = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        lightweight_tag(&repo, "v0.1.0", first);
+        let second = commit_file(&repo, &dir, "README.md", "two", "fix: bug");
+        lightweight_tag(&repo, "deploy-2026-06-02", second);
+        let _third = commit_file(&repo, &dir, "README.md", "three", "feat: feature");
+
+        let (name, oid) = latest_tag(&repo).expect("find latest tag");
+
+        assert_eq!(name, "v0.1.0");
+        assert_eq!(oid, first);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn impact_detects_breaking_change_footer() {
+        let dir = temp_path("breaking-footer");
+        let repo = Repository::init(&dir).expect("init repo");
+        let first = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        lightweight_tag(&repo, "v0.1.0", first);
+        commit_file(
+            &repo,
+            &dir,
+            "README.md",
+            "two",
+            "feat: change API\n\nBREAKING CHANGE: response shape changed",
+        );
+
+        let impact = get_impact(
+            &repo,
+            first,
+            &HashSet::from(["breaking change".to_string()]),
+            &HashSet::from(["feat".to_string()]),
+            &HashSet::from(["fix".to_string()]),
+            &HashSet::new(),
+            false,
+        )
+        .expect("get impact");
+
+        assert_eq!(impact, Some(Impact::Major));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

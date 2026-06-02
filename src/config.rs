@@ -119,6 +119,7 @@ fn resolve_bool(flag: bool, no_flag: bool, env_name: &str, default: bool) -> boo
 
 fn parse_bool_env(name: &str, default: bool) -> bool {
     match env::var(name) {
+        Ok(value) if value.trim().is_empty() => default,
         Ok(value) => matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
@@ -129,7 +130,10 @@ fn parse_bool_env(name: &str, default: bool) -> bool {
 
 fn parse_list_env(name: &str) -> Vec<PathBuf> {
     match env::var(name) {
-        Ok(raw) => split_list(&raw).into_iter().map(PathBuf::from).collect(),
+        Ok(raw) => split_path_list(&raw)
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
         Err(_) => Vec::new(),
     }
 }
@@ -137,9 +141,10 @@ fn parse_list_env(name: &str) -> Vec<PathBuf> {
 fn parse_lower_set_or_default(name: &str, defaults: &[&str]) -> HashSet<String> {
     match env::var(name) {
         Ok(raw) => {
-            let parsed: Vec<String> = split_list(&raw)
+            let parsed: Vec<String> = split_config_list(&raw)
                 .into_iter()
-                .map(|item| item.to_ascii_lowercase())
+                .map(|item| item.trim().to_ascii_lowercase())
+                .filter(|item| !item.is_empty())
                 .collect();
 
             if parsed.is_empty() {
@@ -152,7 +157,7 @@ fn parse_lower_set_or_default(name: &str, defaults: &[&str]) -> HashSet<String> 
     }
 }
 
-fn split_list(value: &str) -> Vec<String> {
+fn split_path_list(value: &str) -> Vec<String> {
     if value.contains('\n') {
         value
             .lines()
@@ -167,5 +172,53 @@ fn split_list(value: &str) -> Vec<String> {
             .filter(|item| !item.is_empty())
             .map(ToOwned::to_owned)
             .collect()
+    }
+}
+
+fn split_config_list(value: &str) -> Vec<String> {
+    if value.contains('\n') {
+        return value
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+
+    if value.contains(',') {
+        return value
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
+    }
+
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Vec::new()
+    } else {
+        vec![trimmed.to_string()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_lists_preserve_single_values_with_spaces() {
+        assert_eq!(
+            split_config_list("BREAKING CHANGE"),
+            vec!["BREAKING CHANGE".to_string()]
+        );
+        assert_eq!(
+            split_config_list("feat,fix"),
+            vec!["feat".to_string(), "fix".to_string()]
+        );
+        assert_eq!(
+            split_config_list("feat\nfix"),
+            vec!["feat".to_string(), "fix".to_string()]
+        );
     }
 }
