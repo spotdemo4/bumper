@@ -38,4 +38,3 @@ jobs:
           FORCE: ${{ inputs.force }}
           PATHS: |
             action.yaml
-            README.md
