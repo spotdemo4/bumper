@@ -1,6 +1,6 @@
 [package]
 name = "test"
-version = "0.17.2"
+version = "0.18.0"
 edition = "2024"
 
 [[bin]]
