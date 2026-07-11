@@ -123,6 +123,53 @@ fn gleam_case_updates_gleam_toml() {
 }
 
 #[test]
+fn gradle_case_updates_project_versions() {
+    let dir = copy_fixture("gradle");
+
+    apply_typed_change(&dir.join("build.gradle"), "0.13.0", "0.14.0").expect("bump build.gradle");
+    apply_typed_change(&dir.join("build.gradle.kts"), "0.13.0", "0.14.0")
+        .expect("bump build.gradle.kts");
+    apply_typed_change(&dir.join("gradle.properties"), "0.13.0", "0.14.0")
+        .expect("bump gradle.properties");
+
+    let groovy = fs::read_to_string(dir.join("build.gradle")).expect("read build.gradle");
+    let kotlin = fs::read_to_string(dir.join("build.gradle.kts")).expect("read build.gradle.kts");
+    let properties =
+        fs::read_to_string(dir.join("gradle.properties")).expect("read gradle.properties");
+
+    assert!(groovy.contains("version = '0.14.0' // project version"));
+    assert!(groovy.contains("id 'com.example.fixture' version '0.13.0'"));
+    assert!(groovy.contains("    version = '0.13.0'"));
+    assert!(groovy.contains("versionName = '0.13.0'"));
+    assert!(groovy.contains("versionCode = 13"));
+    assert!(groovy.contains("implementation 'com.example:dependency:0.13.0'"));
+    assert!(kotlin.contains("version = \"0.14.0\" // project version"));
+    assert!(kotlin.contains("id(\"com.example.fixture\") version \"0.13.0\""));
+    assert!(kotlin.contains("    version = \"0.13.0\""));
+    assert!(kotlin.contains("versionName = \"0.13.0\""));
+    assert!(kotlin.contains("versionCode = 13"));
+    assert!(kotlin.contains("implementation(\"com.example:dependency:0.13.0\")"));
+    assert!(properties.contains("version = 0.14.0"));
+    assert!(properties.contains("dependencyVersion=0.13.0"));
+
+    assert_eq!(
+        apply_typed_change(&dir.join("build.gradle"), "0.13.0", "0.15.0")
+            .expect("skip mismatched build.gradle version"),
+        TypedChange::Unchanged
+    );
+    assert_eq!(
+        apply_typed_change(&dir.join("build.gradle.kts"), "0.13.0", "0.15.0")
+            .expect("skip mismatched build.gradle.kts version"),
+        TypedChange::Unchanged
+    );
+    assert_eq!(
+        apply_typed_change(&dir.join("gradle.properties"), "0.13.0", "0.15.0")
+            .expect("skip mismatched gradle.properties version"),
+        TypedChange::Unchanged
+    );
+}
+
+#[test]
 fn cmake_case_updates_project_version() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

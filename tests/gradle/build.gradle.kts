@@ -1,0 +1,22 @@
+plugins {
+    java
+    id("com.example.fixture") version "0.13.0"
+}
+
+fixtureExtension {
+    version = "0.13.0"
+}
+
+android {
+    defaultConfig {
+        versionName = "0.13.0"
+        versionCode = 13
+    }
+}
+
+group = "com.example"
+version = "0.13.0" // project version
+
+dependencies {
+    implementation("com.example:dependency:0.13.0")
+}

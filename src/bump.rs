@@ -40,6 +40,9 @@ pub fn apply_typed_change(
         "action.yml" => replace_literal(file, old_version, new_version),
         "package.json" => bump_package_json(file, new_version),
         "package-lock.json" => bump_package_lock_json(file, new_version),
+        "build.gradle" => bump_gradle_build(file, old_version, new_version),
+        "build.gradle.kts" => bump_gradle_build(file, old_version, new_version),
+        "gradle.properties" => bump_gradle_properties(file, old_version, new_version),
         "CMakeLists.txt" => bump_cmake_lists(file, new_version),
         "Cargo.toml" => bump_toml_path(file, &["package", "version"], new_version),
         "pyproject.toml" => bump_toml_path(file, &["project", "version"], new_version),
@@ -163,6 +166,28 @@ fn replace_line_value(file: &Path, key: &str, new_version: &str) -> AppResult<bo
 fn bump_package_json(file: &Path, new_version: &str) -> AppResult<bool> {
     let re = Regex::new(r#"(?m)^(\s*)"version":\s*"[^"]*"(,?)$"#).unwrap();
     regex_replace_file(file, &re, &format!(r#"${{1}}"version": "{new_version}"$2"#))
+}
+
+fn bump_gradle_build(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
+    let re = Regex::new(&format!(
+        r#"(?m)^(version[ \t]*=[ \t]*)(["']){}(["'])([^\r\n]*)$"#,
+        regex::escape(old_version)
+    ))
+    .unwrap();
+    regex_replace_file(
+        file,
+        &re,
+        &format!(r#"${{1}}${{2}}{new_version}${{3}}${{4}}"#),
+    )
+}
+
+fn bump_gradle_properties(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
+    let re = Regex::new(&format!(
+        r#"(?m)^([ \t]*version[ \t]*=[ \t]*){}([ \t]*)$"#,
+        regex::escape(old_version)
+    ))
+    .unwrap();
+    regex_replace_file(file, &re, &format!(r#"${{1}}{new_version}${{2}}"#))
 }
 
 fn bump_package_lock_json(file: &Path, new_version: &str) -> AppResult<bool> {
