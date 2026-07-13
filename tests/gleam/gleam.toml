@@ -2,7 +2,7 @@
 # https://gleam.run/writing-gleam/gleam-toml/
 
 name = "template"
-version = "0.18.1"
+version = "0.19.0"
 description = "gleam template"
 licences = ["MIT"]
 
