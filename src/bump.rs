@@ -170,15 +170,21 @@ fn bump_package_json(file: &Path, new_version: &str) -> AppResult<bool> {
 
 fn bump_gradle_build(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
     let re = Regex::new(&format!(
-        r#"(?m)^(version[ \t]*=[ \t]*)(["']){}(["'])([^\r\n]*)$"#,
+        r#"(?m)^([ \t]*version[ \t]*=[ \t]*)(["']){}(["'])([^\r\n]*)$"#,
         regex::escape(old_version)
     ))
     .unwrap();
-    regex_replace_file(
-        file,
-        &re,
-        &format!(r#"${{1}}${{2}}{new_version}${{3}}${{4}}"#),
-    )
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    let replacement = format!(r#"${{1}}${{2}}{new_version}${{3}}${{4}}"#);
+    match re.replace_all(&source, replacement.as_str()) {
+        Cow::Borrowed(_) => Ok(false),
+        Cow::Owned(replaced) => {
+            fs::write(file, replaced)
+                .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            Ok(true)
+        }
+    }
 }
 
 fn bump_gradle_properties(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {

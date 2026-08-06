@@ -139,13 +139,13 @@ fn gradle_case_updates_project_versions() {
 
     assert!(groovy.contains("version = '0.14.0' // project version"));
     assert!(groovy.contains("id 'com.example.fixture' version '0.13.0'"));
-    assert!(groovy.contains("    version = '0.13.0'"));
+    assert!(groovy.contains("    version = '0.14.0'"));
     assert!(groovy.contains("versionName = '0.13.0'"));
     assert!(groovy.contains("versionCode = 13"));
     assert!(groovy.contains("implementation 'com.example:dependency:0.13.0'"));
     assert!(kotlin.contains("version = \"0.14.0\" // project version"));
     assert!(kotlin.contains("id(\"com.example.fixture\") version \"0.13.0\""));
-    assert!(kotlin.contains("    version = \"0.13.0\""));
+    assert!(kotlin.contains("    version = \"0.14.0\""));
     assert!(kotlin.contains("versionName = \"0.13.0\""));
     assert!(kotlin.contains("versionCode = 13"));
     assert!(kotlin.contains("implementation(\"com.example:dependency:0.13.0\")"));
