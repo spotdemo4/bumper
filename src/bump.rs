@@ -35,7 +35,6 @@ pub fn apply_typed_change(
 
     let changed = match name {
         "README.md" => replace_literal(file, old_version, new_version),
-        "flake.nix" => replace_literal(file, old_version, new_version),
         "action.yaml" => replace_literal(file, old_version, new_version),
         "action.yml" => replace_literal(file, old_version, new_version),
         "package.json" => bump_package_json(file, new_version),
@@ -56,6 +55,7 @@ pub fn apply_typed_change(
         }
         "build.zig.zon" => replace_line_value(file, ".version", new_version),
         "gleam.toml" => bump_toml_path(file, &["version"], new_version),
+        _ if name.ends_with(".nix") => bump_nix_version(file, old_version, new_version),
         _ => return Ok(TypedChange::Unhandled),
     }?;
 
@@ -273,6 +273,27 @@ fn bump_cmake_lists(file: &Path, new_version: &str) -> AppResult<bool> {
     )
     .unwrap();
     regex_replace_file(file, &re, &format!("${{1}}${{2}}{new_version}${{4}}${{5}}"))
+}
+
+fn bump_nix_version(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
+    // Matches `version = "0.1.0";` with flexible whitespace, preserving
+    // the prefix (`version = "`) and suffix (`";`) formatting.
+    let re = Regex::new(&format!(
+        r#"(\bversion\s*=\s*"){}("\s*;?)"#,
+        regex::escape(old_version)
+    ))
+    .unwrap();
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    let replacement = format!(r"${{1}}{new_version}${{2}}");
+    match re.replace_all(&source, replacement.as_str()) {
+        Cow::Borrowed(_) => Ok(false),
+        Cow::Owned(replaced) => {
+            fs::write(file, replaced)
+                .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            Ok(true)
+        }
+    }
 }
 
 fn bump_toml_path(file: &Path, path: &[&str], new_version: &str) -> AppResult<bool> {
