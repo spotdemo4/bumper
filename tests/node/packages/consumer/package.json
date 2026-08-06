@@ -1,0 +1,17 @@
+{
+  "name": "consumer",
+  "version": "0.20.0",
+  "dependencies": {
+    "other": "1.0.0",
+    "test": "^0.20.0"
+  },
+  "devDependencies": {
+    "test": "0.20.0"
+  },
+  "peerDependencies": {
+    "test": "~0.20.0"
+  },
+  "optionalDependencies": {
+    "test": ">=0.20.0"
+  }
+}

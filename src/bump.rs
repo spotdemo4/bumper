@@ -1,8 +1,10 @@
 use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 use regex::Regex;
+use serde_json::Value;
 
 type AppResult<T> = Result<T, String>;
 
@@ -60,6 +62,261 @@ pub fn apply_typed_change(
     }?;
 
     Ok(TypedChange::from_changed(changed))
+}
+
+pub fn package_name_for_file(file: &Path) -> Option<String> {
+    let name = file.file_name().and_then(|n| n.to_str())?;
+    match name {
+        "package.json" | "package-lock.json" => read_package_json_name(file),
+        "Cargo.toml" => read_toml_name(file, "package").ok(),
+        "pyproject.toml" => read_toml_name(file, "project").ok(),
+        "Cargo.lock" => {
+            let cargo_toml = file.with_file_name("Cargo.toml");
+            read_toml_name(&cargo_toml, "package").ok()
+        }
+        "uv.lock" => {
+            let pyproject = file.with_file_name("pyproject.toml");
+            read_toml_name(&pyproject, "project").ok()
+        }
+        _ => None,
+    }
+}
+
+fn read_package_json_name(path: &Path) -> Option<String> {
+    let source = fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&source).ok()?;
+    value.get("name")?.as_str().map(|s| s.to_string())
+}
+
+/// Second-pass bump: for a `package.json` file, update any `dependencies`,
+/// `devDependencies`, `peerDependencies`, `optionalDependencies`,
+/// `bundledDependencies`, `bundleDependencies`, `overrides`, or
+/// `resolutions` entries whose version string contains `old_version`
+/// for a package name that was bumped in the first pass.
+///
+/// Preserves original formatting by operating on raw text with regexes
+/// rather than re-serializing JSON.
+pub fn bump_package_json_dependencies(
+    file: &Path,
+    bumped: &HashMap<String, (String, String)>,
+) -> AppResult<bool> {
+    if bumped.is_empty() {
+        return Ok(false);
+    }
+    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if file_name != "package.json" {
+        return Ok(false);
+    }
+
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+
+    // Parse to determine which dependency names actually appear in
+    // dependency sections and whose version contains the old string.
+    let value: Value = match serde_json::from_str(&source) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    let Value::Object(map) = value else {
+        return Ok(false);
+    };
+
+    const DEP_SECTIONS: &[&str] = &[
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+        "bundledDependencies",
+        "bundleDependencies",
+        "overrides",
+        "resolutions",
+    ];
+
+    let mut to_update: HashSet<String> = HashSet::new();
+    for (pkg_name, (old_version, _new_version)) in bumped {
+        for section in DEP_SECTIONS {
+            if let Some(Value::Object(deps)) = map.get(*section)
+                && let Some(Value::String(ver)) = deps.get(pkg_name)
+                && ver.contains(old_version)
+            {
+                to_update.insert(pkg_name.clone());
+                break;
+            }
+        }
+        // Also handle `overrides`/`resolutions` that may be nested one level deeper?
+        // For simplicity, if not found at top-level, scan recursively for any object value
+        // that contains the package name as key with a string version containing old_version.
+        if !to_update.contains(pkg_name)
+            && json_contains_dep(&Value::Object(map.clone()), pkg_name, old_version)
+        {
+            to_update.insert(pkg_name.clone());
+        }
+    }
+
+    if to_update.is_empty() {
+        return Ok(false);
+    }
+
+    let mut content = source.clone();
+    let mut changed_any = false;
+
+    for pkg_name in to_update {
+        let Some((old_version, new_version)) = bumped.get(&pkg_name) else {
+            continue;
+        };
+        if old_version == new_version {
+            continue;
+        }
+        let escaped = regex::escape(&pkg_name);
+        // Captures: 1 = `"pkg" \s*:\s*"` (including opening quote of value), 2 = version content, 3 = closing quote
+        let pattern = format!(r#"("{escaped}"\s*:\s*")([^"]*)(")"#);
+        let re = Regex::new(&pattern).unwrap();
+
+        let new_content = re
+            .replace_all(&content, |caps: &regex::Captures| {
+                let prefix = &caps[1];
+                let version = &caps[2];
+                let suffix = &caps[3];
+                if version.contains(old_version) {
+                    let new_ver = version.replace(old_version, new_version);
+                    format!("{prefix}{new_ver}{suffix}")
+                } else {
+                    caps[0].to_string()
+                }
+            })
+            .into_owned();
+
+        if new_content != content {
+            content = new_content;
+            changed_any = true;
+        }
+    }
+
+    if !changed_any || content == source {
+        return Ok(false);
+    }
+
+    fs::write(file, content).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    Ok(true)
+}
+
+fn json_contains_dep(value: &Value, pkg_name: &str, old_version: &str) -> bool {
+    match value {
+        Value::Object(map) => {
+            for (k, v) in map {
+                if k == pkg_name
+                    && let Value::String(s) = v
+                    && s.contains(old_version)
+                {
+                    return true;
+                }
+                if json_contains_dep(v, pkg_name, old_version) {
+                    return true;
+                }
+            }
+            false
+        }
+        Value::Array(arr) => arr
+            .iter()
+            .any(|v| json_contains_dep(v, pkg_name, old_version)),
+        _ => false,
+    }
+}
+
+/// Second-pass bump for `package-lock.json`: update `packages["node_modules/<name>"].version`
+/// and legacy `dependencies["<name>"].version` entries whose version exactly matches
+/// `old_version` for a bumped package.
+pub fn bump_package_lock_dependencies(
+    file: &Path,
+    bumped: &HashMap<String, (String, String)>,
+) -> AppResult<bool> {
+    if bumped.is_empty() {
+        return Ok(false);
+    }
+    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if file_name != "package-lock.json" {
+        return Ok(false);
+    }
+
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+
+    let mut value: Value = match serde_json::from_str(&source) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    let Value::Object(root) = &mut value else {
+        return Ok(false);
+    };
+
+    let mut changed = false;
+
+    // Update `packages` map (lockfileVersion 2/3)
+    if let Some(Value::Object(packages)) = root.get_mut("packages") {
+        for (key, pkg_val) in packages.iter_mut() {
+            if key.is_empty() {
+                continue;
+            }
+            let Some(obj) = pkg_val.as_object_mut() else {
+                continue;
+            };
+            let Some(Value::String(ver)) = obj.get("version") else {
+                continue;
+            };
+            for (pkg_name, (old_version, new_version)) in bumped {
+                if ver != old_version {
+                    continue;
+                }
+                let matches = key == &format!("node_modules/{pkg_name}")
+                    || key.ends_with(&format!("/{pkg_name}"));
+                if matches {
+                    obj.insert("version".to_string(), Value::String(new_version.clone()));
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Update legacy `dependencies` map (lockfileVersion 1) recursively
+    if let Some(Value::Object(deps)) = root.get_mut("dependencies") {
+        update_lock_dependencies_map(deps, bumped, &mut changed);
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+
+    let serialized = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("failed to serialize '{}': {e}", file.display()))?;
+    let mut written = serialized;
+    if !written.ends_with('\n') {
+        written.push('\n');
+    }
+    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    Ok(true)
+}
+
+fn update_lock_dependencies_map(
+    map: &mut serde_json::Map<String, Value>,
+    bumped: &HashMap<String, (String, String)>,
+    changed: &mut bool,
+) {
+    for (dep_name, dep_val) in map.iter_mut() {
+        if let Some((old_version, new_version)) = bumped.get(dep_name)
+            && let Some(obj) = dep_val.as_object_mut()
+            && let Some(Value::String(ver)) = obj.get("version")
+            && ver == old_version
+        {
+            obj.insert("version".to_string(), Value::String(new_version.clone()));
+            *changed = true;
+        }
+        if let Some(obj) = dep_val.as_object_mut()
+            && let Some(Value::Object(nested)) = obj.get_mut("dependencies")
+        {
+            update_lock_dependencies_map(nested, bumped, changed);
+        }
+    }
 }
 
 fn read_toml_name(path: &Path, section: &str) -> AppResult<String> {
@@ -359,5 +616,379 @@ fn replace_toml_section_key_line(
                 .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
             Ok(true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("bumper-bump-{name}-{nanos}"))
+    }
+
+    fn write_package_json(dir: &std::path::Path, content: &str) -> std::path::PathBuf {
+        fs::create_dir_all(dir).expect("create dir");
+        let path = dir.join("package.json");
+        fs::write(&path, content).expect("write package.json");
+        path
+    }
+
+    #[test]
+    fn bump_package_json_deps_updates_all_dependency_sections() {
+        let dir = temp_path("deps-all-sections");
+        let path = write_package_json(
+            &dir,
+            r#"{
+  "name": "app",
+  "version": "0.13.0",
+  "dependencies": {
+    "@trevrpc/trevrpc-js": "^0.13.0"
+  },
+  "devDependencies": {
+    "@trevrpc/trevrpc-js": "0.13.0"
+  },
+  "peerDependencies": {
+    "@trevrpc/trevrpc-js": "~0.13.0"
+  },
+  "optionalDependencies": {
+    "@trevrpc/trevrpc-js": ">=0.13.0"
+  }
+}"#,
+        );
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "@trevrpc/trevrpc-js".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_json_dependencies(&path, &bumped).expect("bump deps");
+        assert!(changed);
+        let out = fs::read_to_string(&path).expect("read");
+        assert!(out.contains("\"@trevrpc/trevrpc-js\": \"^0.14.0\""));
+        assert!(out.contains("\"@trevrpc/trevrpc-js\": \"0.14.0\""));
+        assert!(out.contains("\"@trevrpc/trevrpc-js\": \"~0.14.0\""));
+        assert!(out.contains("\"@trevrpc/trevrpc-js\": \">=0.14.0\""));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_json_deps_preserves_formatting_and_indentation() {
+        let dir = temp_path("deps-format");
+        let original = "{\n  \"name\": \"app\",\n  \"dependencies\": {\n    \"@trevrpc/trevrpc-js\": \"^0.13.0\"\n  }\n}\n";
+        let path = write_package_json(&dir, original);
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "@trevrpc/trevrpc-js".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        bump_package_json_dependencies(&path, &bumped).expect("bump");
+        let out = fs::read_to_string(&path).expect("read");
+        // Should preserve indentation (2 spaces before key)
+        assert!(out.contains("    \"@trevrpc/trevrpc-js\": \"^0.14.0\""));
+        assert!(!out.contains("0.13.0"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_json_deps_no_change_when_version_not_matching() {
+        let dir = temp_path("deps-no-change");
+        let path = write_package_json(
+            &dir,
+            r#"{
+  "name": "app",
+  "dependencies": {
+    "@trevrpc/trevrpc-js": "^0.12.0",
+    "other": "0.13.0"
+  }
+}"#,
+        );
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "@trevrpc/trevrpc-js".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_json_dependencies(&path, &bumped).expect("bump");
+        assert!(!changed);
+        let out = fs::read_to_string(&path).expect("read");
+        assert!(out.contains("^0.12.0"));
+        assert!(!out.contains("0.14.0"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_json_deps_handles_multiple_bumped_packages() {
+        let dir = temp_path("deps-multi");
+        let path = write_package_json(
+            &dir,
+            r#"{
+  "dependencies": {
+    "pkg-a": "0.13.0",
+    "pkg-b": "^0.13.0"
+  }
+}"#,
+        );
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "pkg-a".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        bumped.insert(
+            "pkg-b".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_json_dependencies(&path, &bumped).expect("bump");
+        assert!(changed);
+        let out = fs::read_to_string(&path).expect("read");
+        assert!(out.contains("\"pkg-a\": \"0.14.0\""));
+        assert!(out.contains("\"pkg-b\": \"^0.14.0\""));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_json_deps_overrides_and_resolutions() {
+        let dir = temp_path("deps-overrides");
+        let path = write_package_json(
+            &dir,
+            r#"{
+  "overrides": {
+    "@trevrpc/trevrpc-js": "0.13.0"
+  },
+  "resolutions": {
+    "@trevrpc/trevrpc-js": "^0.13.0"
+  }
+}"#,
+        );
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "@trevrpc/trevrpc-js".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_json_dependencies(&path, &bumped).expect("bump");
+        assert!(changed);
+        let out = fs::read_to_string(&path).expect("read");
+        assert!(out.contains("\"@trevrpc/trevrpc-js\": \"0.14.0\""));
+        assert!(out.contains("\"@trevrpc/trevrpc-js\": \"^0.14.0\""));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn package_name_for_file_reads_package_json() {
+        let dir = temp_path("pkg-name");
+        let path = write_package_json(&dir, r#"{"name":"@trevrpc/trevrpc-js","version":"0.13.0"}"#);
+        assert_eq!(
+            package_name_for_file(&path),
+            Some("@trevrpc/trevrpc-js".to_string())
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_json_deps_ignores_non_package_json() {
+        let dir = temp_path("deps-ignore");
+        fs::create_dir_all(&dir).expect("create");
+        let path = dir.join("other.json");
+        fs::write(&path, r#"{"dependencies":{"pkg-a":"0.13.0"}}"#).expect("write");
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "pkg-a".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_json_dependencies(&path, &bumped).expect("bump");
+        assert!(!changed);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    fn write_package_lock(dir: &std::path::Path, content: &str) -> std::path::PathBuf {
+        fs::create_dir_all(dir).expect("create dir");
+        let path = dir.join("package-lock.json");
+        fs::write(&path, content).expect("write lock");
+        path
+    }
+
+    #[test]
+    fn bump_package_lock_deps_updates_packages() {
+        let dir = temp_path("lock-packages");
+        let path = write_package_lock(
+            &dir,
+            r#"{
+  "name": "test",
+  "version": "0.13.0",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {
+      "name": "test",
+      "version": "0.13.0"
+    },
+    "node_modules/pkg-a": {
+      "version": "0.13.0"
+    },
+    "node_modules/pkg-b": {
+      "version": "0.13.0"
+    },
+    "node_modules/other": {
+      "version": "0.13.0"
+    }
+  }
+}"#,
+        );
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "pkg-a".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_lock_dependencies(&path, &bumped).expect("bump");
+        assert!(changed);
+        let out = fs::read_to_string(&path).expect("read");
+        let v: Value = serde_json::from_str(&out).expect("parse");
+        assert_eq!(
+            v["packages"]["node_modules/pkg-a"]["version"]
+                .as_str()
+                .unwrap(),
+            "0.14.0"
+        );
+        assert_eq!(
+            v["packages"]["node_modules/pkg-b"]["version"]
+                .as_str()
+                .unwrap(),
+            "0.13.0"
+        );
+        assert_eq!(
+            v["packages"]["node_modules/other"]["version"]
+                .as_str()
+                .unwrap(),
+            "0.13.0"
+        );
+        assert_eq!(v["packages"][""]["version"].as_str().unwrap(), "0.13.0");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_lock_deps_handles_scoped_packages() {
+        let dir = temp_path("lock-scoped");
+        let path = write_package_lock(
+            &dir,
+            r#"{
+  "packages": {
+    "": {"version": "0.13.0"},
+    "node_modules/@trevrpc/trevrpc-js": {
+      "version": "0.13.0"
+    },
+    "node_modules/@trevrpc/trevrpc-js/node_modules/other": {
+      "version": "1.0.0"
+    }
+  }
+}"#,
+        );
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "@trevrpc/trevrpc-js".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_lock_dependencies(&path, &bumped).expect("bump");
+        assert!(changed);
+        let out = fs::read_to_string(&path).expect("read");
+        let v: Value = serde_json::from_str(&out).expect("parse");
+        assert_eq!(
+            v["packages"]["node_modules/@trevrpc/trevrpc-js"]["version"]
+                .as_str()
+                .unwrap(),
+            "0.14.0"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_lock_deps_updates_legacy_dependencies() {
+        let dir = temp_path("lock-legacy");
+        let path = write_package_lock(
+            &dir,
+            r#"{
+  "dependencies": {
+    "pkg-a": {
+      "version": "0.13.0",
+      "dependencies": {
+        "pkg-a": {
+          "version": "0.13.0"
+        }
+      }
+    },
+    "pkg-b": {
+      "version": "0.13.0"
+    }
+  }
+}"#,
+        );
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "pkg-a".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_lock_dependencies(&path, &bumped).expect("bump");
+        assert!(changed);
+        let out = fs::read_to_string(&path).expect("read");
+        let v: Value = serde_json::from_str(&out).expect("parse");
+        assert_eq!(
+            v["dependencies"]["pkg-a"]["version"].as_str().unwrap(),
+            "0.14.0"
+        );
+        assert_eq!(
+            v["dependencies"]["pkg-a"]["dependencies"]["pkg-a"]["version"]
+                .as_str()
+                .unwrap(),
+            "0.14.0"
+        );
+        assert_eq!(
+            v["dependencies"]["pkg-b"]["version"].as_str().unwrap(),
+            "0.13.0"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_lock_deps_no_change_when_version_not_matching() {
+        let dir = temp_path("lock-no-change");
+        let path = write_package_lock(
+            &dir,
+            r#"{
+  "packages": {
+    "node_modules/pkg-a": {"version": "0.12.0"}
+  }
+}"#,
+        );
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "pkg-a".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_lock_dependencies(&path, &bumped).expect("bump");
+        assert!(!changed);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_lock_deps_ignores_non_lock() {
+        let dir = temp_path("lock-ignore");
+        fs::create_dir_all(&dir).expect("create");
+        let path = dir.join("other.json");
+        fs::write(
+            &path,
+            r#"{"packages":{"node_modules/pkg-a":{"version":"0.13.0"}}}"#,
+        )
+        .expect("write");
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "pkg-a".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        );
+        let changed = bump_package_lock_dependencies(&path, &bumped).expect("bump");
+        assert!(!changed);
+        let _ = fs::remove_dir_all(dir);
     }
 }

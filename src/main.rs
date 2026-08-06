@@ -3,11 +3,15 @@ mod git_ops;
 mod model;
 mod versioning;
 
-use bumper::bump::{TypedChange, apply_typed_change};
-use git2::Repository;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
+
+use bumper::bump::{
+    TypedChange, apply_typed_change, bump_package_json_dependencies, bump_package_lock_dependencies,
+};
+use git2::Repository;
 
 use config::load_config;
 use git_ops::{
@@ -99,6 +103,43 @@ fn run() -> AppResult<()> {
                 "warning: file or directory not found: {}",
                 absolute.display()
             );
+        }
+    }
+
+    // Second pass: collect bumped package names and propagate version bumps
+    // to dependencies in other `package.json` files.
+    let staged = staged_files(&repo)?;
+    let mut bumped: HashMap<String, (String, String)> = HashMap::new();
+    for rel in &staged {
+        let abs = repo_root.join(rel);
+        if let Some(name) = bumper::bump::package_name_for_file(&abs) {
+            bumped
+                .entry(name)
+                .or_insert_with(|| (last_version.clone(), next_version.clone()));
+        }
+    }
+
+    if !bumped.is_empty() {
+        println!(
+            "propagating version bumps for {} package(s) to package.json and package-lock.json dependencies...",
+            bumped.len()
+        );
+        let all_files = list_tracked_files_under(&repo, &repo_root, &repo_root)?;
+        for abs in all_files {
+            let file_name = abs.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let result = match file_name {
+                "package.json" => bump_package_json_dependencies(&abs, &bumped),
+                "package-lock.json" => bump_package_lock_dependencies(&abs, &bumped),
+                _ => continue,
+            };
+            match result {
+                Ok(true) => {
+                    println!("updated dependencies in {}", abs.display());
+                    stage_path(&repo, &repo_root, &abs)?;
+                }
+                Ok(false) => {}
+                Err(e) => eprintln!("warning: {e}"),
+            }
         }
     }
 

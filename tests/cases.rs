@@ -2,7 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bumper::bump::{TypedChange, apply_typed_change};
+use std::collections::HashMap;
+
+use bumper::bump::{
+    TypedChange, apply_typed_change, bump_package_json_dependencies, bump_package_lock_dependencies,
+};
 
 fn copy_fixture(case_name: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -47,6 +51,90 @@ fn node_case_updates_package_files() {
 
     assert!(package_json.contains("\"version\": \"0.14.0\""));
     assert!(package_lock.contains("\"version\": \"0.14.0\""));
+}
+
+#[test]
+fn node_subpackage_propagates_dependency_versions() {
+    let dir = copy_fixture("node");
+
+    // Simulate first-pass bump of the root package `test` from 0.20.0 -> 0.21.0
+    apply_typed_change(&dir.join("package.json"), "0.20.0", "0.21.0")
+        .expect("bump root package.json");
+    apply_typed_change(&dir.join("package-lock.json"), "0.20.0", "0.21.0")
+        .expect("bump root package-lock.json");
+    // Also bump the sub-package's own version (mirrors first-pass directory scan)
+    apply_typed_change(
+        &dir.join("packages/consumer/package.json"),
+        "0.20.0",
+        "0.21.0",
+    )
+    .expect("bump consumer package.json");
+
+    // Build bumped map as `main.rs` does after first pass (collect package names)
+    let mut bumped = HashMap::new();
+    bumped.insert(
+        "test".to_string(),
+        ("0.20.0".to_string(), "0.21.0".to_string()),
+    );
+
+    // Second pass: propagate to consumer's dependencies
+    let consumer_pkg = dir.join("packages/consumer/package.json");
+    let changed =
+        bump_package_json_dependencies(&consumer_pkg, &bumped).expect("bump consumer deps");
+    assert!(changed, "consumer dependencies should be updated");
+
+    let consumer_content = fs::read_to_string(&consumer_pkg).expect("read consumer package.json");
+    assert!(
+        consumer_content.contains("\"test\": \"^0.21.0\""),
+        "dependencies '^0.20.0' -> '^0.21.0'"
+    );
+    assert!(
+        consumer_content.contains("\"test\": \"0.21.0\""),
+        "devDependencies '0.20.0' -> '0.21.0'"
+    );
+    assert!(
+        consumer_content.contains("\"test\": \"~0.21.0\""),
+        "peerDependencies '~0.20.0' -> '~0.21.0'"
+    );
+    assert!(
+        consumer_content.contains("\"test\": \">=0.21.0\""),
+        "optionalDependencies '>=0.20.0' -> '>=0.21.0'"
+    );
+    assert!(
+        consumer_content.contains("\"other\": \"1.0.0\""),
+        "unrelated dep should be untouched"
+    );
+    // Ensure version field itself was already bumped and not reverted
+    assert!(consumer_content.contains("\"version\": \"0.21.0\""));
+
+    // Second pass for package-lock.json: bump installed dependency version
+    let lock_path = dir.join("package-lock.json");
+    let changed = bump_package_lock_dependencies(&lock_path, &bumped).expect("bump lock deps");
+    assert!(changed, "lock dependencies should be updated");
+
+    let lock_content = fs::read_to_string(&lock_path).expect("read lock");
+    let v: serde_json::Value = serde_json::from_str(&lock_content).expect("parse lock as json");
+    assert_eq!(
+        v["packages"]["node_modules/test"]["version"]
+            .as_str()
+            .unwrap(),
+        "0.21.0",
+        "packages.node_modules/test version should be bumped"
+    );
+    assert_eq!(
+        v["packages"]["node_modules/other"]["version"]
+            .as_str()
+            .unwrap(),
+        "1.0.0",
+        "unrelated package should be untouched"
+    );
+    assert_eq!(
+        v["dependencies"]["test"]["version"].as_str().unwrap(),
+        "0.21.0",
+        "legacy dependencies.test version should be bumped"
+    );
+    // Root version already bumped by first pass
+    assert_eq!(v["packages"][""]["version"].as_str().unwrap(), "0.21.0");
 }
 
 #[test]
