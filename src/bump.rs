@@ -267,9 +267,13 @@ pub fn bump_package_lock_dependencies(
                 if ver != old_version {
                     continue;
                 }
-                let matches = key == &format!("node_modules/{pkg_name}")
+                let key_matches = key == &format!("node_modules/{pkg_name}")
                     || key.ends_with(&format!("/{pkg_name}"));
-                if matches {
+                let name_matches = obj
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|n| n == pkg_name);
+                if key_matches || name_matches {
                     obj.insert("version".to_string(), Value::String(new_version.clone()));
                     changed = true;
                     break;
@@ -317,6 +321,182 @@ fn update_lock_dependencies_map(
             update_lock_dependencies_map(nested, bumped, changed);
         }
     }
+}
+
+/// Second-pass bump for `Cargo.toml`: update `dependencies`/`dev-dependencies`/
+/// `build-dependencies` (including `workspace.dependencies` and `target.<cfg>.dependencies`)
+/// entries whose `version` matches `old_version` for a bumped crate.
+pub fn bump_cargo_toml_dependencies(
+    file: &Path,
+    bumped: &HashMap<String, (String, String)>,
+) -> AppResult<bool> {
+    if bumped.is_empty() {
+        return Ok(false);
+    }
+    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if file_name != "Cargo.toml" {
+        return Ok(false);
+    }
+
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    let mut doc: toml_edit::DocumentMut = match source.parse() {
+        Ok(d) => d,
+        Err(_) => return Ok(false),
+    };
+
+    let mut changed = false;
+    visit_cargo_toml_table(doc.as_table_mut(), bumped, &mut changed);
+
+    if !changed {
+        return Ok(false);
+    }
+
+    fs::write(file, doc.to_string())
+        .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    Ok(true)
+}
+
+fn visit_cargo_toml_table(
+    table: &mut toml_edit::Table,
+    bumped: &HashMap<String, (String, String)>,
+    changed: &mut bool,
+) {
+    for (key, item) in table.iter_mut() {
+        let key_str = key.to_string();
+        if key_str == "dependencies"
+            || key_str == "dev-dependencies"
+            || key_str == "build-dependencies"
+        {
+            if let Some(dep_table) = item.as_table_mut() {
+                for (dep_name, dep_item) in dep_table.iter_mut() {
+                    let dep_name_str = dep_name.to_string();
+                    if let Some((old_version, new_version)) = bumped.get(&dep_name_str) {
+                        // `dep = "0.0.1"`
+                        if let Some(ver) = dep_item.as_str()
+                            && ver.contains(old_version)
+                        {
+                            let new_ver = ver.replace(old_version, new_version);
+                            *dep_item = toml_edit::Item::Value(toml_edit::Value::String(
+                                toml_edit::Formatted::new(new_ver),
+                            ));
+                            *changed = true;
+                        } else if let Some(inline) = dep_item.as_inline_table_mut()
+                            && let Some(ver_item) = inline.get_mut("version")
+                            && let Some(ver) = ver_item.as_str()
+                            && ver.contains(old_version)
+                        {
+                            let new_ver = ver.replace(old_version, new_version);
+                            *ver_item =
+                                toml_edit::Value::String(toml_edit::Formatted::new(new_ver));
+                            *changed = true;
+                        } else if let Some(tbl) = dep_item.as_table_mut()
+                            && let Some(ver_item) = tbl.get_mut("version")
+                            && let Some(ver) = ver_item.as_str()
+                            && ver.contains(old_version)
+                        {
+                            let new_ver = ver.replace(old_version, new_version);
+                            *ver_item = toml_edit::Item::Value(toml_edit::Value::String(
+                                toml_edit::Formatted::new(new_ver),
+                            ));
+                            *changed = true;
+                        }
+                    }
+                }
+            }
+        } else if let Some(sub_table) = item.as_table_mut() {
+            visit_cargo_toml_table(sub_table, bumped, changed);
+        }
+    }
+}
+
+/// Second-pass bump for `Cargo.lock`: update `dependencies` entries like
+/// `"test 0.0.1 (registry+...)"` inside any `[[package]]` block that references a bumped crate.
+pub fn bump_cargo_lock_dependencies(
+    file: &Path,
+    bumped: &HashMap<String, (String, String)>,
+) -> AppResult<bool> {
+    if bumped.is_empty() {
+        return Ok(false);
+    }
+    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if file_name != "Cargo.lock" {
+        return Ok(false);
+    }
+
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+
+    // Split into segments per `[[package]]` as in `bump_package_in_lock`.
+    let mut segments: Vec<Vec<String>> = vec![Vec::new()];
+    for line in source.lines() {
+        if line.trim() == "[[package]]" {
+            segments.push(vec![line.to_string()]);
+        } else {
+            segments.last_mut().unwrap().push(line.to_string());
+        }
+    }
+
+    let mut changed = false;
+    for segment in &mut segments {
+        // Extract package name for this segment, if any, to handle `version` bump for the package itself.
+        let pkg_name_in_segment = segment.iter().find_map(|l| {
+            let t = l.trim();
+            if t.starts_with("name = \"") && t.ends_with('"') {
+                Some(t["name = \"".len()..t.len() - 1].to_string())
+            } else {
+                None
+            }
+        });
+
+        let mut in_deps = false;
+        for line in segment.iter_mut() {
+            // Bump the package's own `version = "old"` if its name is in `bumped`.
+            if let Some(ref name) = pkg_name_in_segment
+                && let Some((old_version, new_version)) = bumped.get(name)
+                && line.trim() == format!("version = \"{old_version}\"")
+            {
+                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                *line = format!("{indent}version = \"{new_version}\"");
+                changed = true;
+            }
+
+            if line.trim() == "dependencies = [" {
+                in_deps = true;
+                continue;
+            }
+            if in_deps {
+                if line.trim() == "]" {
+                    in_deps = false;
+                    continue;
+                }
+                for (pkg_name, (old_version, new_version)) in bumped {
+                    let needle = format!("\"{pkg_name} {old_version}");
+                    if line.contains(&needle) {
+                        let new_needle = format!("\"{pkg_name} {new_version}");
+                        *line = line.replace(&needle, &new_needle);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+
+    let mut written = segments
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if source.ends_with('\n') {
+        written.push('\n');
+    }
+
+    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    Ok(true)
 }
 
 fn read_toml_name(path: &Path, section: &str) -> AppResult<String> {

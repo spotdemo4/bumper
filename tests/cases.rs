@@ -5,7 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
 
 use bumper::bump::{
-    TypedChange, apply_typed_change, bump_package_json_dependencies, bump_package_lock_dependencies,
+    TypedChange, apply_typed_change, bump_cargo_lock_dependencies, bump_cargo_toml_dependencies,
+    bump_package_json_dependencies, bump_package_lock_dependencies,
 };
 
 fn copy_fixture(case_name: &str) -> PathBuf {
@@ -69,11 +70,21 @@ fn node_subpackage_propagates_dependency_versions() {
         "0.0.2",
     )
     .expect("bump consumer package.json");
+    apply_typed_change(
+        &dir.join("packages/consumer/package-lock.json"),
+        "0.0.1",
+        "0.0.2",
+    )
+    .expect("bump consumer package-lock.json");
 
     // Build bumped map as `main.rs` does after first pass (collect package names)
     let mut bumped = HashMap::new();
     bumped.insert(
         "test".to_string(),
+        ("0.0.1".to_string(), "0.0.2".to_string()),
+    );
+    bumped.insert(
+        "consumer".to_string(),
         ("0.0.1".to_string(), "0.0.2".to_string()),
     );
 
@@ -129,12 +140,46 @@ fn node_subpackage_propagates_dependency_versions() {
         "unrelated package should be untouched"
     );
     assert_eq!(
+        v["packages"]["packages/consumer"]["version"]
+            .as_str()
+            .unwrap(),
+        "0.0.2",
+        "workspace package consumer version should be bumped via name match"
+    );
+    assert_eq!(
         v["dependencies"]["test"]["version"].as_str().unwrap(),
         "0.0.2",
         "legacy dependencies.test version should be bumped"
     );
     // Root version already bumped by first pass
     assert_eq!(v["packages"][""]["version"].as_str().unwrap(), "0.0.2");
+
+    // Also verify the consumer's own package-lock.json
+    let consumer_lock_path = dir.join("packages/consumer/package-lock.json");
+    let changed =
+        bump_package_lock_dependencies(&consumer_lock_path, &bumped).expect("bump consumer lock");
+    assert!(changed, "consumer lock should be updated");
+    let consumer_lock_content =
+        fs::read_to_string(&consumer_lock_path).expect("read consumer lock");
+    let cv: serde_json::Value =
+        serde_json::from_str(&consumer_lock_content).expect("parse consumer lock");
+    assert_eq!(
+        cv["packages"]["node_modules/test"]["version"]
+            .as_str()
+            .unwrap(),
+        "0.0.2",
+        "consumer lock packages.node_modules/test should be bumped"
+    );
+    assert_eq!(
+        cv["dependencies"]["test"]["version"].as_str().unwrap(),
+        "0.0.2",
+        "consumer lock dependencies.test should be bumped"
+    );
+    assert_eq!(
+        cv["packages"][""]["version"].as_str().unwrap(),
+        "0.0.2",
+        "consumer lock root version should be bumped (already via first-pass, remains)"
+    );
 }
 
 #[test]
@@ -176,6 +221,114 @@ fn rust_case_updates_cargo_files() {
     assert!(
         cargo_lock.contains("version = \"0.0.1\""),
         "dep with same old version should not be changed"
+    );
+}
+
+#[test]
+fn rust_subpackage_propagates_dependency_versions() {
+    let dir = copy_fixture("rust");
+
+    // Simulate first-pass bump of the root crate `test` from 0.0.1 -> 0.0.2
+    apply_typed_change(&dir.join("Cargo.toml"), "0.0.1", "0.0.2").expect("bump root Cargo.toml");
+    apply_typed_change(&dir.join("Cargo.lock"), "0.0.1", "0.0.2").expect("bump root Cargo.lock");
+    apply_typed_change(&dir.join("packages/consumer/Cargo.toml"), "0.0.1", "0.0.2")
+        .expect("bump consumer Cargo.toml");
+    apply_typed_change(&dir.join("packages/consumer/Cargo.lock"), "0.0.1", "0.0.2")
+        .expect("bump consumer Cargo.lock");
+
+    let mut bumped = HashMap::new();
+    bumped.insert(
+        "test".to_string(),
+        ("0.0.1".to_string(), "0.0.2".to_string()),
+    );
+    bumped.insert(
+        "consumer".to_string(),
+        ("0.0.1".to_string(), "0.0.2".to_string()),
+    );
+
+    let consumer_toml = dir.join("packages/consumer/Cargo.toml");
+    let changed =
+        bump_cargo_toml_dependencies(&consumer_toml, &bumped).expect("bump consumer deps");
+    assert!(
+        changed,
+        "consumer Cargo.toml dependencies should be updated"
+    );
+
+    let content = fs::read_to_string(&consumer_toml).expect("read consumer Cargo.toml");
+    // `test = { version = "0.0.1", path = "../.." }` -> `version = "0.0.2"`
+    assert!(
+        content.contains("test = { version = \"0.0.2\""),
+        "inline table version should be bumped: {content}"
+    );
+    // `test = "0.0.1"` in dev-dependencies
+    assert!(
+        content.contains("test = \"0.0.2\""),
+        "string dep version should be bumped: {content}"
+    );
+    assert!(
+        content.contains("other = \"1.0.0\""),
+        "unrelated dep should be untouched: {content}"
+    );
+    assert!(content.contains("name = \"consumer\""));
+    assert!(content.contains("version = \"0.0.2\""));
+
+    // Second-pass for Cargo.lock: update consumer's dependencies on `test`
+    // and the consumer's own `version` (since consumer was also bumped via first-pass for its Cargo.toml
+    // but not yet for the lock's `[[package]]` entry).
+    let lock_path = dir.join("Cargo.lock");
+    let changed = bump_cargo_lock_dependencies(&lock_path, &bumped).expect("bump Cargo.lock deps");
+    assert!(changed, "Cargo.lock dependencies should be updated");
+    let lock_content = fs::read_to_string(&lock_path).expect("read Cargo.lock");
+    assert!(
+        lock_content.contains("test 0.0.2"),
+        "lock should contain bumped dependency version: {lock_content}"
+    );
+    // Consumer's own version in the lock should now be bumped via second-pass
+    assert!(
+        lock_content.contains("name = \"consumer\""),
+        "consumer package should exist in lock"
+    );
+    assert!(
+        lock_content.contains("version = \"0.0.2\""),
+        "lock should contain bumped version 0.0.2"
+    );
+    // Dep should remain untouched
+    assert!(
+        lock_content.contains("name = \"dep\""),
+        "dep package should still exist"
+    );
+    // Verify the consumer's dependencies entry specifically
+    assert!(
+        lock_content.contains("\"test 0.0.2\"") || lock_content.contains("test 0.0.2"),
+        "consumer's dependencies should be updated to 0.0.2: {lock_content}"
+    );
+
+    // Also verify the consumer's own Cargo.lock (separate from the workspace root)
+    let consumer_lock_path = dir.join("packages/consumer/Cargo.lock");
+    // Second-pass should bump `test` package version and the dependency string inside consumer's lock
+    let _changed =
+        bump_cargo_lock_dependencies(&consumer_lock_path, &bumped).expect("bump consumer lock");
+    // The consumer lock was already bumped for `consumer` via first-pass, but `test` still needs bump
+    // (first-pass only bumps the package matching the adjacent Cargo.toml).
+    // After second-pass, both should be 0.0.2 and dependencies updated.
+    let consumer_lock_content =
+        fs::read_to_string(&consumer_lock_path).expect("read consumer Cargo.lock");
+    assert!(
+        consumer_lock_content.contains("name = \"consumer\""),
+        "consumer lock should contain consumer package"
+    );
+    assert!(
+        consumer_lock_content.contains("name = \"test\""),
+        "consumer lock should contain test package"
+    );
+    // Both packages' versions should be 0.0.2 after propagation (consumer via first-pass, test via second-pass)
+    assert!(
+        consumer_lock_content.matches("version = \"0.0.2\"").count() >= 2,
+        "consumer Cargo.lock should have both packages bumped to 0.0.2: {consumer_lock_content}"
+    );
+    assert!(
+        consumer_lock_content.contains("test 0.0.2"),
+        "consumer Cargo.lock dependencies should be updated: {consumer_lock_content}"
     );
 }
 

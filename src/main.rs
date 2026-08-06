@@ -9,7 +9,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use bumper::bump::{
-    TypedChange, apply_typed_change, bump_package_json_dependencies, bump_package_lock_dependencies,
+    TypedChange, apply_typed_change, bump_cargo_lock_dependencies, bump_cargo_toml_dependencies,
+    bump_package_json_dependencies, bump_package_lock_dependencies,
 };
 use git2::Repository;
 
@@ -121,7 +122,7 @@ fn run() -> AppResult<()> {
 
     if !bumped.is_empty() {
         println!(
-            "propagating version bumps for {} package(s) to package.json and package-lock.json dependencies...",
+            "propagating version bumps for {} package(s) to package.json, package-lock.json, Cargo.toml and Cargo.lock dependencies...",
             bumped.len()
         );
         let all_files = list_tracked_files_under(&repo, &repo_root, &repo_root)?;
@@ -130,6 +131,8 @@ fn run() -> AppResult<()> {
             let result = match file_name {
                 "package.json" => bump_package_json_dependencies(&abs, &bumped),
                 "package-lock.json" => bump_package_lock_dependencies(&abs, &bumped),
+                "Cargo.toml" => bump_cargo_toml_dependencies(&abs, &bumped),
+                "Cargo.lock" => bump_cargo_lock_dependencies(&abs, &bumped),
                 _ => continue,
             };
             match result {

@@ -131,6 +131,12 @@
                 openssl
               ];
 
+              doCheck = true;
+
+              checkPhase = ''
+                cargo test --offline
+              '';
+
               meta = {
                 mainProgram = "bumper";
                 description = "Git semantic version bumper";
