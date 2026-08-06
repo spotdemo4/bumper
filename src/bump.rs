@@ -451,14 +451,27 @@ pub fn bump_cargo_lock_dependencies(
 
         let mut in_deps = false;
         for line in segment.iter_mut() {
-            // Bump the package's own `version = "old"` if its name is in `bumped`.
+            // Bump the package's own `version = "..."` if its name is in `bumped`.
+            // Update unconditionally when the current version differs from `new_version` so
+            // stale locks (where the on-disk version is behind the tag) are repaired.
             if let Some(ref name) = pkg_name_in_segment
-                && let Some((old_version, new_version)) = bumped.get(name)
-                && line.trim() == format!("version = \"{old_version}\"")
+                && let Some((_, new_version)) = bumped.get(name)
             {
-                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                *line = format!("{indent}version = \"{new_version}\"");
-                changed = true;
+                let trimmed = line.trim();
+                if trimmed.starts_with("version = \"")
+                    && trimmed.ends_with('"')
+                    && let Some(start) = trimmed.find('"')
+                    && let Some(end) = trimmed.rfind('"')
+                    && start != end
+                {
+                    let current = &trimmed[start + 1..end];
+                    if current != new_version {
+                        let indent: String =
+                            line.chars().take_while(|c| c.is_whitespace()).collect();
+                        *line = format!("{indent}version = \"{new_version}\"");
+                        changed = true;
+                    }
+                }
             }
 
             if line.trim() == "dependencies = [" {
@@ -470,12 +483,31 @@ pub fn bump_cargo_lock_dependencies(
                     in_deps = false;
                     continue;
                 }
-                for (pkg_name, (old_version, new_version)) in bumped {
-                    let needle = format!("\"{pkg_name} {old_version}");
-                    if line.contains(&needle) {
-                        let new_needle = format!("\"{pkg_name} {new_version}");
-                        *line = line.replace(&needle, &new_needle);
-                        changed = true;
+                // Update dependency strings like `"pkg 0.1.0"` or `"pkg 0.1.0 (registry+...)"`
+                // by replacing the version token for any bumped package, regardless of
+                // whether the on-disk version matches `old_version` (handles stale locks).
+                if let (Some(f), Some(l)) = (line.find('"'), line.rfind('"'))
+                    && f != l
+                {
+                    let inside = line[f + 1..l].to_string();
+                    let mut tokens = inside.split_whitespace();
+                    if let Some(pkg_token) = tokens.next()
+                        && let Some((_, new_version)) = bumped.get(pkg_token)
+                        && let Some(ver_token) = tokens.next()
+                        && ver_token != new_version
+                    {
+                        let rest: Vec<&str> = tokens.collect();
+                        let new_inside = if rest.is_empty() {
+                            format!("{pkg_token} {new_version}")
+                        } else {
+                            format!("{pkg_token} {new_version} {}", rest.join(" "))
+                        };
+                        if new_inside != inside {
+                            let new_line =
+                                format!("{}{}{}", &line[..f + 1], new_inside, &line[l..]);
+                            *line = new_line;
+                            changed = true;
+                        }
                     }
                 }
             }
@@ -517,7 +549,7 @@ fn read_toml_name(path: &Path, section: &str) -> AppResult<String> {
 /// Used for lock files (`Cargo.lock`, `uv.lock`) that contain one block per package.
 fn bump_package_in_lock(
     file: &Path,
-    old_version: &str,
+    _old_version: &str,
     new_version: &str,
     package_name: &str,
 ) -> AppResult<bool> {
@@ -544,10 +576,21 @@ fn bump_package_in_lock(
 
         if is_target {
             for line in segment.iter_mut() {
-                if line.trim() == format!("version = \"{old_version}\"") {
-                    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                    *line = format!("{indent}version = \"{new_version}\"");
-                    changed = true;
+                let trimmed = line.trim();
+                if trimmed.starts_with("version = \"")
+                    && trimmed.ends_with('"')
+                    && let Some(start) = trimmed.find('"')
+                    && let Some(end) = trimmed.rfind('"')
+                    && start != end
+                {
+                    let current = &trimmed[start + 1..end];
+                    // Update even when `current != _old_version` so stale locks are repaired.
+                    if current != new_version {
+                        let indent: String =
+                            line.chars().take_while(|c| c.is_whitespace()).collect();
+                        *line = format!("{indent}version = \"{new_version}\"");
+                        changed = true;
+                    }
                 }
             }
         }
