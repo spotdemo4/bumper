@@ -41,32 +41,32 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
 fn node_case_updates_package_files() {
     let dir = copy_fixture("node");
 
-    apply_typed_change(&dir.join("package.json"), "0.13.0", "0.14.0").expect("bump package.json");
-    apply_typed_change(&dir.join("package-lock.json"), "0.13.0", "0.14.0")
+    apply_typed_change(&dir.join("package.json"), "0.0.1", "0.0.2").expect("bump package.json");
+    apply_typed_change(&dir.join("package-lock.json"), "0.0.1", "0.0.2")
         .expect("bump package-lock.json");
 
     let package_json = fs::read_to_string(dir.join("package.json")).expect("read package.json");
     let package_lock =
         fs::read_to_string(dir.join("package-lock.json")).expect("read package-lock.json");
 
-    assert!(package_json.contains("\"version\": \"0.14.0\""));
-    assert!(package_lock.contains("\"version\": \"0.14.0\""));
+    assert!(package_json.contains("\"version\": \"0.0.2\""));
+    assert!(package_lock.contains("\"version\": \"0.0.2\""));
 }
 
 #[test]
 fn node_subpackage_propagates_dependency_versions() {
     let dir = copy_fixture("node");
 
-    // Simulate first-pass bump of the root package `test` from 0.20.0 -> 0.21.0
-    apply_typed_change(&dir.join("package.json"), "0.20.0", "0.21.0")
+    // Simulate first-pass bump of the root package `test` from 0.0.1 -> 0.0.2
+    apply_typed_change(&dir.join("package.json"), "0.0.1", "0.0.2")
         .expect("bump root package.json");
-    apply_typed_change(&dir.join("package-lock.json"), "0.20.0", "0.21.0")
+    apply_typed_change(&dir.join("package-lock.json"), "0.0.1", "0.0.2")
         .expect("bump root package-lock.json");
     // Also bump the sub-package's own version (mirrors first-pass directory scan)
     apply_typed_change(
         &dir.join("packages/consumer/package.json"),
-        "0.20.0",
-        "0.21.0",
+        "0.0.1",
+        "0.0.2",
     )
     .expect("bump consumer package.json");
 
@@ -74,7 +74,7 @@ fn node_subpackage_propagates_dependency_versions() {
     let mut bumped = HashMap::new();
     bumped.insert(
         "test".to_string(),
-        ("0.20.0".to_string(), "0.21.0".to_string()),
+        ("0.0.1".to_string(), "0.0.2".to_string()),
     );
 
     // Second pass: propagate to consumer's dependencies
@@ -85,27 +85,27 @@ fn node_subpackage_propagates_dependency_versions() {
 
     let consumer_content = fs::read_to_string(&consumer_pkg).expect("read consumer package.json");
     assert!(
-        consumer_content.contains("\"test\": \"^0.21.0\""),
-        "dependencies '^0.20.0' -> '^0.21.0'"
+        consumer_content.contains("\"test\": \"^0.0.2\""),
+        "dependencies '^0.0.1' -> '^0.0.2'"
     );
     assert!(
-        consumer_content.contains("\"test\": \"0.21.0\""),
-        "devDependencies '0.20.0' -> '0.21.0'"
+        consumer_content.contains("\"test\": \"0.0.2\""),
+        "devDependencies '0.0.1' -> '0.0.2'"
     );
     assert!(
-        consumer_content.contains("\"test\": \"~0.21.0\""),
-        "peerDependencies '~0.20.0' -> '~0.21.0'"
+        consumer_content.contains("\"test\": \"~0.0.2\""),
+        "peerDependencies '~0.0.1' -> '~0.0.2'"
     );
     assert!(
-        consumer_content.contains("\"test\": \">=0.21.0\""),
-        "optionalDependencies '>=0.20.0' -> '>=0.21.0'"
+        consumer_content.contains("\"test\": \">=0.0.2\""),
+        "optionalDependencies '>=0.0.1' -> '>=0.0.2'"
     );
     assert!(
         consumer_content.contains("\"other\": \"1.0.0\""),
         "unrelated dep should be untouched"
     );
     // Ensure version field itself was already bumped and not reverted
-    assert!(consumer_content.contains("\"version\": \"0.21.0\""));
+    assert!(consumer_content.contains("\"version\": \"0.0.2\""));
 
     // Second pass for package-lock.json: bump installed dependency version
     let lock_path = dir.join("package-lock.json");
@@ -118,7 +118,7 @@ fn node_subpackage_propagates_dependency_versions() {
         v["packages"]["node_modules/test"]["version"]
             .as_str()
             .unwrap(),
-        "0.21.0",
+        "0.0.2",
         "packages.node_modules/test version should be bumped"
     );
     assert_eq!(
@@ -130,31 +130,30 @@ fn node_subpackage_propagates_dependency_versions() {
     );
     assert_eq!(
         v["dependencies"]["test"]["version"].as_str().unwrap(),
-        "0.21.0",
+        "0.0.2",
         "legacy dependencies.test version should be bumped"
     );
     // Root version already bumped by first pass
-    assert_eq!(v["packages"][""]["version"].as_str().unwrap(), "0.21.0");
+    assert_eq!(v["packages"][""]["version"].as_str().unwrap(), "0.0.2");
 }
 
 #[test]
 fn python_case_updates_project_files() {
     let dir = copy_fixture("python");
 
-    apply_typed_change(&dir.join("pyproject.toml"), "0.13.0", "0.14.0")
-        .expect("bump pyproject.toml");
-    apply_typed_change(&dir.join("uv.lock"), "0.13.0", "0.14.0").expect("bump uv.lock");
+    apply_typed_change(&dir.join("pyproject.toml"), "0.0.1", "0.0.2").expect("bump pyproject.toml");
+    apply_typed_change(&dir.join("uv.lock"), "0.0.1", "0.0.2").expect("bump uv.lock");
 
     let pyproject = fs::read_to_string(dir.join("pyproject.toml")).expect("read pyproject.toml");
     let uv_lock = fs::read_to_string(dir.join("uv.lock")).expect("read uv.lock");
 
-    assert!(pyproject.contains("version = \"0.14.0\""));
+    assert!(pyproject.contains("version = \"0.0.2\""));
     assert!(
-        uv_lock.contains("version = \"0.14.0\""),
+        uv_lock.contains("version = \"0.0.2\""),
         "test package should be bumped"
     );
     assert!(
-        uv_lock.contains("version = \"0.13.0\""),
+        uv_lock.contains("version = \"0.0.1\""),
         "dep with same old version should not be changed"
     );
 }
@@ -163,19 +162,19 @@ fn python_case_updates_project_files() {
 fn rust_case_updates_cargo_files() {
     let dir = copy_fixture("rust");
 
-    apply_typed_change(&dir.join("Cargo.toml"), "0.13.0", "0.14.0").expect("bump Cargo.toml");
-    apply_typed_change(&dir.join("Cargo.lock"), "0.13.0", "0.14.0").expect("bump Cargo.lock");
+    apply_typed_change(&dir.join("Cargo.toml"), "0.0.1", "0.0.2").expect("bump Cargo.toml");
+    apply_typed_change(&dir.join("Cargo.lock"), "0.0.1", "0.0.2").expect("bump Cargo.lock");
 
     let cargo_toml = fs::read_to_string(dir.join("Cargo.toml")).expect("read Cargo.toml");
     let cargo_lock = fs::read_to_string(dir.join("Cargo.lock")).expect("read Cargo.lock");
 
-    assert!(cargo_toml.contains("version = \"0.14.0\""));
+    assert!(cargo_toml.contains("version = \"0.0.2\""));
     assert!(
-        cargo_lock.contains("version = \"0.14.0\""),
+        cargo_lock.contains("version = \"0.0.2\""),
         "test package should be bumped"
     );
     assert!(
-        cargo_lock.contains("version = \"0.13.0\""),
+        cargo_lock.contains("version = \"0.0.1\""),
         "dep with same old version should not be changed"
     );
 }
@@ -184,40 +183,40 @@ fn rust_case_updates_cargo_files() {
 fn zig_case_updates_zon_file() {
     let dir = copy_fixture("zig");
 
-    apply_typed_change(&dir.join("build.zig.zon"), "0.13.0", "0.14.0").expect("bump build.zig.zon");
+    apply_typed_change(&dir.join("build.zig.zon"), "0.0.1", "0.0.2").expect("bump build.zig.zon");
 
     let zon = fs::read_to_string(dir.join("build.zig.zon")).expect("read build.zig.zon");
-    assert!(zon.contains(".version = \"0.14.0\","));
+    assert!(zon.contains(".version = \"0.0.2\","));
 }
 
 #[test]
 fn nix_case_updates_flake_files() {
     let dir = copy_fixture("nix");
 
-    apply_typed_change(&dir.join("flake.nix"), "0.13.0", "0.14.0").expect("bump flake.nix");
+    apply_typed_change(&dir.join("flake.nix"), "0.0.1", "0.0.2").expect("bump flake.nix");
 
     let flake_nix = fs::read_to_string(dir.join("flake.nix")).expect("read flake.nix");
-    assert!(flake_nix.contains("version = \"0.14.0\""));
+    assert!(flake_nix.contains("version = \"0.0.2\""));
 }
 
 #[test]
 fn gleam_case_updates_gleam_toml() {
     let dir = copy_fixture("gleam");
 
-    apply_typed_change(&dir.join("gleam.toml"), "0.13.0", "0.14.0").expect("bump gleam.toml");
+    apply_typed_change(&dir.join("gleam.toml"), "0.0.1", "0.0.2").expect("bump gleam.toml");
 
     let gleam_toml = fs::read_to_string(dir.join("gleam.toml")).expect("read gleam.toml");
-    assert!(gleam_toml.contains("version = \"0.14.0\""));
+    assert!(gleam_toml.contains("version = \"0.0.2\""));
 }
 
 #[test]
 fn gradle_case_updates_project_versions() {
     let dir = copy_fixture("gradle");
 
-    apply_typed_change(&dir.join("build.gradle"), "0.13.0", "0.14.0").expect("bump build.gradle");
-    apply_typed_change(&dir.join("build.gradle.kts"), "0.13.0", "0.14.0")
+    apply_typed_change(&dir.join("build.gradle"), "0.0.1", "0.0.2").expect("bump build.gradle");
+    apply_typed_change(&dir.join("build.gradle.kts"), "0.0.1", "0.0.2")
         .expect("bump build.gradle.kts");
-    apply_typed_change(&dir.join("gradle.properties"), "0.13.0", "0.14.0")
+    apply_typed_change(&dir.join("gradle.properties"), "0.0.1", "0.0.2")
         .expect("bump gradle.properties");
 
     let groovy = fs::read_to_string(dir.join("build.gradle")).expect("read build.gradle");
@@ -225,33 +224,33 @@ fn gradle_case_updates_project_versions() {
     let properties =
         fs::read_to_string(dir.join("gradle.properties")).expect("read gradle.properties");
 
-    assert!(groovy.contains("version = '0.14.0' // project version"));
-    assert!(groovy.contains("id 'com.example.fixture' version '0.13.0'"));
-    assert!(groovy.contains("    version = '0.14.0'"));
-    assert!(groovy.contains("versionName = '0.13.0'"));
+    assert!(groovy.contains("version = '0.0.2' // project version"));
+    assert!(groovy.contains("id 'com.example.fixture' version '0.0.1'"));
+    assert!(groovy.contains("    version = '0.0.2'"));
+    assert!(groovy.contains("versionName = '0.0.1'"));
     assert!(groovy.contains("versionCode = 13"));
-    assert!(groovy.contains("implementation 'com.example:dependency:0.13.0'"));
-    assert!(kotlin.contains("version = \"0.14.0\" // project version"));
-    assert!(kotlin.contains("id(\"com.example.fixture\") version \"0.13.0\""));
-    assert!(kotlin.contains("    version = \"0.14.0\""));
-    assert!(kotlin.contains("versionName = \"0.13.0\""));
+    assert!(groovy.contains("implementation 'com.example:dependency:0.0.1'"));
+    assert!(kotlin.contains("version = \"0.0.2\" // project version"));
+    assert!(kotlin.contains("id(\"com.example.fixture\") version \"0.0.1\""));
+    assert!(kotlin.contains("    version = \"0.0.2\""));
+    assert!(kotlin.contains("versionName = \"0.0.1\""));
     assert!(kotlin.contains("versionCode = 13"));
-    assert!(kotlin.contains("implementation(\"com.example:dependency:0.13.0\")"));
-    assert!(properties.contains("version = 0.14.0"));
-    assert!(properties.contains("dependencyVersion=0.13.0"));
+    assert!(kotlin.contains("implementation(\"com.example:dependency:0.0.1\")"));
+    assert!(properties.contains("version = 0.0.2"));
+    assert!(properties.contains("dependencyVersion=0.0.1"));
 
     assert_eq!(
-        apply_typed_change(&dir.join("build.gradle"), "0.13.0", "0.15.0")
+        apply_typed_change(&dir.join("build.gradle"), "0.0.1", "0.0.3")
             .expect("skip mismatched build.gradle version"),
         TypedChange::Unchanged
     );
     assert_eq!(
-        apply_typed_change(&dir.join("build.gradle.kts"), "0.13.0", "0.15.0")
+        apply_typed_change(&dir.join("build.gradle.kts"), "0.0.1", "0.0.3")
             .expect("skip mismatched build.gradle.kts version"),
         TypedChange::Unchanged
     );
     assert_eq!(
-        apply_typed_change(&dir.join("gradle.properties"), "0.13.0", "0.15.0")
+        apply_typed_change(&dir.join("gradle.properties"), "0.0.1", "0.0.3")
             .expect("skip mismatched gradle.properties version"),
         TypedChange::Unchanged
     );
@@ -271,23 +270,22 @@ fn cmake_case_updates_project_version() {
 
 project(
   bumper_cmake
-  VERSION 0.13.0
+  VERSION 0.0.1
   DESCRIPTION "Fixture project for bumper"
   LANGUAGES C
 )
 
-set(DEPENDENCY_VERSION "0.13.0")
+set(DEPENDENCY_VERSION "0.0.1")
 "#,
     )
     .expect("write CMakeLists.txt");
 
-    apply_typed_change(&dir.join("CMakeLists.txt"), "0.13.0", "0.14.0")
-        .expect("bump CMakeLists.txt");
+    apply_typed_change(&dir.join("CMakeLists.txt"), "0.0.1", "0.0.2").expect("bump CMakeLists.txt");
 
     let cmake_lists = fs::read_to_string(dir.join("CMakeLists.txt")).expect("read CMakeLists.txt");
-    assert!(cmake_lists.contains("VERSION 0.14.0"));
+    assert!(cmake_lists.contains("VERSION 0.0.2"));
     assert!(cmake_lists.contains("cmake_minimum_required(VERSION 3.27)"));
-    assert!(cmake_lists.contains("set(DEPENDENCY_VERSION \"0.13.0\")"));
+    assert!(cmake_lists.contains("set(DEPENDENCY_VERSION \"0.0.1\")"));
 }
 
 #[test]
@@ -302,19 +300,19 @@ fn readme_case_updates_version_references() {
         dir.join("README.md"),
         r#"# Fixture
 
-Latest tag: v0.13.0
+Latest tag: v0.0.1
 
-Docker image: ghcr.io/example/fixture:0.13.0
+Docker image: ghcr.io/example/fixture:0.0.1
 "#,
     )
     .expect("write README.md");
 
-    apply_typed_change(&dir.join("README.md"), "0.13.0", "0.14.0").expect("bump README.md");
+    apply_typed_change(&dir.join("README.md"), "0.0.1", "0.0.2").expect("bump README.md");
 
     let readme = fs::read_to_string(dir.join("README.md")).expect("read README.md");
-    assert!(readme.contains("v0.14.0"));
-    assert!(readme.contains("fixture:0.14.0"));
-    assert!(!readme.contains("0.13.0"));
+    assert!(readme.contains("v0.0.2"));
+    assert!(readme.contains("fixture:0.0.2"));
+    assert!(!readme.contains("0.0.1"));
 }
 
 #[test]
@@ -327,32 +325,32 @@ fn action_yaml_updates_literal_version_references() {
     fs::create_dir_all(&dir).expect("create action fixture directory");
     fs::write(
         dir.join("action.yaml"),
-        r#"name: Fixture 0.13.0
+        r#"name: Fixture 0.0.1
 
 metadata:
-  image: docker://ghcr.io/example/metadata:0.13.0
+  image: docker://ghcr.io/example/metadata:0.0.1
 
 runs:
   using: docker
-  image: docker://ghcr.io/example/fixture:v0.13.0-alpine
+  image: docker://ghcr.io/example/fixture:v0.0.1-alpine
   env:
-    FIXTURE_IMAGE: docker://ghcr.io/example/fixture:0.13.0
-    FIXTURE_VERSION: 0.13.0
+    FIXTURE_IMAGE: docker://ghcr.io/example/fixture:0.0.1
+    FIXTURE_VERSION: 0.0.1
 "#,
     )
     .expect("write action.yaml");
 
     let changed =
-        apply_typed_change(&dir.join("action.yaml"), "0.13.0", "0.14.0").expect("bump action.yaml");
+        apply_typed_change(&dir.join("action.yaml"), "0.0.1", "0.0.2").expect("bump action.yaml");
 
     let action = fs::read_to_string(dir.join("action.yaml")).expect("read action.yaml");
     assert_eq!(changed, TypedChange::Changed);
-    assert!(action.contains("image: docker://ghcr.io/example/fixture:v0.14.0-alpine"));
-    assert!(action.contains("name: Fixture 0.14.0"));
-    assert!(action.contains("image: docker://ghcr.io/example/metadata:0.14.0"));
-    assert!(action.contains("FIXTURE_IMAGE: docker://ghcr.io/example/fixture:0.14.0"));
-    assert!(action.contains("FIXTURE_VERSION: 0.14.0"));
-    assert!(!action.contains("0.13.0"));
+    assert!(action.contains("image: docker://ghcr.io/example/fixture:v0.0.2-alpine"));
+    assert!(action.contains("name: Fixture 0.0.2"));
+    assert!(action.contains("image: docker://ghcr.io/example/metadata:0.0.2"));
+    assert!(action.contains("FIXTURE_IMAGE: docker://ghcr.io/example/fixture:0.0.2"));
+    assert!(action.contains("FIXTURE_VERSION: 0.0.2"));
+    assert!(!action.contains("0.0.1"));
 }
 
 #[test]
@@ -367,18 +365,18 @@ fn action_yml_preserves_quoted_image_and_comment() {
         dir.join("action.yml"),
         r#"runs:
   using: docker
-  image: "docker://registry.example.com:5000/example/fixture:0.13.0" # published image
+  image: "docker://registry.example.com:5000/example/fixture:0.0.1" # published image
 "#,
     )
     .expect("write action.yml");
 
     let changed =
-        apply_typed_change(&dir.join("action.yml"), "0.13.0", "0.14.0").expect("bump action.yml");
+        apply_typed_change(&dir.join("action.yml"), "0.0.1", "0.0.2").expect("bump action.yml");
 
     let action = fs::read_to_string(dir.join("action.yml")).expect("read action.yml");
     assert_eq!(changed, TypedChange::Changed);
     assert!(action.contains(
-        r#"image: "docker://registry.example.com:5000/example/fixture:0.14.0" # published image"#
+        r#"image: "docker://registry.example.com:5000/example/fixture:0.0.2" # published image"#
     ));
 }
 
@@ -396,16 +394,16 @@ fn action_yaml_literal_replacement_can_update_non_image_values() {
   using: docker
   image: Dockerfile
   env:
-    FIXTURE_VERSION: 0.13.0
+    FIXTURE_VERSION: 0.0.1
 "#,
     )
     .expect("write action.yaml");
 
     let changed =
-        apply_typed_change(&dir.join("action.yaml"), "0.13.0", "0.14.0").expect("bump action.yaml");
+        apply_typed_change(&dir.join("action.yaml"), "0.0.1", "0.0.2").expect("bump action.yaml");
 
     let action = fs::read_to_string(dir.join("action.yaml")).expect("read action.yaml");
     assert_eq!(changed, TypedChange::Changed);
     assert!(action.contains("image: Dockerfile"));
-    assert!(action.contains("FIXTURE_VERSION: 0.14.0"));
+    assert!(action.contains("FIXTURE_VERSION: 0.0.2"));
 }
