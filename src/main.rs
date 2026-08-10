@@ -5,7 +5,7 @@ mod versioning;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use bumper::bump::{
@@ -49,6 +49,53 @@ fn main() -> ExitCode {
     }
 }
 
+fn normalize_ignored_directories(
+    repo_root: &Path,
+    directories: &[PathBuf],
+) -> AppResult<Vec<PathBuf>> {
+    let mut normalized = Vec::new();
+    for directory in directories {
+        let absolute = if directory.is_absolute() {
+            directory.clone()
+        } else {
+            repo_root.join(directory)
+        };
+        let relative = absolute.strip_prefix(repo_root).map_err(|_| {
+            format!(
+                "ignored directory '{}' is outside repository root '{}'",
+                directory.display(),
+                repo_root.display()
+            )
+        })?;
+        let mut clean = PathBuf::new();
+        for component in relative.components() {
+            match component {
+                Component::CurDir => {}
+                Component::Normal(part) => clean.push(part),
+                Component::ParentDir if clean.pop() => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(format!(
+                        "ignored directory '{}' is outside repository root '{}'",
+                        directory.display(),
+                        repo_root.display()
+                    ));
+                }
+            }
+        }
+        let normalized_absolute = repo_root.join(&clean);
+        if normalized_absolute.exists() && !normalized_absolute.is_dir() {
+            return Err(format!(
+                "ignored path '{}' is not a directory",
+                directory.display()
+            ));
+        }
+        normalized.push(clean);
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
 fn run() -> AppResult<()> {
     let mut config = load_config();
     let repo = Repository::discover(".")
@@ -65,6 +112,8 @@ fn run() -> AppResult<()> {
         .map_err(|e| format!("not a git repository: {e}"))?;
     let repo_root = fs::canonicalize(repo_root(&repo)?)
         .map_err(|e| format!("failed to resolve repository root: {e}"))?;
+    let ignored_directories =
+        normalize_ignored_directories(&repo_root, &config.ignored_directories)?;
 
     if config.paths.is_empty() {
         config.paths = vec![repo_root.clone()];
@@ -77,7 +126,8 @@ fn run() -> AppResult<()> {
     println!("fetching latest tags from remote...");
     git_fetch(&repo)?;
 
-    let tracked_files = list_tracked_files_under(&repo, &repo_root, &repo_root)?;
+    let tracked_files =
+        list_tracked_files_under(&repo, &repo_root, &repo_root, &ignored_directories)?;
     let known_packages = discover_packages(&repo_root, &tracked_files)?;
     let tracked_paths = tracked_files.iter().cloned().collect::<HashSet<_>>();
     let mut packages = BTreeMap::<PathBuf, Package>::new();
@@ -95,6 +145,20 @@ fn run() -> AppResult<()> {
                 "warning: file or directory not found: {}",
                 absolute.display()
             );
+            continue;
+        }
+
+        let absolute = fs::canonicalize(&absolute)
+            .map_err(|e| format!("failed to resolve '{}': {e}", absolute.display()))?;
+        let relative = absolute.strip_prefix(&repo_root).map_err(|_| {
+            format!(
+                "path '{}' is outside repository root '{}'",
+                absolute.display(),
+                repo_root.display()
+            )
+        })?;
+        if git_ops::is_ignored_path(relative, &ignored_directories) {
+            eprintln!("warning: ignoring selected path: {}", absolute.display());
             continue;
         }
 
@@ -139,6 +203,7 @@ fn run() -> AppResult<()> {
                 minor_types: &config.minor_types,
                 patch_types: &config.patch_types,
                 skip_scopes: &config.skip_scopes,
+                ignored_directories: &ignored_directories,
                 force: config.force && selected_packages.contains(&path),
             },
         )?;
@@ -248,6 +313,7 @@ fn run() -> AppResult<()> {
                             minor_types: &config.minor_types,
                             patch_types: &config.patch_types,
                             skip_scopes: &config.skip_scopes,
+                            ignored_directories: &ignored_directories,
                             force: true,
                         },
                     )?
@@ -286,7 +352,14 @@ fn run() -> AppResult<()> {
     }
 
     for release in releases.values() {
-        bump_release_targets(&repo, &repo_root, release, &targets, &known_packages)?;
+        bump_release_targets(
+            &repo,
+            &repo_root,
+            release,
+            &targets,
+            &known_packages,
+            &ignored_directories,
+        )?;
         bump_package_files(&repo, &repo_root, release, &tracked_paths)?;
     }
 
@@ -367,6 +440,7 @@ fn bump_release_targets(
     release: &Release,
     targets: &[Target],
     known_packages: &BTreeMap<PathBuf, Package>,
+    ignored_directories: &[PathBuf],
 ) -> AppResult<()> {
     for target in targets
         .iter()
@@ -385,10 +459,9 @@ fn bump_release_targets(
                 repo,
                 repo_root,
                 &target.path,
-                &release.package.path,
+                release,
                 known_packages,
-                &release.old_version,
-                &release.new_version,
+                ignored_directories,
             )?;
         }
     }
@@ -399,12 +472,11 @@ fn bump_dir(
     repo: &Repository,
     repo_root: &Path,
     directory: &Path,
-    package_path: &Path,
+    release: &Release,
     known_packages: &BTreeMap<PathBuf, Package>,
-    old_version: &str,
-    new_version: &str,
+    ignored_directories: &[PathBuf],
 ) -> AppResult<()> {
-    let files = list_tracked_files_under(repo, repo_root, directory)?;
+    let files = list_tracked_files_under(repo, repo_root, directory, ignored_directories)?;
     for absolute in files {
         if !absolute.is_file() {
             continue;
@@ -412,11 +484,17 @@ fn bump_dir(
         let hierarchy = resolve_known_package_hierarchy(repo_root, &absolute, known_packages)?;
         if hierarchy
             .first()
-            .is_some_and(|package| package.path != package_path)
+            .is_some_and(|package| package.path != release.package.path)
         {
             continue;
         }
-        let _ = bump_typed_file(repo, repo_root, &absolute, old_version, new_version)?;
+        let _ = bump_typed_file(
+            repo,
+            repo_root,
+            &absolute,
+            &release.old_version,
+            &release.new_version,
+        )?;
     }
     Ok(())
 }
@@ -660,4 +738,37 @@ fn bump_typed_file(
         stage_path(repo, repo_root, file)?;
     }
     Ok(changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ignored_directories_are_normalized_relative_to_repository() {
+        let root = Path::new("/repo");
+
+        let normalized = normalize_ignored_directories(
+            root,
+            &[
+                PathBuf::from("./generated"),
+                PathBuf::from("packages/old/../legacy"),
+                PathBuf::from("generated"),
+            ],
+        )
+        .expect("normalize ignored directories");
+
+        assert_eq!(
+            normalized,
+            vec![PathBuf::from("generated"), PathBuf::from("packages/legacy")]
+        );
+    }
+
+    #[test]
+    fn ignored_directories_cannot_escape_repository() {
+        let root = Path::new("/repo");
+
+        assert!(normalize_ignored_directories(root, &[PathBuf::from("../outside")]).is_err());
+        assert!(normalize_ignored_directories(root, &[PathBuf::from("/outside")]).is_err());
+    }
 }

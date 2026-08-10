@@ -17,6 +17,10 @@ struct Cli {
     #[arg(value_name = "PATH")]
     paths: Vec<PathBuf>,
 
+    /// Repository-relative directories to ignore [env: IGNORE_DIRECTORIES]
+    #[arg(long, value_delimiter = ',', value_name = "PATH")]
+    ignore_directories: Vec<PathBuf>,
+
     /// Commit types that trigger a major version bump [env: MAJOR_TYPES] [default: "BREAKING CHANGE"]
     #[arg(long, value_delimiter = ',', value_name = "TYPE")]
     major_types: Vec<String>,
@@ -71,6 +75,8 @@ pub fn load_config() -> Config {
 
     let mut paths = parse_list_env("PATHS");
     paths.extend(cli.paths);
+    let mut ignored_directories = parse_list_env("IGNORE_DIRECTORIES");
+    ignored_directories.extend(cli.ignore_directories);
 
     let major_types = resolve_set(cli.major_types, "MAJOR_TYPES", &["BREAKING CHANGE"]);
     let minor_types = resolve_set(cli.minor_types, "MINOR_TYPES", &["feat"]);
@@ -83,6 +89,7 @@ pub fn load_config() -> Config {
 
     Config {
         paths,
+        ignored_directories,
         major_types,
         minor_types,
         patch_types,
@@ -219,6 +226,21 @@ mod tests {
         assert_eq!(
             split_config_list("feat\nfix"),
             vec!["feat".to_string(), "fix".to_string()]
+        );
+    }
+
+    #[test]
+    fn parses_ignored_directories_option() {
+        let cli = Cli::try_parse_from([
+            "bumper",
+            "--ignore-directories",
+            "generated,packages/legacy",
+        ])
+        .expect("parse CLI");
+
+        assert_eq!(
+            cli.ignore_directories,
+            vec![PathBuf::from("generated"), PathBuf::from("packages/legacy")]
         );
     }
 }

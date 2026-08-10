@@ -62,8 +62,8 @@
           };
 
           bump = pkgs.mkShell {
-            packages = with pkgs; [
-              bumper
+            packages = [
+              self.packages.${system}.default
             ];
           };
 

@@ -6,6 +6,7 @@ pub type AppResult<T> = Result<T, String>;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub paths: Vec<PathBuf>,
+    pub ignored_directories: Vec<PathBuf>,
     pub major_types: HashSet<String>,
     pub minor_types: HashSet<String>,
     pub patch_types: HashSet<String>,

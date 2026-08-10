@@ -36,3 +36,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.DOCTOR_TOKEN }}
           FORCE: ${{ inputs.force }}
+          IGNORE_DIRECTORIES: tests

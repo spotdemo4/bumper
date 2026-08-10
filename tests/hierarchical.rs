@@ -77,6 +77,62 @@ fn tag(repo: &Repository, name: &str, commit: Oid) {
 }
 
 #[test]
+fn ignored_directory_changes_do_not_trigger_or_receive_a_release() {
+    let local = TempDir::new("ignored-directory-local");
+    let remote = TempDir::new("ignored-directory-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir(local.path().join("generated")).expect("create generated directory");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root package");
+    fs::write(
+        local.path().join("generated/package.json"),
+        "{\n  \"name\": \"generated\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write generated package");
+    let initial = commit_all(&repo, "chore: initial");
+    tag(&repo, "v1.0.0", initial);
+    fs::write(
+        local.path().join("generated/package.json"),
+        "{\n  \"name\": \"generated\",\n  \"version\": \"1.0.0\",\n  \"generated\": true\n}\n",
+    )
+    .expect("update generated package");
+    commit_all(&repo, "feat: regenerate package");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push", "--ignore-directories", "generated"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("no new impactful commits for the selected packages")
+    );
+    assert!(
+        fs::read_to_string(local.path().join("package.json"))
+            .expect("read root package")
+            .contains("\"version\": \"1.0.0\"")
+    );
+    assert!(
+        fs::read_to_string(local.path().join("generated/package.json"))
+            .expect("read generated package")
+            .contains("\"version\": \"1.0.0\"")
+    );
+}
+
+#[test]
 fn readme_uses_nearest_package_stream_and_propagates_to_root() {
     let local = TempDir::new("hierarchical-local");
     let remote = TempDir::new("hierarchical-remote");

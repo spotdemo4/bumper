@@ -138,6 +138,7 @@ pub struct ImpactConfig<'a> {
     pub minor_types: &'a HashSet<String>,
     pub patch_types: &'a HashSet<String>,
     pub skip_scopes: &'a HashSet<String>,
+    pub ignored_directories: &'a [PathBuf],
     pub force: bool,
 }
 
@@ -168,7 +169,13 @@ pub fn get_impact_for_package(
             .find_commit(oid)
             .map_err(|e| format!("failed to load commit {oid}: {e}"))?;
 
-        if !commit_touches_package(repo, &commit, package_path, child_package_paths)? {
+        if !commit_touches_package(
+            repo,
+            &commit,
+            package_path,
+            child_package_paths,
+            config.ignored_directories,
+        )? {
             continue;
         }
 
@@ -224,6 +231,7 @@ fn commit_touches_package(
     commit: &git2::Commit<'_>,
     package_path: &Path,
     child_package_paths: &[PathBuf],
+    ignored_directories: &[PathBuf],
 ) -> AppResult<bool> {
     let tree = commit
         .tree()
@@ -248,7 +256,14 @@ fn commit_touches_package(
         [delta.old_file().path(), delta.new_file().path()]
             .into_iter()
             .flatten()
-            .any(|path| path_belongs_to_package(path, package_path, child_package_paths))
+            .any(|path| {
+                path_belongs_to_package(
+                    path,
+                    package_path,
+                    child_package_paths,
+                    ignored_directories,
+                )
+            })
     }))
 }
 
@@ -256,11 +271,13 @@ fn path_belongs_to_package(
     path: &Path,
     package_path: &Path,
     child_package_paths: &[PathBuf],
+    ignored_directories: &[PathBuf],
 ) -> bool {
     (package_path.as_os_str().is_empty() || path.starts_with(package_path))
         && !child_package_paths
             .iter()
             .any(|child| path.starts_with(child))
+        && !is_ignored_path(path, ignored_directories)
 }
 
 fn has_breaking_change_footer(message: &str) -> bool {
@@ -274,6 +291,7 @@ pub fn list_tracked_files_under(
     repo: &Repository,
     repo_root: &Path,
     directory: &Path,
+    ignored_directories: &[PathBuf],
 ) -> AppResult<Vec<PathBuf>> {
     let dir_relative = directory.strip_prefix(repo_root).unwrap_or(directory);
 
@@ -287,7 +305,10 @@ pub fn list_tracked_files_under(
             continue;
         };
         let relative = Path::new(path);
-        if is_likely_vendored_path(relative) || has_symlink_component(repo_root, relative) {
+        if is_likely_vendored_path(relative)
+            || is_ignored_path(relative, ignored_directories)
+            || has_symlink_component(repo_root, relative)
+        {
             continue;
         }
 
@@ -299,6 +320,12 @@ pub fn list_tracked_files_under(
     files.sort();
     files.dedup();
     Ok(files)
+}
+
+pub(crate) fn is_ignored_path(relative: &Path, ignored_directories: &[PathBuf]) -> bool {
+    ignored_directories
+        .iter()
+        .any(|directory| directory.as_os_str().is_empty() || relative.starts_with(directory))
 }
 
 fn is_likely_vendored_path(relative: &Path) -> bool {
@@ -912,12 +939,46 @@ mod tests {
                 minor_types: &HashSet::from(["feat".to_string()]),
                 patch_types: &HashSet::from(["fix".to_string()]),
                 skip_scopes: &HashSet::new(),
+                ignored_directories: &[],
                 force: false,
             },
         )
         .expect("get impact");
 
         assert_eq!(impact, Some(Impact::Major));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn impact_ignores_commits_that_only_touch_ignored_directories() {
+        let dir = temp_path("ignored-directory-impact");
+        let repo = Repository::init(&dir).expect("init repo");
+        let baseline = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        commit_file(
+            &repo,
+            &dir,
+            "generated/output.txt",
+            "generated",
+            "feat: regenerate output",
+        );
+
+        let impact = get_impact_for_package(
+            &repo,
+            baseline,
+            Path::new(""),
+            &[],
+            &ImpactConfig {
+                major_types: &HashSet::from(["breaking change".to_string()]),
+                minor_types: &HashSet::from(["feat".to_string()]),
+                patch_types: &HashSet::from(["fix".to_string()]),
+                skip_scopes: &HashSet::new(),
+                ignored_directories: &[PathBuf::from("generated")],
+                force: false,
+            },
+        )
+        .expect("get impact");
+
+        assert_eq!(impact, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -951,6 +1012,7 @@ mod tests {
             minor_types: &minor,
             patch_types: &patch,
             skip_scopes: &skipped,
+            ignored_directories: &[],
             force: false,
         };
 
@@ -993,11 +1055,29 @@ mod tests {
             ],
         );
 
-        let files = list_tracked_files_under(&repo, &dir, &dir).expect("list tracked files");
+        let files = list_tracked_files_under(&repo, &dir, &dir, &[]).expect("list tracked files");
 
         assert!(files.contains(&dir.join("README.md")));
         assert!(!files.contains(&dir.join("cmd/vendor/README.md")));
         assert!(!files.contains(&dir.join("node_modules/pkg/package.json")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn tracked_files_under_skips_configured_directories_by_component() {
+        let dir = temp_path("configured-ignored-paths");
+        let repo = Repository::init(&dir).expect("init repo");
+        std::fs::create_dir_all(dir.join("build")).expect("create build dir");
+        std::fs::create_dir_all(dir.join("builder")).expect("create builder dir");
+        std::fs::write(dir.join("build/README.md"), "ignored").expect("write ignored file");
+        std::fs::write(dir.join("builder/README.md"), "included").expect("write included file");
+        add_index_paths(&repo, &["build/README.md", "builder/README.md"]);
+
+        let files = list_tracked_files_under(&repo, &dir, &dir, &[PathBuf::from("build")])
+            .expect("list tracked files");
+
+        assert!(!files.contains(&dir.join("build/README.md")));
+        assert!(files.contains(&dir.join("builder/README.md")));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1012,7 +1092,7 @@ mod tests {
         symlink("real-readme.md", dir.join("README.md")).expect("create symlink");
         add_index_paths(&repo, &["real-readme.md", "README.md"]);
 
-        let files = list_tracked_files_under(&repo, &dir, &dir).expect("list tracked files");
+        let files = list_tracked_files_under(&repo, &dir, &dir, &[]).expect("list tracked files");
 
         assert!(files.contains(&dir.join("real-readme.md")));
         assert!(!files.contains(&dir.join("README.md")));

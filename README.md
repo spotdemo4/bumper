@@ -11,7 +11,7 @@
 - releases containing packages with a patch whenever one of their nested packages releases
 - applies the version bump to files given as arguments (`bumper [files...]`)
 - applies the version bump in directories given as arguments to supported project files (`README.md`, `action.yaml`, `action.yml`, `package.json`, `package-lock.json`, `build.gradle`, `build.gradle.kts`, `gradle.properties`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `uv.lock`, `build.zig.zon`, `gleam.toml`, `*.nix` (`version = "x.y.z";`), `CMakeLists.txt`)
-- skips likely vendored paths (`vendor`, `node_modules`) and symlinks during directory scans
+- skips configured directories, likely vendored paths (`vendor`, `node_modules`), and symlinks during directory scans
 - commits the bumped files and pushes them with the new git tag
 
 This works well as a github action. Have it run on every push to main and it will bump the version for every change, or run it on a schedule to increase the version if there were any new changes.
@@ -21,6 +21,8 @@ This works well as a github action. Have it run on every push to main and it wil
 ```elm
 bumper [paths...]
 ```
+
+Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES` to a whitespace- or newline-separated list of repository-relative directories. Ignored trees do not contribute commits, packages, version files, or dependency updates. Explicitly selected paths inside them are skipped.
 
 ### Package tags
 
@@ -58,6 +60,11 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
     files: |-
       action.yaml
       README.md
+
+    # repository-relative directories to ignore
+    ignore_directories: |-
+      generated
+      packages/legacy
 
     # conventional commit types for MAJOR version bumps, default "BREAKING CHANGE"
     major_types: |-

@@ -9,6 +9,9 @@ inputs:
   files:
     description: files to bump versions in
     required: false
+  ignore_directories:
+    description: repository-relative directories to ignore
+    required: false
   major_types:
     description: conventional commit types for MAJOR version bumps
     required: false
@@ -52,6 +55,7 @@ runs:
   image: docker://ghcr.io/spotdemo4/bumper:0.21.1
   env:
     PATHS: ${{ inputs.files }}
+    IGNORE_DIRECTORIES: ${{ inputs.ignore_directories }}
     MAJOR_TYPES: ${{ inputs.major_types }}
     MINOR_TYPES: ${{ inputs.minor_types }}
     PATCH_TYPES: ${{ inputs.patch_types }}
