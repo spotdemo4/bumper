@@ -459,7 +459,7 @@ fn run() -> AppResult<()> {
     } else if staged_files(&repo)?.is_empty() {
         println!("no changes to commit");
     } else {
-        let message = release_message(releases.values());
+        let message = commit_message(releases.values());
         git_commit(&repo, &message)?;
     }
 
@@ -1096,6 +1096,25 @@ fn release_message<'a>(releases: impl Iterator<Item = &'a Release>) -> String {
     format!("bump: {transitions}")
 }
 
+fn commit_message<'a>(releases: impl Iterator<Item = &'a Release>) -> String {
+    let releases = releases.collect::<Vec<_>>();
+    if releases.len() == 1 {
+        return release_message(releases.into_iter());
+    }
+
+    let root = releases
+        .iter()
+        .find(|release| release.package.path.as_os_str().is_empty())
+        .expect("multiple releases include the root package");
+    let trailers = releases
+        .iter()
+        .filter(|release| !release.package.path.as_os_str().is_empty())
+        .map(|release| format!("Package: {}", release.tag))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("bump: {}\n\n{trailers}", root.tag)
+}
+
 fn bump_file(
     repo: &Repository,
     repo_root: &Path,
@@ -1137,6 +1156,45 @@ fn bump_typed_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn release(path: &str, last_tag: &str, tag: &str) -> Release {
+        Release {
+            package: Package {
+                root: PathBuf::from(path),
+                path: PathBuf::from(path),
+            },
+            last_tag: last_tag.to_string(),
+            old_version: String::new(),
+            new_version: String::new(),
+            impact: None,
+            tag: tag.to_string(),
+        }
+    }
+
+    #[test]
+    fn single_release_commit_message_includes_version_transition() {
+        let releases = [release("", "v1.2.3", "v1.3.0")];
+
+        assert_eq!(commit_message(releases.iter()), "bump: v1.2.3 -> v1.3.0");
+    }
+
+    #[test]
+    fn multiple_release_commit_message_uses_package_trailers() {
+        let releases = [
+            release("", "v1.0.0", "v1.0.1"),
+            release("packages/app", "packages/app/v3.0.0", "packages/app/v3.0.1"),
+            release(
+                "packages/library",
+                "packages/library/v2.0.0",
+                "packages/library/v2.0.1",
+            ),
+        ];
+
+        assert_eq!(
+            commit_message(releases.iter()),
+            "bump: v1.0.1\n\nPackage: packages/app/v3.0.1\nPackage: packages/library/v2.0.1"
+        );
+    }
 
     #[test]
     fn ignored_directories_are_normalized_relative_to_repository() {

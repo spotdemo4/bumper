@@ -509,6 +509,24 @@ fn dependency_updates_release_an_unselected_sibling_package() {
         .expect("find dependent app tag");
     repo.revparse_single("refs/tags/v1.0.1")
         .expect("find root tag");
+    let commit = repo
+        .head()
+        .expect("find HEAD")
+        .peel_to_commit()
+        .expect("peel HEAD to commit");
+    assert_eq!(
+        commit.message(),
+        Some("bump: v1.0.1\n\nPackage: packages/app/v3.0.1\nPackage: packages/library/v2.0.1")
+    );
+    let root_tag = repo
+        .revparse_single("refs/tags/v1.0.1")
+        .expect("find root tag object");
+    assert_eq!(
+        root_tag.as_tag().expect("root tag is annotated").message(),
+        Some(
+            "bump: v1.0.0 -> v1.0.1, packages/app/v3.0.0 -> packages/app/v3.0.1, packages/library/v2.0.0 -> packages/library/v2.0.1"
+        )
+    );
     let app = fs::read_to_string(local.path().join("packages/app/package.json"))
         .expect("read app manifest");
     assert!(app.contains("\"version\": \"3.0.1\""));
