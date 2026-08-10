@@ -12,13 +12,14 @@ use bumper::bump::{
     TypedChange, apply_typed_change, bump_cargo_lock_dependencies, bump_cargo_toml_dependencies,
     bump_package_json_dependencies, bump_package_lock_dependencies, dependency_update_needed,
 };
-use bumper::package::{Package, is_package_marker};
-use git2::Repository;
+use bumper::package::{Package, is_package_marker, package_version};
+use git2::{Oid, Repository};
 
 use config::load_config;
 use git_ops::{
     ImpactConfig, current_branch, ensure_clean_repo, get_impact_for_package, git_commit, git_fetch,
-    git_push, git_tag, latest_tag, list_tracked_files_under, repo_root, stage_path, staged_files,
+    git_push, git_tag, latest_tag_or_none, list_tracked_files_under, repo_root, stage_path,
+    staged_files,
 };
 use model::{AppResult, Impact};
 use versioning::next_version;
@@ -37,6 +38,12 @@ struct Release {
     new_version: String,
     impact: Option<Impact>,
     tag: String,
+}
+
+struct ReleaseBase {
+    last_tag: String,
+    version: String,
+    commit: Option<Oid>,
 }
 
 fn main() -> ExitCode {
@@ -186,8 +193,7 @@ fn run() -> AppResult<()> {
     let package_paths = packages.keys().cloned().collect::<Vec<_>>();
     let mut releases = BTreeMap::<PathBuf, Release>::new();
     for (path, package) in packages {
-        let (last_tag, last_tag_commit) = latest_tag(&repo, &path)?;
-        let old_version = version_from_tag(&last_tag)?.to_string();
+        let base = resolve_release_base(&repo, &package, &known_packages)?;
         let child_paths = known_packages
             .keys()
             .filter(|child| *child != &path && is_package_ancestor(&path, child))
@@ -195,7 +201,7 @@ fn run() -> AppResult<()> {
             .collect::<Vec<_>>();
         let impact = get_impact_for_package(
             &repo,
-            last_tag_commit,
+            base.commit,
             &path,
             &child_paths,
             &ImpactConfig {
@@ -211,8 +217,8 @@ fn run() -> AppResult<()> {
             path,
             Release {
                 package,
-                last_tag,
-                old_version,
+                last_tag: base.last_tag,
+                old_version: base.version,
                 new_version: String::new(),
                 impact,
                 tag: String::new(),
@@ -294,8 +300,7 @@ fn run() -> AppResult<()> {
                     if releases.contains_key(&package.path) {
                         continue;
                     }
-                    let (last_tag, last_tag_commit) = latest_tag(&repo, &package.path)?;
-                    let old_version = version_from_tag(&last_tag)?.to_string();
+                    let base = resolve_release_base(&repo, &package, &known_packages)?;
                     let child_paths = known_packages
                         .keys()
                         .filter(|child| {
@@ -305,7 +310,7 @@ fn run() -> AppResult<()> {
                         .collect::<Vec<_>>();
                     let impact = get_impact_for_package(
                         &repo,
-                        last_tag_commit,
+                        base.commit,
                         &package.path,
                         &child_paths,
                         &ImpactConfig {
@@ -318,12 +323,12 @@ fn run() -> AppResult<()> {
                         },
                     )?
                     .expect("forced dependency release has an impact");
-                    let new_version = next_version(&old_version, impact)?;
+                    let new_version = next_version(&base.version, impact)?;
                     let tag = tag_name(&package.path, &new_version)?;
                     println!(
                         "{}: {} -> {} (dependency {})",
                         package_label(&package.path),
-                        last_tag,
+                        base.last_tag,
                         tag,
                         impact.as_str()
                     );
@@ -332,8 +337,8 @@ fn run() -> AppResult<()> {
                         package.path.clone(),
                         Release {
                             package,
-                            last_tag,
-                            old_version,
+                            last_tag: base.last_tag,
+                            old_version: base.version,
                             new_version,
                             impact: Some(impact),
                             tag,
@@ -654,6 +659,69 @@ fn nearest_parent<'a>(path: &Path, package_paths: &'a [PathBuf]) -> Option<&'a P
         .iter()
         .filter(|candidate| *candidate != path && is_package_ancestor(candidate, path))
         .max_by_key(|candidate| candidate.components().count())
+}
+
+fn resolve_release_base(
+    repo: &Repository,
+    package: &Package,
+    known_packages: &BTreeMap<PathBuf, Package>,
+) -> AppResult<ReleaseBase> {
+    if let Some((last_tag, commit)) = latest_tag_or_none(repo, &package.path)? {
+        return Ok(ReleaseBase {
+            version: version_from_tag(&last_tag)?.to_string(),
+            last_tag,
+            commit: Some(commit),
+        });
+    }
+
+    let version = resolve_current_version(repo, package, known_packages)?;
+    let last_tag = tag_name(&package.path, &version)?;
+    let mut ancestors = known_packages
+        .values()
+        .filter(|ancestor| {
+            ancestor.path != package.path && is_package_ancestor(&ancestor.path, &package.path)
+        })
+        .collect::<Vec<_>>();
+    ancestors.sort_by_key(|ancestor| std::cmp::Reverse(ancestor.path.components().count()));
+    let mut commit = None;
+    for ancestor in ancestors {
+        if let Some((_, ancestor_commit)) = latest_tag_or_none(repo, &ancestor.path)? {
+            commit = Some(ancestor_commit);
+            break;
+        }
+    }
+
+    Ok(ReleaseBase {
+        last_tag,
+        version,
+        commit,
+    })
+}
+
+fn resolve_current_version(
+    repo: &Repository,
+    package: &Package,
+    known_packages: &BTreeMap<PathBuf, Package>,
+) -> AppResult<String> {
+    if let Some((tag, _)) = latest_tag_or_none(repo, &package.path)? {
+        return Ok(version_from_tag(&tag)?.to_string());
+    }
+    if let Some(version) = package_version(&package.root) {
+        return Ok(version);
+    }
+
+    let package_paths = known_packages.keys().cloned().collect::<Vec<_>>();
+    if let Some(parent_path) = nearest_parent(&package.path, &package_paths) {
+        let parent = known_packages
+            .get(parent_path)
+            .expect("nearest parent came from known packages");
+        return resolve_current_version(repo, parent, known_packages);
+    }
+
+    Err(format!(
+        "no semantic version git tag, package-file version, or parent package version found for {}",
+        package_label(&package.path)
+    ))
 }
 
 fn version_from_tag(tag: &str) -> AppResult<&str> {

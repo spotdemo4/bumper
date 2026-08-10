@@ -41,28 +41,14 @@ pub fn current_branch(repo: &Repository) -> AppResult<String> {
     Ok(shorthand.to_string())
 }
 
-pub fn latest_tag(repo: &Repository, package_path: &Path) -> AppResult<(String, Oid)> {
+pub fn latest_tag_or_none(
+    repo: &Repository,
+    package_path: &Path,
+) -> AppResult<Option<(String, Oid)>> {
     let tags = repo
         .tag_names(None)
         .map_err(|e| format!("failed to list tags: {e}"))?;
-    let package_scope = package_path
-        .iter()
-        .map(OsStr::to_str)
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| {
-            format!(
-                "package path is not valid UTF-8: {}",
-                package_path.display()
-            )
-        })?
-        .join("/");
-    let expected_stream = if package_scope.is_empty() {
-        "root stream (expected X.Y.Z, vX.Y.Z, or VX.Y.Z)".to_string()
-    } else {
-        format!(
-            "package stream '{package_scope}' (expected {package_scope}/vX.Y.Z or {package_scope}/VX.Y.Z)"
-        )
-    };
+    let package_scope = package_scope(package_path)?;
 
     let mut release_tags: HashMap<Oid, Vec<(String, Version)>> = HashMap::new();
 
@@ -104,9 +90,7 @@ pub fn latest_tag(repo: &Repository, package_path: &Path) -> AppResult<(String, 
     }
 
     if release_tags.is_empty() {
-        return Err(format!(
-            "no semantic version git tags found for {expected_stream}"
-        ));
+        return Ok(None);
     }
 
     let mut walk = repo
@@ -124,13 +108,32 @@ pub fn latest_tag(repo: &Repository, package_path: &Path) -> AppResult<(String, 
                 .iter()
                 .max_by_key(|(_, version)| *version)
                 .expect("release tag list should not be empty");
-            return Ok((name.clone(), oid));
+            return Ok(Some((name.clone(), oid)));
         }
     }
 
+    let expected_stream = if package_scope.is_empty() {
+        "root stream".to_string()
+    } else {
+        format!("package stream '{package_scope}'")
+    };
     Err(format!(
         "no semantic version git tags found for {expected_stream} reachable from HEAD"
     ))
+}
+
+fn package_scope(package_path: &Path) -> AppResult<String> {
+    package_path
+        .iter()
+        .map(OsStr::to_str)
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            format!(
+                "package path is not valid UTF-8: {}",
+                package_path.display()
+            )
+        })
+        .map(|parts| parts.join("/"))
 }
 
 pub struct ImpactConfig<'a> {
@@ -144,7 +147,7 @@ pub struct ImpactConfig<'a> {
 
 pub fn get_impact_for_package(
     repo: &Repository,
-    last_tag_commit: Oid,
+    baseline_commit: Option<Oid>,
     package_path: &Path,
     child_package_paths: &[PathBuf],
     config: &ImpactConfig<'_>,
@@ -160,8 +163,10 @@ pub fn get_impact_for_package(
         .map_err(|e| format!("failed to create revwalk: {e}"))?;
     walk.push_head()
         .map_err(|e| format!("failed to walk from HEAD: {e}"))?;
-    walk.hide(last_tag_commit)
-        .map_err(|e| format!("failed to hide last tag commit: {e}"))?;
+    if let Some(baseline_commit) = baseline_commit {
+        walk.hide(baseline_commit)
+            .map_err(|e| format!("failed to hide release baseline commit: {e}"))?;
+    }
 
     for oid in walk {
         let oid = oid.map_err(|e| format!("failed to walk commit history: {e}"))?;
@@ -791,7 +796,9 @@ mod tests {
         lightweight_tag(&repo, "deploy-2026-06-02", second);
         let _third = commit_file(&repo, &dir, "README.md", "three", "feat: feature");
 
-        let (name, oid) = latest_tag(&repo, Path::new("")).expect("find latest tag");
+        let (name, oid) = latest_tag_or_none(&repo, Path::new(""))
+            .expect("read tags")
+            .expect("find latest tag");
 
         assert_eq!(name, "v0.1.0");
         assert_eq!(oid, first);
@@ -808,8 +815,12 @@ mod tests {
         lightweight_tag(&repo, "packages/api/v9.0.0", scoped_commit);
         commit_file(&repo, &dir, "README.md", "three", "fix: follow-up");
 
-        let root = latest_tag(&repo, Path::new("")).expect("find root tag");
-        let scoped = latest_tag(&repo, Path::new("packages/api")).expect("find scoped tag");
+        let root = latest_tag_or_none(&repo, Path::new(""))
+            .expect("read root tags")
+            .expect("find root tag");
+        let scoped = latest_tag_or_none(&repo, Path::new("packages/api"))
+            .expect("read scoped tags")
+            .expect("find scoped tag");
 
         assert_eq!(root, ("v1.0.0".to_string(), root_commit));
         assert_eq!(scoped, ("packages/api/v9.0.0".to_string(), scoped_commit));
@@ -823,7 +834,8 @@ mod tests {
         let commit = commit_file(&repo, &dir, "README.md", "one", "chore: init");
         lightweight_tag(&repo, "packages/services/api/V2.3.4", commit);
 
-        let tag = latest_tag(&repo, Path::new("packages/services/api"))
+        let tag = latest_tag_or_none(&repo, Path::new("packages/services/api"))
+            .expect("read multi-level scoped tags")
             .expect("find multi-level scoped tag");
 
         assert_eq!(tag, ("packages/services/api/V2.3.4".to_string(), commit));
@@ -848,13 +860,14 @@ mod tests {
             lightweight_tag(&repo, tag, other_commit);
         }
 
-        let tag = latest_tag(&repo, Path::new("packages/api")).expect("find scoped tag");
-        let error = latest_tag(&repo, Path::new("packages/missing"))
-            .expect_err("missing stream should fail");
+        let tag = latest_tag_or_none(&repo, Path::new("packages/api"))
+            .expect("read scoped tags")
+            .expect("find scoped tag");
+        let missing =
+            latest_tag_or_none(&repo, Path::new("packages/missing")).expect("read missing stream");
 
         assert_eq!(tag, ("packages/api/v1.0.0".to_string(), matching_commit));
-        assert!(error.contains("package stream 'packages/missing'"));
-        assert!(error.contains("packages/missing/vX.Y.Z"));
+        assert_eq!(missing, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -869,9 +882,30 @@ mod tests {
         lightweight_tag(&repo, "crates/widget/V2.0.0", nearer);
         commit_file(&repo, &dir, "README.md", "three", "fix: widget");
 
-        let tag = latest_tag(&repo, Path::new("crates/widget")).expect("find scoped tag");
+        let tag = latest_tag_or_none(&repo, Path::new("crates/widget"))
+            .expect("read scoped tags")
+            .expect("find scoped tag");
 
         assert_eq!(tag, ("crates/widget/V2.0.0".to_string(), nearer));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn latest_tag_rejects_a_stream_with_only_unreachable_tags() {
+        let dir = temp_path("unreachable-scoped-tag");
+        let repo = Repository::init(&dir).expect("init repo");
+        let baseline = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        let tagged = commit_file(&repo, &dir, "README.md", "two", "fix: package");
+        lightweight_tag(&repo, "packages/api/v1.0.0", tagged);
+        let baseline = repo.find_object(baseline, None).expect("find baseline");
+        repo.reset(&baseline, git2::ResetType::Hard, None)
+            .expect("reset to baseline");
+
+        let error = latest_tag_or_none(&repo, Path::new("packages/api"))
+            .expect_err("unreachable stream should fail");
+
+        assert!(error.contains("package stream 'packages/api'"));
+        assert!(error.contains("reachable from HEAD"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -931,7 +965,7 @@ mod tests {
 
         let impact = get_impact_for_package(
             &repo,
-            first,
+            Some(first),
             Path::new(""),
             &[],
             &ImpactConfig {
@@ -964,7 +998,7 @@ mod tests {
 
         let impact = get_impact_for_package(
             &repo,
-            baseline,
+            Some(baseline),
             Path::new(""),
             &[],
             &ImpactConfig {
@@ -1018,14 +1052,20 @@ mod tests {
 
         let root = get_impact_for_package(
             &repo,
-            baseline,
+            Some(baseline),
             Path::new(""),
             &[PathBuf::from("packages/api")],
             &config,
         )
         .expect("root impact");
-        let api = get_impact_for_package(&repo, baseline, Path::new("packages/api"), &[], &config)
-            .expect("api impact");
+        let api = get_impact_for_package(
+            &repo,
+            Some(baseline),
+            Path::new("packages/api"),
+            &[],
+            &config,
+        )
+        .expect("api impact");
 
         assert_eq!(root, Some(Impact::Minor));
         assert_eq!(api, Some(Impact::Patch));

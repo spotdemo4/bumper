@@ -129,6 +129,166 @@ fn go_module_without_a_file_version_bumps_its_existing_package_tag() {
 }
 
 #[test]
+fn untagged_package_uses_its_manifest_version() {
+    let local = TempDir::new("untagged-manifest-local");
+    let remote = TempDir::new("untagged-manifest-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("packages/service")).expect("create package");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("packages/service/package.json"),
+        "{\n  \"name\": \"service\",\n  \"version\": \"2.3.4\"\n}\n",
+    )
+    .expect("write service manifest");
+    fs::write(
+        local.path().join("packages/service/README.md"),
+        "service v2.3.4\n",
+    )
+    .expect("write service readme");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    fs::write(
+        local.path().join("packages/service/README.md"),
+        "updated service v2.3.4\n",
+    )
+    .expect("update service readme");
+    commit_all(&repo, "fix: repair service");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push", "packages/service/README.md"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let package_tag = repo
+        .revparse_single("refs/tags/packages/service/v2.3.5")
+        .expect("find package tag")
+        .peel_to_commit()
+        .expect("peel package tag");
+    assert_eq!(package_tag.id(), repo.head().unwrap().target().unwrap());
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find propagated root tag");
+    assert!(
+        fs::read_to_string(local.path().join("packages/service/package.json"))
+            .expect("read service manifest")
+            .contains("\"version\": \"2.3.5\"")
+    );
+}
+
+#[test]
+fn untagged_versionless_package_uses_nearest_parent_version() {
+    let local = TempDir::new("untagged-go-local");
+    let remote = TempDir::new("untagged-go-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("packages/parent/service")).expect("create Go package");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("packages/parent/package.json"),
+        "{\n  \"name\": \"parent\",\n  \"version\": \"2.3.4\"\n}\n",
+    )
+    .expect("write parent manifest");
+    let go_mod = "module example.com/service\n\ngo 1.24\n";
+    fs::write(local.path().join("packages/parent/service/go.mod"), go_mod).expect("write go.mod");
+    fs::write(
+        local.path().join("packages/parent/service/main.go"),
+        "package main\n\nfunc main() {}\n",
+    )
+    .expect("write Go source");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/parent/v2.3.4", baseline);
+    fs::write(
+        local.path().join("packages/parent/service/main.go"),
+        "package main\n\nfunc main() { println(\"fixed\") }\n",
+    )
+    .expect("update Go source");
+    commit_all(&repo, "fix: repair service");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push", "packages/parent/service/go.mod"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    repo.revparse_single("refs/tags/packages/parent/service/v2.3.5")
+        .expect("find inherited-version package tag");
+    repo.revparse_single("refs/tags/packages/parent/v2.3.5")
+        .expect("find propagated parent tag");
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find propagated root tag");
+    assert_eq!(
+        fs::read_to_string(local.path().join("packages/parent/service/go.mod"))
+            .expect("read go.mod"),
+        go_mod
+    );
+}
+
+#[test]
+fn untagged_root_uses_manifest_version_and_full_history() {
+    let local = TempDir::new("untagged-root-local");
+    let remote = TempDir::new("untagged-root-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(local.path().join("README.md"), "root v1.0.0\n").expect("write readme");
+    commit_all(&repo, "chore: initialize repository");
+    fs::write(local.path().join("README.md"), "fixed root v1.0.0\n").expect("update readme");
+    commit_all(&repo, "fix: repair root");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push", "README.md"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find first root tag");
+    assert!(
+        fs::read_to_string(local.path().join("package.json"))
+            .expect("read root manifest")
+            .contains("\"version\": \"1.0.1\"")
+    );
+}
+
+#[test]
 fn ignored_directory_changes_do_not_trigger_or_receive_a_release() {
     let local = TempDir::new("ignored-directory-local");
     let remote = TempDir::new("ignored-directory-remote");
@@ -419,7 +579,7 @@ fn unselected_nested_package_changes_do_not_bump_the_parent_directly() {
 }
 
 #[test]
-fn missing_dependent_tag_fails_before_modifying_files() {
+fn untagged_dependent_uses_manifest_version() {
     let local = TempDir::new("missing-dependent-tag-local");
     let remote = TempDir::new("missing-dependent-tag-remote");
     let repo = Repository::init(local.path()).expect("init repository");
@@ -455,36 +615,34 @@ fn missing_dependent_tag_fails_before_modifying_files() {
     )
     .expect("update library readme");
     commit_all(&repo, "fix: update library");
-    let before_head = repo.head().expect("read HEAD").target();
-    let before_library = fs::read_to_string(local.path().join("packages/library/package.json"))
-        .expect("read library manifest");
-
     let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
         .current_dir(local.path())
         .args(["--no-push", "packages/library/README.md"])
         .output()
         .expect("run bumper");
 
-    assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("package stream 'packages/app'"),
-        "unexpected stderr: {}",
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(repo.head().expect("read HEAD").target(), before_head);
-    assert_eq!(
+    assert!(
         fs::read_to_string(local.path().join("packages/library/package.json"))
-            .expect("read library manifest"),
-        before_library
+            .expect("read library manifest")
+            .contains("\"version\": \"2.0.1\"")
     );
-    assert_eq!(
-        fs::read_to_string(&app_path).expect("read app manifest"),
-        app_source
+    let app = fs::read_to_string(&app_path).expect("read app manifest");
+    assert!(app.contains("\"version\": \"3.0.1\""));
+    assert!(
+        app.contains("\"library\": \"2.0.1\""),
+        "dependency was not updated: {app}"
     );
     assert!(repo.statuses(None).expect("read status").is_empty());
-    assert!(repo.find_reference("refs/tags/v1.0.1").is_err());
-    assert!(
-        repo.find_reference("refs/tags/packages/library/v2.0.1")
-            .is_err()
-    );
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find propagated root tag");
+    repo.revparse_single("refs/tags/packages/library/v2.0.1")
+        .expect("find library tag");
+    repo.revparse_single("refs/tags/packages/app/v3.0.1")
+        .expect("find dependent tag");
 }

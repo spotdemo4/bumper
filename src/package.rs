@@ -40,6 +40,53 @@ pub fn is_versioned_package(directory: impl AsRef<Path>) -> bool {
     .any(|name| is_package_marker(directory.join(name)))
 }
 
+/// Reads the version from the first valid package marker that stores one.
+///
+/// Versionless formats such as Go modules return `None`.
+pub fn package_version(directory: impl AsRef<Path>) -> Option<String> {
+    let directory = directory.as_ref();
+    for name in [
+        "package.json",
+        "Cargo.toml",
+        "pyproject.toml",
+        "gleam.toml",
+        "build.zig.zon",
+        "CMakeLists.txt",
+        "build.gradle",
+        "build.gradle.kts",
+        "go.mod",
+    ] {
+        let path = directory.join(name);
+        if !is_package_marker(&path) {
+            continue;
+        }
+
+        let version = match name {
+            "package.json" => read(&path)
+                .and_then(|source| serde_json::from_str::<JsonValue>(&source).ok())
+                .and_then(|value| value.get("version")?.as_str().map(str::to_string)),
+            "Cargo.toml" => toml_version(&path, Some("package")),
+            "pyproject.toml" => toml_version(&path, Some("project")),
+            "gleam.toml" => toml_version(&path, None),
+            "build.zig.zon" => zig_version(&path),
+            "CMakeLists.txt" => cmake_version(&path),
+            "build.gradle" | "build.gradle.kts" => gradle_version(&path),
+            "go.mod" => None,
+            _ => unreachable!("package marker list and version readers should match"),
+        };
+        if version.as_deref().is_some_and(is_release_version) {
+            return version;
+        }
+    }
+    None
+}
+
+fn is_release_version(version: &str) -> bool {
+    let mut parts = version.split('.');
+    (0..3).all(|_| parts.next().is_some_and(|part| part.parse::<u64>().is_ok()))
+        && parts.next().is_none()
+}
+
 /// Returns whether `path` is a supported, valid package-defining manifest.
 pub fn is_package_marker(path: impl AsRef<Path>) -> bool {
     let path = path.as_ref();
@@ -143,6 +190,15 @@ fn parse_toml(path: &Path) -> Option<DocumentMut> {
     read(path)?.parse().ok()
 }
 
+fn toml_version(path: &Path, section: Option<&str>) -> Option<String> {
+    let document = parse_toml(path)?;
+    let table = match section {
+        Some(section) => document.get(section)?.as_table()?,
+        None => document.as_table(),
+    };
+    table.get("version")?.as_str().map(str::to_string)
+}
+
 fn table_has_name_and_version(table: &Table) -> bool {
     nonempty(table.get("name").and_then(|item| item.as_str()))
         && table
@@ -192,6 +248,17 @@ fn is_zig_zon(path: &Path) -> bool {
     }
 
     name && version
+}
+
+fn zig_version(path: &Path) -> Option<String> {
+    let source = strip_c_style_comments(&read(path)?);
+    source.lines().find_map(|line| {
+        let (field, value) = line.trim().split_once('=')?;
+        if field.trim() != ".version" {
+            return None;
+        }
+        zig_value(value.trim().trim_end_matches(',').trim()).map(str::to_string)
+    })
 }
 
 fn zig_value(value: &str) -> Option<&str> {
@@ -260,9 +327,11 @@ fn strip_c_style_comments(source: &str) -> String {
 }
 
 fn is_cmake(path: &Path) -> bool {
-    let Some(source) = read(path) else {
-        return false;
-    };
+    cmake_version(path).is_some()
+}
+
+fn cmake_version(path: &Path) -> Option<String> {
+    let source = read(path)?;
     let source = source
         .lines()
         .map(|line| line.split('#').next().unwrap_or_default())
@@ -291,54 +360,67 @@ fn is_cmake(path: &Path) -> bool {
             && let Some(close_offset) = lowercase[open + 1..].find(')')
         {
             let body = &source[open + 1..open + 1 + close_offset];
-            if cmake_project_body_has_version(body) {
-                return true;
+            if let Some(version) = cmake_project_body_version(body) {
+                return Some(version.to_string());
             }
         }
 
         search_from = start + "project".len();
     }
 
-    false
+    None
 }
 
-fn cmake_project_body_has_version(body: &str) -> bool {
+fn cmake_project_body_version(body: &str) -> Option<&str> {
     let tokens: Vec<_> = body.split_whitespace().collect();
     if tokens.first().is_none_or(|name| name.is_empty()) {
-        return false;
+        return None;
     }
 
-    tokens.windows(2).any(|pair| {
-        pair[0].eq_ignore_ascii_case("VERSION")
+    tokens.windows(2).find_map(|pair| {
+        (pair[0].eq_ignore_ascii_case("VERSION")
             && matches!(
                 pair[1]
                     .split('.')
                     .map(str::parse::<u64>)
                     .collect::<Result<Vec<_>, _>>(),
                 Ok(parts) if (3..=4).contains(&parts.len())
-            )
+            ))
+        .then_some(pair[1])
     })
 }
 
 fn is_gradle(path: &Path) -> bool {
-    let Some(source) = read(path) else {
-        return false;
-    };
+    gradle_version(path).is_some()
+}
+
+fn gradle_version(path: &Path) -> Option<String> {
+    let source = read(path)?;
     let source = strip_c_style_comments(&source);
 
-    source.lines().any(|line| {
+    source.lines().find_map(|line| {
         if line.starts_with(char::is_whitespace) {
-            return false;
+            return None;
         }
-        let Some(rest) = line.strip_prefix("version") else {
-            return false;
-        };
+        let rest = line.strip_prefix("version")?;
         let rest = rest.trim_start();
-        let Some(value) = rest.strip_prefix('=') else {
-            return false;
-        };
+        let value = rest.strip_prefix('=')?;
         let value = value.trim().trim_end_matches(';').trim();
-        !value.is_empty() && value != "\"\"" && value != "''"
+        if value.is_empty() || value == "\"\"" || value == "''" {
+            return None;
+        }
+        Some(
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .or_else(|| {
+                    value
+                        .strip_prefix('\'')
+                        .and_then(|value| value.strip_suffix('\''))
+                })
+                .unwrap_or(value)
+                .to_string(),
+        )
     })
 }
 
@@ -519,7 +601,8 @@ mod tests {
         temp.write("gleam/gleam.toml", "name = \"app\"\nversion = \"1.2.3\"\n");
 
         for directory in [json, cargo, python, gleam] {
-            assert!(is_versioned_package(directory));
+            assert!(is_versioned_package(&directory));
+            assert_eq!(package_version(directory).as_deref(), Some("1.2.3"));
         }
     }
 
@@ -573,7 +656,8 @@ mod tests {
         temp.write("kotlin/build.gradle.kts", "version = \"1.2.3\"\n");
 
         for directory in [zig, cmake, gradle, kotlin] {
-            assert!(is_versioned_package(directory));
+            assert!(is_versioned_package(&directory));
+            assert_eq!(package_version(directory).as_deref(), Some("1.2.3"));
         }
     }
 
@@ -600,8 +684,10 @@ mod tests {
             "module example.com/service extra\n",
         );
 
-        assert!(is_versioned_package(module));
-        assert!(is_versioned_package(factored));
+        assert!(is_versioned_package(&module));
+        assert_eq!(package_version(module), None);
+        assert!(is_versioned_package(&factored));
+        assert_eq!(package_version(factored), None);
         for directory in [missing_module, duplicate, extra_argument] {
             assert!(!is_versioned_package(directory));
         }
@@ -665,6 +751,18 @@ mod tests {
         let packages = resolve_package_hierarchy(temp.path(), file).expect("resolve packages");
         assert_eq!(packages.len(), 1);
         assert_eq!(packages[0].path, PathBuf::new());
+    }
+
+    #[test]
+    fn package_version_skips_an_invalid_earlier_marker() {
+        let temp = TempDir::new();
+        temp.write("package.json", r#"{"name":"web","version":"next"}"#);
+        temp.write(
+            "Cargo.toml",
+            "[package]\nname = \"core\"\nversion = \"1.2.3\"\n",
+        );
+
+        assert_eq!(package_version(temp.path()).as_deref(), Some("1.2.3"));
     }
 
     #[test]

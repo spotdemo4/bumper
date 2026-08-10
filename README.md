@@ -38,7 +38,7 @@ packages/consumer/plugins/cache/v0.5.0
 
 For example, `bumper packages/consumer/README.md` assigns the README to `packages/consumer`; it does not create a README-specific tag. If the consumer releases, each real package containing it also releases. Descendant propagation is a patch unless the containing package has its own minor or major conventional commit. Multiple supplied paths may release sibling packages, while shared ancestors release only once.
 
-Every independent package stream needs an initial tag before bumper can calculate its first release. For a package currently at `1.2.2`, create `packages/consumer/v1.2.2`. Existing root repositories continue to use their current `vX.Y.Z` tags.
+When a package stream has no tag yet, bumper uses the version in its package manifest. Versionless package formats such as Go modules inherit the version of their nearest package ancestor. The nearest ancestor tag is used as the release-history boundary; if no ancestor has a tag, bumper considers the package's full git history. Existing root repositories continue to use their current `vX.Y.Z` tags.
 
 ## Why
 
