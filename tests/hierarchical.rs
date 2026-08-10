@@ -37,6 +37,13 @@ impl Drop for TempDir {
 }
 
 fn commit_all(repo: &Repository, message: &str) -> Oid {
+    let mut config = repo.config().expect("open repository config");
+    config
+        .set_str("user.name", "Bumper Test")
+        .expect("set test user name");
+    config
+        .set_str("user.email", "bumper@example.com")
+        .expect("set test user email");
     let mut index = repo.index().expect("open index");
     index
         .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
