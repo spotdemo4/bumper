@@ -57,6 +57,7 @@ pub fn apply_typed_change(
         }
         "build.zig.zon" => replace_line_value(file, ".version", new_version),
         "gleam.toml" => bump_toml_path(file, &["version"], new_version),
+        "go.mod" => Ok(false),
         _ if name.ends_with(".nix") => bump_nix_version(file, old_version, new_version),
         _ => return Ok(TypedChange::Unhandled),
     }?;

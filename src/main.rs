@@ -527,6 +527,7 @@ fn package_files(package_root: &Path, tracked_paths: &HashSet<PathBuf>) -> Vec<P
         "CMakeLists.txt",
         "build.gradle",
         "build.gradle.kts",
+        "go.mod",
     ];
     let markers = MARKERS
         .iter()

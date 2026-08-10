@@ -26,7 +26,7 @@ Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES`
 
 ### Package tags
 
-Each supplied file or directory belongs to its nearest containing package. A package is a directory with a valid versioned `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, or `build.gradle.kts`. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
+Each supplied file or directory belongs to its nearest containing package. A package is a directory with a valid `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, `build.gradle.kts`, or `go.mod`. Go modules use their package tag as the version because `go.mod` has no project version to update. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
 
 Root releases use `vX.Y.Z`. Packages below the repository root use their repository-relative path as the tag prefix:
 

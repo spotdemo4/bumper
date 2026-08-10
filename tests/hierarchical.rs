@@ -77,6 +77,58 @@ fn tag(repo: &Repository, name: &str, commit: Oid) {
 }
 
 #[test]
+fn go_module_without_a_file_version_bumps_its_existing_package_tag() {
+    let local = TempDir::new("go-module-local");
+    let remote = TempDir::new("go-module-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("packages/service")).expect("create Go module");
+    let go_mod = "module example.com/service\n\ngo 1.24\n";
+    fs::write(local.path().join("packages/service/go.mod"), go_mod).expect("write go.mod");
+    fs::write(
+        local.path().join("packages/service/main.go"),
+        "package main\n\nfunc main() {}\n",
+    )
+    .expect("write Go source");
+    let baseline = commit_all(&repo, "chore: initialize Go module");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/service/v2.3.4", baseline);
+    fs::write(
+        local.path().join("packages/service/main.go"),
+        "package main\n\nfunc main() { println(\"fixed\") }\n",
+    )
+    .expect("update Go source");
+    let changed = commit_all(&repo, "fix: repair service");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push", "packages/service/go.mod"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let package_tag = repo
+        .revparse_single("refs/tags/packages/service/v2.3.5")
+        .expect("find Go package tag")
+        .peel_to_commit()
+        .expect("peel Go package tag");
+    assert_eq!(package_tag.id(), changed);
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find propagated root tag");
+    assert_eq!(
+        fs::read_to_string(local.path().join("packages/service/go.mod")).expect("read go.mod"),
+        go_mod
+    );
+}
+
+#[test]
 fn ignored_directory_changes_do_not_trigger_or_receive_a_release() {
     let local = TempDir::new("ignored-directory-local");
     let remote = TempDir::new("ignored-directory-remote");

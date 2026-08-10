@@ -17,7 +17,8 @@ pub struct Package {
 /// Returns whether `directory` contains a supported, valid package marker.
 ///
 /// Merely having a similarly named file is not enough: the marker must contain
-/// the package name and version fields required by its format.
+/// the package identity fields required by its format. Formats that store a
+/// version in the manifest must also contain that version.
 pub fn is_versioned_package(directory: impl AsRef<Path>) -> bool {
     let directory = directory.as_ref();
     if !directory.is_dir() {
@@ -33,6 +34,7 @@ pub fn is_versioned_package(directory: impl AsRef<Path>) -> bool {
         "CMakeLists.txt",
         "build.gradle",
         "build.gradle.kts",
+        "go.mod",
     ]
     .iter()
     .any(|name| is_package_marker(directory.join(name)))
@@ -49,6 +51,7 @@ pub fn is_package_marker(path: impl AsRef<Path>) -> bool {
         Some("build.zig.zon") => is_zig_zon(path),
         Some("CMakeLists.txt") => is_cmake(path),
         Some("build.gradle" | "build.gradle.kts") => is_gradle(path),
+        Some("go.mod") => is_go_mod(path),
         _ => false,
     }
 }
@@ -339,6 +342,113 @@ fn is_gradle(path: &Path) -> bool {
     })
 }
 
+fn is_go_mod(path: &Path) -> bool {
+    let Some(source) = read(path) else {
+        return false;
+    };
+
+    let mut found_module = false;
+    let mut module_block = false;
+    let mut block_paths = 0;
+
+    for line in source.lines() {
+        let line = strip_go_line_comment(line).trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if module_block {
+            if line == ")" {
+                if block_paths != 1 {
+                    return false;
+                }
+                module_block = false;
+                continue;
+            }
+            if !is_single_go_value(line) {
+                return false;
+            }
+            block_paths += 1;
+            if block_paths > 1 {
+                return false;
+            }
+            continue;
+        }
+
+        let Some(module) = line.strip_prefix("module") else {
+            continue;
+        };
+        if !module.is_empty()
+            && !module.starts_with(char::is_whitespace)
+            && !module.starts_with('(')
+        {
+            continue;
+        }
+        if found_module {
+            return false;
+        }
+
+        found_module = true;
+        let module = module.trim();
+        if module == "(" {
+            module_block = true;
+        } else if !is_single_go_value(module) {
+            return false;
+        }
+    }
+
+    found_module && !module_block
+}
+
+fn strip_go_line_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut characters = line.char_indices().peekable();
+
+    while let Some((index, character)) = characters.next() {
+        if let Some(delimiter) = quote {
+            if delimiter == '"' && escaped {
+                escaped = false;
+            } else if delimiter == '"' && character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+        } else if matches!(character, '"' | '`') {
+            quote = Some(character);
+        } else if character == '/' && characters.peek().is_some_and(|(_, next)| *next == '/') {
+            return &line[..index];
+        }
+    }
+
+    line
+}
+
+fn is_single_go_value(value: &str) -> bool {
+    let value = value.trim();
+    let Some(first) = value.chars().next() else {
+        return false;
+    };
+    if !matches!(first, '"' | '`') {
+        return !value.chars().any(char::is_whitespace)
+            && !value
+                .chars()
+                .any(|character| matches!(character, '(' | ')'));
+    }
+
+    let mut escaped = false;
+    for (index, character) in value.char_indices().skip(1) {
+        if first == '"' && escaped {
+            escaped = false;
+        } else if first == '"' && character == '\\' {
+            escaped = true;
+        } else if character == first {
+            return index > 1 && value[index + character.len_utf8()..].trim().is_empty();
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +574,36 @@ mod tests {
 
         for directory in [zig, cmake, gradle, kotlin] {
             assert!(is_versioned_package(directory));
+        }
+    }
+
+    #[test]
+    fn recognizes_go_modules_without_a_version() {
+        let temp = TempDir::new();
+        let module = temp.mkdir("go");
+        temp.write("go/go.mod", "module example.com/service\n\ngo 1.24\n");
+        let factored = temp.mkdir("factored");
+        temp.write(
+            "factored/go.mod",
+            "module(\n    `example.com/factored` // module path\n)\n\ngo 1.24\n",
+        );
+        let missing_module = temp.mkdir("missing-module");
+        temp.write("missing-module/go.mod", "go 1.24\n");
+        let duplicate = temp.mkdir("duplicate");
+        temp.write(
+            "duplicate/go.mod",
+            "module example.com/one\nmodule example.com/two\n",
+        );
+        let extra_argument = temp.mkdir("extra-argument");
+        temp.write(
+            "extra-argument/go.mod",
+            "module example.com/service extra\n",
+        );
+
+        assert!(is_versioned_package(module));
+        assert!(is_versioned_package(factored));
+        for directory in [missing_module, duplicate, extra_argument] {
+            assert!(!is_versioned_package(directory));
         }
     }
 
