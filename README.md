@@ -5,8 +5,10 @@
 [![rust](https://img.shields.io/badge/dynamic/toml?url=https://trev.zip/llc/bumper/raw/branch/main/Cargo.toml&query=%24.package.rust-version&logo=rust&logoColor=%23bac2de&label=version&labelColor=%23313244&color=%23D34516)](https://releases.rs/)
 [![flakehub](https://img.shields.io/endpoint?url=https://flakehub.com/f/spotdemo4/bumper/badge&labelColor=%23313244)](https://flakehub.com/flake/spotdemo4/bumper)
 
-- determines the [semantic versioning](https://semver.org/) impact (major, minor or patch) of the [conventional commits](https://www.conventionalcommits.org) since the last git tag
+- determines the [semantic versioning](https://semver.org/) impact (major, minor or patch) of the [conventional commits](https://www.conventionalcommits.org) since each package's last git tag
 - increments the git tag by the impact (v0.0.1 -> PATCH -> v0.0.2)
+- creates hierarchical tags for packages in subdirectories (`packages/consumer/v0.0.2`)
+- releases containing packages with a patch whenever one of their nested packages releases
 - applies the version bump to files given as arguments (`bumper [files...]`)
 - applies the version bump in directories given as arguments to supported project files (`README.md`, `action.yaml`, `action.yml`, `package.json`, `package-lock.json`, `build.gradle`, `build.gradle.kts`, `gradle.properties`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `uv.lock`, `build.zig.zon`, `gleam.toml`, `*.nix` (`version = "x.y.z";`), `CMakeLists.txt`)
 - skips likely vendored paths (`vendor`, `node_modules`) and symlinks during directory scans
@@ -19,6 +21,22 @@ This works well as a github action. Have it run on every push to main and it wil
 ```elm
 bumper [paths...]
 ```
+
+### Package tags
+
+Each supplied file or directory belongs to its nearest containing package. A package is a directory with a valid versioned `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, or `build.gradle.kts`. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
+
+Root releases use `vX.Y.Z`. Packages below the repository root use their repository-relative path as the tag prefix:
+
+```text
+v3.0.1
+packages/consumer/v1.2.3
+packages/consumer/plugins/cache/v0.5.0
+```
+
+For example, `bumper packages/consumer/README.md` assigns the README to `packages/consumer`; it does not create a README-specific tag. If the consumer releases, each real package containing it also releases. Descendant propagation is a patch unless the containing package has its own minor or major conventional commit. Multiple supplied paths may release sibling packages, while shared ancestors release only once.
+
+Every independent package stream needs an initial tag before bumper can calculate its first release. For a package currently at `1.2.2`, create `packages/consumer/v1.2.2`. Existing root repositories continue to use their current `vX.Y.Z` tags.
 
 ## Why
 

@@ -88,6 +88,65 @@ fn read_package_json_name(path: &Path) -> Option<String> {
     value.get("name")?.as_str().map(|s| s.to_string())
 }
 
+/// Returns whether a dependency propagation writer would update `file` without
+/// modifying the filesystem. Unsupported filenames return `false`.
+pub fn dependency_update_needed(
+    file: &Path,
+    bumped: &HashMap<String, (String, String)>,
+) -> AppResult<bool> {
+    Ok(dependency_update_content(file, bumped)?.is_some())
+}
+
+fn dependency_update_content(
+    file: &Path,
+    bumped: &HashMap<String, (String, String)>,
+) -> AppResult<Option<String>> {
+    if bumped.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(file_name) = file.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    if !matches!(
+        file_name,
+        "package.json" | "package-lock.json" | "Cargo.toml" | "Cargo.lock"
+    ) {
+        return Ok(None);
+    }
+
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    match file_name {
+        "package.json" => Ok(transform_package_json_dependencies(&source, bumped)),
+        "package-lock.json" => transform_package_lock_dependencies(&source, bumped)
+            .map_err(|e| format!("failed to serialize '{}': {e}", file.display())),
+        "Cargo.toml" => Ok(transform_cargo_toml_dependencies(&source, bumped)),
+        "Cargo.lock" => Ok(transform_cargo_lock_dependencies(&source, bumped)),
+        _ => unreachable!(),
+    }
+}
+
+fn write_dependency_update(
+    file: &Path,
+    bumped: &HashMap<String, (String, String)>,
+    expected_file_name: &str,
+) -> AppResult<bool> {
+    let file_name = file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if file_name != expected_file_name {
+        return Ok(false);
+    }
+
+    let Some(content) = dependency_update_content(file, bumped)? else {
+        return Ok(false);
+    };
+    fs::write(file, content).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    Ok(true)
+}
+
 /// Second-pass bump: for a `package.json` file, update any `dependencies`,
 /// `devDependencies`, `peerDependencies`, `optionalDependencies`,
 /// `bundledDependencies`, `bundleDependencies`, `overrides`, or
@@ -100,25 +159,21 @@ pub fn bump_package_json_dependencies(
     file: &Path,
     bumped: &HashMap<String, (String, String)>,
 ) -> AppResult<bool> {
-    if bumped.is_empty() {
-        return Ok(false);
-    }
-    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if file_name != "package.json" {
-        return Ok(false);
-    }
+    write_dependency_update(file, bumped, "package.json")
+}
 
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-
+fn transform_package_json_dependencies(
+    source: &str,
+    bumped: &HashMap<String, (String, String)>,
+) -> Option<String> {
     // Parse to determine which dependency names actually appear in
     // dependency sections and whose version contains the old string.
-    let value: Value = match serde_json::from_str(&source) {
+    let value: Value = match serde_json::from_str(source) {
         Ok(v) => v,
-        Err(_) => return Ok(false),
+        Err(_) => return None,
     };
     let Value::Object(map) = value else {
-        return Ok(false);
+        return None;
     };
 
     const DEP_SECTIONS: &[&str] = &[
@@ -154,10 +209,10 @@ pub fn bump_package_json_dependencies(
     }
 
     if to_update.is_empty() {
-        return Ok(false);
+        return None;
     }
 
-    let mut content = source.clone();
+    let mut content = source.to_string();
     let mut changed_any = false;
 
     for pkg_name in to_update {
@@ -193,11 +248,10 @@ pub fn bump_package_json_dependencies(
     }
 
     if !changed_any || content == source {
-        return Ok(false);
+        return None;
     }
 
-    fs::write(file, content).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
+    Some(content)
 }
 
 fn json_contains_dep(value: &Value, pkg_name: &str, old_version: &str) -> bool {
@@ -230,23 +284,19 @@ pub fn bump_package_lock_dependencies(
     file: &Path,
     bumped: &HashMap<String, (String, String)>,
 ) -> AppResult<bool> {
-    if bumped.is_empty() {
-        return Ok(false);
-    }
-    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if file_name != "package-lock.json" {
-        return Ok(false);
-    }
+    write_dependency_update(file, bumped, "package-lock.json")
+}
 
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-
-    let mut value: Value = match serde_json::from_str(&source) {
+fn transform_package_lock_dependencies(
+    source: &str,
+    bumped: &HashMap<String, (String, String)>,
+) -> Result<Option<String>, serde_json::Error> {
+    let mut value: Value = match serde_json::from_str(source) {
         Ok(v) => v,
-        Err(_) => return Ok(false),
+        Err(_) => return Ok(None),
     };
     let Value::Object(root) = &mut value else {
-        return Ok(false);
+        return Ok(None);
     };
 
     let mut changed = false;
@@ -288,17 +338,15 @@ pub fn bump_package_lock_dependencies(
     }
 
     if !changed {
-        return Ok(false);
+        return Ok(None);
     }
 
-    let serialized = serde_json::to_string_pretty(&value)
-        .map_err(|e| format!("failed to serialize '{}': {e}", file.display()))?;
+    let serialized = serde_json::to_string_pretty(&value)?;
     let mut written = serialized;
     if !written.ends_with('\n') {
         written.push('\n');
     }
-    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
+    Ok(Some(written))
 }
 
 fn update_lock_dependencies_map(
@@ -330,31 +378,26 @@ pub fn bump_cargo_toml_dependencies(
     file: &Path,
     bumped: &HashMap<String, (String, String)>,
 ) -> AppResult<bool> {
-    if bumped.is_empty() {
-        return Ok(false);
-    }
-    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if file_name != "Cargo.toml" {
-        return Ok(false);
-    }
+    write_dependency_update(file, bumped, "Cargo.toml")
+}
 
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+fn transform_cargo_toml_dependencies(
+    source: &str,
+    bumped: &HashMap<String, (String, String)>,
+) -> Option<String> {
     let mut doc: toml_edit::DocumentMut = match source.parse() {
         Ok(d) => d,
-        Err(_) => return Ok(false),
+        Err(_) => return None,
     };
 
     let mut changed = false;
     visit_cargo_toml_table(doc.as_table_mut(), bumped, &mut changed);
 
     if !changed {
-        return Ok(false);
+        return None;
     }
 
-    fs::write(file, doc.to_string())
-        .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
+    Some(doc.to_string())
 }
 
 fn visit_cargo_toml_table(
@@ -416,17 +459,13 @@ pub fn bump_cargo_lock_dependencies(
     file: &Path,
     bumped: &HashMap<String, (String, String)>,
 ) -> AppResult<bool> {
-    if bumped.is_empty() {
-        return Ok(false);
-    }
-    let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if file_name != "Cargo.lock" {
-        return Ok(false);
-    }
+    write_dependency_update(file, bumped, "Cargo.lock")
+}
 
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-
+fn transform_cargo_lock_dependencies(
+    source: &str,
+    bumped: &HashMap<String, (String, String)>,
+) -> Option<String> {
     // Split into segments per `[[package]]` as in `bump_package_in_lock`.
     let mut segments: Vec<Vec<String>> = vec![Vec::new()];
     for line in source.lines() {
@@ -515,7 +554,7 @@ pub fn bump_cargo_lock_dependencies(
     }
 
     if !changed {
-        return Ok(false);
+        return None;
     }
 
     let mut written = segments
@@ -527,8 +566,7 @@ pub fn bump_cargo_lock_dependencies(
         written.push('\n');
     }
 
-    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
+    Some(written)
 }
 
 fn read_toml_name(path: &Path, section: &str) -> AppResult<String> {
@@ -1212,6 +1250,99 @@ mod tests {
         );
         let changed = bump_package_lock_dependencies(&path, &bumped).expect("bump");
         assert!(!changed);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dependency_update_preview_reports_updates_without_writing() {
+        let dir = temp_path("dependency-preview-needed");
+        fs::create_dir_all(&dir).expect("create dir");
+        let bumped = HashMap::from([(
+            "pkg-a".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        )]);
+        let cases = [
+            (
+                "package.json",
+                "{\n  \"dependencies\": {\n    \"pkg-a\": \"^0.13.0\"\n  }\n}\n",
+            ),
+            (
+                "package-lock.json",
+                "{\n  \"packages\": {\n    \"node_modules/pkg-a\": {\n      \"version\": \"0.13.0\"\n    }\n  }\n}\n",
+            ),
+            (
+                "Cargo.toml",
+                "[dependencies]\npkg-a = { version = \"0.13.0\", path = \"../pkg-a\" }\n",
+            ),
+            (
+                "Cargo.lock",
+                "version = 4\n\n[[package]]\nname = \"consumer\"\nversion = \"1.0.0\"\ndependencies = [\n \"pkg-a 0.13.0\",\n]\n\n[[package]]\nname = \"pkg-a\"\nversion = \"0.13.0\"\n",
+            ),
+        ];
+
+        for (file_name, original) in cases {
+            let path = dir.join(file_name);
+            fs::write(&path, original).expect("write source file");
+
+            assert!(
+                dependency_update_needed(&path, &bumped).expect("preview dependency update"),
+                "{file_name} should need an update"
+            );
+            assert_eq!(
+                fs::read_to_string(&path).expect("read source file"),
+                original,
+                "preview must not modify {file_name}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dependency_update_preview_reports_no_update_without_writing() {
+        let dir = temp_path("dependency-preview-not-needed");
+        fs::create_dir_all(&dir).expect("create dir");
+        let bumped = HashMap::from([(
+            "pkg-a".to_string(),
+            ("0.13.0".to_string(), "0.14.0".to_string()),
+        )]);
+        let cases = [
+            (
+                "package.json",
+                "{\n  \"dependencies\": {\n    \"pkg-a\": \"^0.14.0\"\n  }\n}\n",
+            ),
+            (
+                "package-lock.json",
+                "{\n  \"packages\": {\n    \"node_modules/pkg-a\": {\n      \"version\": \"0.14.0\"\n    }\n  }\n}\n",
+            ),
+            ("Cargo.toml", "[dependencies]\npkg-a = \"0.14.0\"\n"),
+            (
+                "Cargo.lock",
+                "version = 4\n\n[[package]]\nname = \"consumer\"\nversion = \"1.0.0\"\ndependencies = [\n \"pkg-a 0.14.0\",\n]\n\n[[package]]\nname = \"pkg-a\"\nversion = \"0.14.0\"\n",
+            ),
+        ];
+
+        for (file_name, original) in cases {
+            let path = dir.join(file_name);
+            fs::write(&path, original).expect("write source file");
+
+            assert!(
+                !dependency_update_needed(&path, &bumped).expect("preview dependency update"),
+                "{file_name} should not need an update"
+            );
+            assert_eq!(
+                fs::read_to_string(&path).expect("read source file"),
+                original,
+                "preview must not modify {file_name}"
+            );
+        }
+
+        let unsupported = dir.join("dependencies.txt");
+        assert!(
+            !dependency_update_needed(&unsupported, &bumped).expect("preview unsupported file")
+        );
+        assert!(!unsupported.exists());
+
         let _ = fs::remove_dir_all(dir);
     }
 }

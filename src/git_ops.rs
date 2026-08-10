@@ -41,10 +41,28 @@ pub fn current_branch(repo: &Repository) -> AppResult<String> {
     Ok(shorthand.to_string())
 }
 
-pub fn latest_tag(repo: &Repository) -> AppResult<(String, Oid)> {
+pub fn latest_tag(repo: &Repository, package_path: &Path) -> AppResult<(String, Oid)> {
     let tags = repo
         .tag_names(None)
         .map_err(|e| format!("failed to list tags: {e}"))?;
+    let package_scope = package_path
+        .iter()
+        .map(OsStr::to_str)
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| {
+            format!(
+                "package path is not valid UTF-8: {}",
+                package_path.display()
+            )
+        })?
+        .join("/");
+    let expected_stream = if package_scope.is_empty() {
+        "root stream (expected X.Y.Z, vX.Y.Z, or VX.Y.Z)".to_string()
+    } else {
+        format!(
+            "package stream '{package_scope}' (expected {package_scope}/vX.Y.Z or {package_scope}/VX.Y.Z)"
+        )
+    };
 
     let mut release_tags: HashMap<Oid, Vec<(String, Version)>> = HashMap::new();
 
@@ -53,10 +71,20 @@ pub fn latest_tag(repo: &Repository) -> AppResult<(String, Oid)> {
             continue;
         };
 
-        let version_name = name
-            .strip_prefix('v')
-            .or_else(|| name.strip_prefix('V'))
-            .unwrap_or(name);
+        let version_name = if package_scope.is_empty() {
+            name.strip_prefix('v')
+                .or_else(|| name.strip_prefix('V'))
+                .unwrap_or(name)
+        } else {
+            let Some(version_name) = name
+                .strip_prefix(package_scope.as_str())
+                .and_then(|name| name.strip_prefix('/'))
+                .and_then(|name| name.strip_prefix('v').or_else(|| name.strip_prefix('V')))
+            else {
+                continue;
+            };
+            version_name
+        };
         let Ok(version) = parse_version(version_name) else {
             continue;
         };
@@ -76,9 +104,9 @@ pub fn latest_tag(repo: &Repository) -> AppResult<(String, Oid)> {
     }
 
     if release_tags.is_empty() {
-        return Err(
-            "no semantic version git tags found, please create a vX.Y.Z tag first".to_string(),
-        );
+        return Err(format!(
+            "no semantic version git tags found for {expected_stream}"
+        ));
     }
 
     let mut walk = repo
@@ -100,19 +128,31 @@ pub fn latest_tag(repo: &Repository) -> AppResult<(String, Oid)> {
         }
     }
 
-    Err("no semantic version git tags found reachable from HEAD".to_string())
+    Err(format!(
+        "no semantic version git tags found for {expected_stream} reachable from HEAD"
+    ))
 }
 
-pub fn get_impact(
+pub struct ImpactConfig<'a> {
+    pub major_types: &'a HashSet<String>,
+    pub minor_types: &'a HashSet<String>,
+    pub patch_types: &'a HashSet<String>,
+    pub skip_scopes: &'a HashSet<String>,
+    pub force: bool,
+}
+
+pub fn get_impact_for_package(
     repo: &Repository,
     last_tag_commit: Oid,
-    major_types: &HashSet<String>,
-    minor_types: &HashSet<String>,
-    patch_types: &HashSet<String>,
-    skip_scopes: &HashSet<String>,
-    force: bool,
+    package_path: &Path,
+    child_package_paths: &[PathBuf],
+    config: &ImpactConfig<'_>,
 ) -> AppResult<Option<Impact>> {
-    let mut impact = if force { Some(Impact::Patch) } else { None };
+    let mut impact = if config.force {
+        Some(Impact::Patch)
+    } else {
+        None
+    };
 
     let mut walk = repo
         .revwalk()
@@ -127,6 +167,10 @@ pub fn get_impact(
         let commit = repo
             .find_commit(oid)
             .map_err(|e| format!("failed to load commit {oid}: {e}"))?;
+
+        if !commit_touches_package(repo, &commit, package_path, child_package_paths)? {
+            continue;
+        }
 
         let message = commit
             .message()
@@ -145,31 +189,78 @@ pub fn get_impact(
             scope = &prefix[start + 1..start + 1 + end];
         }
 
-        if skip_scopes.contains(&scope.trim().to_ascii_lowercase()) {
+        if config
+            .skip_scopes
+            .contains(&scope.trim().to_ascii_lowercase())
+        {
             continue;
         }
 
         if prefix.trim_end().ends_with('!')
             || has_breaking_change_footer(message)
-            || major_types.contains(&typ.to_ascii_lowercase())
+            || config.major_types.contains(&typ.to_ascii_lowercase())
         {
             impact = Some(Impact::Major);
             break;
         }
 
-        if minor_types.contains(&typ.to_ascii_lowercase()) {
+        if config.minor_types.contains(&typ.to_ascii_lowercase()) {
             if impact.unwrap_or(Impact::Patch) < Impact::Minor {
                 impact = Some(Impact::Minor);
             }
             continue;
         }
 
-        if patch_types.contains(&typ.to_ascii_lowercase()) && impact.is_none() {
+        if config.patch_types.contains(&typ.to_ascii_lowercase()) && impact.is_none() {
             impact = Some(Impact::Patch);
         }
     }
 
     Ok(impact)
+}
+
+fn commit_touches_package(
+    repo: &Repository,
+    commit: &git2::Commit<'_>,
+    package_path: &Path,
+    child_package_paths: &[PathBuf],
+) -> AppResult<bool> {
+    let tree = commit
+        .tree()
+        .map_err(|e| format!("failed to read tree for commit {}: {e}", commit.id()))?;
+    let parent_tree = if commit.parent_count() == 0 {
+        None
+    } else {
+        Some(
+            commit
+                .parent(0)
+                .and_then(|parent| parent.tree())
+                .map_err(|e| {
+                    format!("failed to read parent tree for commit {}: {e}", commit.id())
+                })?,
+        )
+    };
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+        .map_err(|e| format!("failed to diff commit {}: {e}", commit.id()))?;
+
+    Ok(diff.deltas().any(|delta| {
+        [delta.old_file().path(), delta.new_file().path()]
+            .into_iter()
+            .flatten()
+            .any(|path| path_belongs_to_package(path, package_path, child_package_paths))
+    }))
+}
+
+fn path_belongs_to_package(
+    path: &Path,
+    package_path: &Path,
+    child_package_paths: &[PathBuf],
+) -> bool {
+    (package_path.as_os_str().is_empty() || path.starts_with(package_path))
+        && !child_package_paths
+            .iter()
+            .any(|child| path.starts_with(child))
 }
 
 fn has_breaking_change_footer(message: &str) -> bool {
@@ -575,12 +666,18 @@ fn fetch_from_remote(repo_path: &Path, name: &str) -> AppResult<()> {
         .map_err(|e| format!("failed to fetch from '{name}': {e}"))
 }
 
-pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
+pub fn git_push(repo: &Repository, branch: &str, tags: &[String]) -> AppResult<()> {
     let mut remote = repo
         .find_remote("origin")
         .map_err(|e| format!("failed to find remote 'origin': {e}"))?;
     let branch_ref = format!("refs/heads/{branch}:refs/heads/{branch}");
-    let tag_ref = format!("refs/tags/{tag}:refs/tags/{tag}");
+    let mut refspecs = Vec::with_capacity(tags.len() + 1);
+    refspecs.push(branch_ref);
+    refspecs.extend(
+        tags.iter()
+            .map(|tag| format!("refs/tags/{tag}:refs/tags/{tag}")),
+    );
+    let refspecs = refspecs.iter().map(String::as_str).collect::<Vec<_>>();
 
     let url = remote
         .pushurl()
@@ -597,10 +694,7 @@ pub fn git_push(repo: &Repository, branch: &str, tag: &str) -> AppResult<()> {
     push_options.remote_callbacks(callbacks);
 
     remote
-        .push(
-            &[branch_ref.as_str(), tag_ref.as_str()],
-            Some(&mut push_options),
-        )
+        .push(&refspecs, Some(&mut push_options))
         .map_err(|e| format!("failed to push to origin: {e}"))?;
     Ok(())
 }
@@ -633,6 +727,9 @@ mod tests {
         contents: &str,
         message: &str,
     ) -> Oid {
+        if let Some(parent) = dir.join(name).parent() {
+            std::fs::create_dir_all(parent).expect("create test file parent");
+        }
         std::fs::write(dir.join(name), contents).expect("write test file");
         let mut index = repo.index().expect("open git index");
         index.add_path(Path::new(name)).expect("add index path");
@@ -667,11 +764,128 @@ mod tests {
         lightweight_tag(&repo, "deploy-2026-06-02", second);
         let _third = commit_file(&repo, &dir, "README.md", "three", "feat: feature");
 
-        let (name, oid) = latest_tag(&repo).expect("find latest tag");
+        let (name, oid) = latest_tag(&repo, Path::new("")).expect("find latest tag");
 
         assert_eq!(name, "v0.1.0");
         assert_eq!(oid, first);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn latest_tag_isolates_root_and_scoped_streams() {
+        let dir = temp_path("isolated-tag-streams");
+        let repo = Repository::init(&dir).expect("init repo");
+        let root_commit = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        lightweight_tag(&repo, "v1.0.0", root_commit);
+        let scoped_commit = commit_file(&repo, &dir, "README.md", "two", "feat: api");
+        lightweight_tag(&repo, "packages/api/v9.0.0", scoped_commit);
+        commit_file(&repo, &dir, "README.md", "three", "fix: follow-up");
+
+        let root = latest_tag(&repo, Path::new("")).expect("find root tag");
+        let scoped = latest_tag(&repo, Path::new("packages/api")).expect("find scoped tag");
+
+        assert_eq!(root, ("v1.0.0".to_string(), root_commit));
+        assert_eq!(scoped, ("packages/api/v9.0.0".to_string(), scoped_commit));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn latest_tag_finds_multi_level_scoped_stream() {
+        let dir = temp_path("multi-level-tag-stream");
+        let repo = Repository::init(&dir).expect("init repo");
+        let commit = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        lightweight_tag(&repo, "packages/services/api/V2.3.4", commit);
+
+        let tag = latest_tag(&repo, Path::new("packages/services/api"))
+            .expect("find multi-level scoped tag");
+
+        assert_eq!(tag, ("packages/services/api/V2.3.4".to_string(), commit));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn latest_tag_ignores_malformed_and_sibling_scoped_tags() {
+        let dir = temp_path("ignored-scoped-tags");
+        let repo = Repository::init(&dir).expect("init repo");
+        let matching_commit = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        lightweight_tag(&repo, "packages/api/v1.0.0", matching_commit);
+        let other_commit = commit_file(&repo, &dir, "README.md", "two", "feat: other");
+        for tag in [
+            "packages/api/2.0.0",
+            "packages/api/v2.0",
+            "packages/api/v2.0.0/extra",
+            "packages/api-client/v9.0.0",
+            "packages/web/v9.0.0",
+            "v9.0.0",
+        ] {
+            lightweight_tag(&repo, tag, other_commit);
+        }
+
+        let tag = latest_tag(&repo, Path::new("packages/api")).expect("find scoped tag");
+        let error = latest_tag(&repo, Path::new("packages/missing"))
+            .expect_err("missing stream should fail");
+
+        assert_eq!(tag, ("packages/api/v1.0.0".to_string(), matching_commit));
+        assert!(error.contains("package stream 'packages/missing'"));
+        assert!(error.contains("packages/missing/vX.Y.Z"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn latest_tag_uses_nearest_scoped_commit_and_highest_version_on_it() {
+        let dir = temp_path("nearest-scoped-tag");
+        let repo = Repository::init(&dir).expect("init repo");
+        let older = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        lightweight_tag(&repo, "crates/widget/v9.0.0", older);
+        let nearer = commit_file(&repo, &dir, "README.md", "two", "feat: widget");
+        lightweight_tag(&repo, "crates/widget/v1.0.0", nearer);
+        lightweight_tag(&repo, "crates/widget/V2.0.0", nearer);
+        commit_file(&repo, &dir, "README.md", "three", "fix: widget");
+
+        let tag = latest_tag(&repo, Path::new("crates/widget")).expect("find scoped tag");
+
+        assert_eq!(tag, ("crates/widget/V2.0.0".to_string(), nearer));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn git_push_pushes_branch_and_all_exact_tags() {
+        let dir = temp_path("push-multiple-tags");
+        let remote_dir = temp_path("push-multiple-tags-remote");
+        let repo = Repository::init(&dir).expect("init repo");
+        let commit = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        lightweight_tag(&repo, "packages/api/v1.0.0", commit);
+        lightweight_tag(&repo, "packages/web/v2.0.0", commit);
+        Repository::init_bare(&remote_dir).expect("init bare remote");
+        repo.remote("origin", remote_dir.to_str().expect("UTF-8 remote path"))
+            .expect("add origin");
+        let branch = current_branch(&repo).expect("current branch");
+        let tags = [
+            "packages/api/v1.0.0".to_string(),
+            "packages/web/v2.0.0".to_string(),
+        ];
+
+        git_push(&repo, &branch, &tags).expect("push refs");
+
+        let remote = Repository::open_bare(&remote_dir).expect("open bare remote");
+        assert_eq!(
+            remote
+                .find_reference(&format!("refs/heads/{branch}"))
+                .expect("find remote branch")
+                .target(),
+            Some(commit)
+        );
+        for tag in tags {
+            assert_eq!(
+                remote
+                    .find_reference(&format!("refs/tags/{tag}"))
+                    .expect("find remote tag")
+                    .target(),
+                Some(commit)
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(remote_dir);
     }
 
     #[test]
@@ -688,18 +902,71 @@ mod tests {
             "feat: change API\n\nBREAKING CHANGE: response shape changed",
         );
 
-        let impact = get_impact(
+        let impact = get_impact_for_package(
             &repo,
             first,
-            &HashSet::from(["breaking change".to_string()]),
-            &HashSet::from(["feat".to_string()]),
-            &HashSet::from(["fix".to_string()]),
-            &HashSet::new(),
-            false,
+            Path::new(""),
+            &[],
+            &ImpactConfig {
+                major_types: &HashSet::from(["breaking change".to_string()]),
+                minor_types: &HashSet::from(["feat".to_string()]),
+                patch_types: &HashSet::from(["fix".to_string()]),
+                skip_scopes: &HashSet::new(),
+                force: false,
+            },
         )
         .expect("get impact");
 
         assert_eq!(impact, Some(Impact::Major));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn impact_is_scoped_to_package_owned_paths() {
+        let dir = temp_path("package-impact");
+        let repo = Repository::init(&dir).expect("init repo");
+        commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        commit_file(
+            &repo,
+            &dir,
+            "packages/api/package.json",
+            r#"{"name":"api","version":"1.0.0"}"#,
+            "chore: add package",
+        );
+        let baseline = repo.head().unwrap().target().unwrap();
+        commit_file(&repo, &dir, "README.md", "two", "feat: root feature");
+        commit_file(
+            &repo,
+            &dir,
+            "packages/api/package.json",
+            r#"{"name":"api","version":"1.0.1"}"#,
+            "fix: api bug",
+        );
+        let major = HashSet::from(["breaking change".to_string()]);
+        let minor = HashSet::from(["feat".to_string()]);
+        let patch = HashSet::from(["fix".to_string()]);
+        let skipped = HashSet::new();
+        let config = ImpactConfig {
+            major_types: &major,
+            minor_types: &minor,
+            patch_types: &patch,
+            skip_scopes: &skipped,
+            force: false,
+        };
+
+        let root = get_impact_for_package(
+            &repo,
+            baseline,
+            Path::new(""),
+            &[PathBuf::from("packages/api")],
+            &config,
+        )
+        .expect("root impact");
+        let api = get_impact_for_package(&repo, baseline, Path::new("packages/api"), &[], &config)
+            .expect("api impact");
+
+        assert_eq!(root, Some(Impact::Minor));
+        assert_eq!(api, Some(Impact::Patch));
         let _ = std::fs::remove_dir_all(dir);
     }
 
