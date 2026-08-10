@@ -30,35 +30,53 @@ pub fn apply_typed_change(
     old_version: &str,
     new_version: &str,
 ) -> AppResult<TypedChange> {
+    evaluate_typed_change(file, old_version, new_version, true)
+}
+
+/// Returns the change a typed writer would make without modifying the filesystem.
+pub fn preview_typed_change(
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+) -> AppResult<TypedChange> {
+    evaluate_typed_change(file, old_version, new_version, false)
+}
+
+fn evaluate_typed_change(
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+    write: bool,
+) -> AppResult<TypedChange> {
     let name = file
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("invalid file path '{}'", file.display()))?;
 
     let changed = match name {
-        "README.md" => replace_literal(file, old_version, new_version),
-        "action.yaml" => replace_literal(file, old_version, new_version),
-        "action.yml" => replace_literal(file, old_version, new_version),
-        "package.json" => bump_package_json(file, new_version),
-        "package-lock.json" => bump_package_lock_json(file, new_version),
-        "build.gradle" => bump_gradle_build(file, old_version, new_version),
-        "build.gradle.kts" => bump_gradle_build(file, old_version, new_version),
-        "gradle.properties" => bump_gradle_properties(file, old_version, new_version),
-        "CMakeLists.txt" => bump_cmake_lists(file, new_version),
-        "Cargo.toml" => bump_toml_path(file, &["package", "version"], new_version),
-        "pyproject.toml" => bump_toml_path(file, &["project", "version"], new_version),
+        "README.md" => replace_literal(file, old_version, new_version, write),
+        "action.yaml" => replace_literal(file, old_version, new_version, write),
+        "action.yml" => replace_literal(file, old_version, new_version, write),
+        "package.json" => bump_package_json(file, new_version, write),
+        "package-lock.json" => bump_package_lock_json(file, new_version, write),
+        "build.gradle" => bump_gradle_build(file, old_version, new_version, write),
+        "build.gradle.kts" => bump_gradle_build(file, old_version, new_version, write),
+        "gradle.properties" => bump_gradle_properties(file, old_version, new_version, write),
+        "CMakeLists.txt" => bump_cmake_lists(file, new_version, write),
+        "Cargo.toml" => bump_toml_path(file, &["package", "version"], new_version, write),
+        "pyproject.toml" => bump_toml_path(file, &["project", "version"], new_version, write),
         "uv.lock" => {
             let name = read_toml_name(&file.with_file_name("pyproject.toml"), "project")?;
-            bump_package_in_lock(file, old_version, new_version, &name)
+            bump_package_in_lock(file, old_version, new_version, &name, write)
         }
         "Cargo.lock" => {
             let name = read_toml_name(&file.with_file_name("Cargo.toml"), "package")?;
-            bump_package_in_lock(file, old_version, new_version, &name)
+            bump_package_in_lock(file, old_version, new_version, &name, write)
         }
-        "build.zig.zon" => replace_line_value(file, ".version", new_version),
-        "gleam.toml" => bump_toml_path(file, &["version"], new_version),
+        "build.zig.zon" => replace_line_value(file, ".version", new_version, write),
+        "gleam.toml" => bump_toml_path(file, &["version"], new_version, write),
         "go.mod" => Ok(false),
-        _ if name.ends_with(".nix") => bump_nix_version(file, old_version, new_version),
+        _ if name.ends_with(".nix") => bump_nix_version(file, old_version, new_version, write),
         _ => return Ok(TypedChange::Unhandled),
     }?;
 
@@ -591,6 +609,7 @@ fn bump_package_in_lock(
     _old_version: &str,
     new_version: &str,
     package_name: &str,
+    write: bool,
 ) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
@@ -648,24 +667,35 @@ fn bump_package_in_lock(
         written.push('\n');
     }
 
-    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    if write {
+        fs::write(file, written)
+            .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    }
     Ok(true)
 }
 
-fn regex_replace_file(file: &Path, re: &Regex, replacement: &str) -> AppResult<bool> {
+fn regex_replace_file(file: &Path, re: &Regex, replacement: &str, write: bool) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
     match re.replace(&source, replacement) {
         Cow::Borrowed(_) => Ok(false),
+        Cow::Owned(replaced) if replaced == source => Ok(false),
         Cow::Owned(replaced) => {
-            fs::write(file, replaced)
-                .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            if write {
+                fs::write(file, replaced)
+                    .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            }
             Ok(true)
         }
     }
 }
 
-fn replace_literal(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
+fn replace_literal(
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+    write: bool,
+) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
     let replaced = source.replace(old_version, new_version);
@@ -673,21 +703,39 @@ fn replace_literal(file: &Path, old_version: &str, new_version: &str) -> AppResu
         return Ok(false);
     }
 
-    fs::write(file, replaced).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    if write {
+        fs::write(file, replaced)
+            .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    }
     Ok(true)
 }
 
-fn replace_line_value(file: &Path, key: &str, new_version: &str) -> AppResult<bool> {
+fn replace_line_value(file: &Path, key: &str, new_version: &str, write: bool) -> AppResult<bool> {
     let re = Regex::new(&format!(r#"(?m)^(\s*){} = "[^"]*".*$"#, regex::escape(key))).unwrap();
-    regex_replace_file(file, &re, &format!(r#"${{1}}{key} = "{new_version}","#))
+    regex_replace_file(
+        file,
+        &re,
+        &format!(r#"${{1}}{key} = "{new_version}","#),
+        write,
+    )
 }
 
-fn bump_package_json(file: &Path, new_version: &str) -> AppResult<bool> {
+fn bump_package_json(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {
     let re = Regex::new(r#"(?m)^(\s*)"version":\s*"[^"]*"(,?)$"#).unwrap();
-    regex_replace_file(file, &re, &format!(r#"${{1}}"version": "{new_version}"$2"#))
+    regex_replace_file(
+        file,
+        &re,
+        &format!(r#"${{1}}"version": "{new_version}"$2"#),
+        write,
+    )
 }
 
-fn bump_gradle_build(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
+fn bump_gradle_build(
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+    write: bool,
+) -> AppResult<bool> {
     let re = Regex::new(&format!(
         r#"(?m)^([ \t]*version[ \t]*=[ \t]*)(["']){}(["'])([^\r\n]*)$"#,
         regex::escape(old_version)
@@ -698,24 +746,32 @@ fn bump_gradle_build(file: &Path, old_version: &str, new_version: &str) -> AppRe
     let replacement = format!(r#"${{1}}${{2}}{new_version}${{3}}${{4}}"#);
     match re.replace_all(&source, replacement.as_str()) {
         Cow::Borrowed(_) => Ok(false),
+        Cow::Owned(replaced) if replaced == source => Ok(false),
         Cow::Owned(replaced) => {
-            fs::write(file, replaced)
-                .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            if write {
+                fs::write(file, replaced)
+                    .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            }
             Ok(true)
         }
     }
 }
 
-fn bump_gradle_properties(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
+fn bump_gradle_properties(
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+    write: bool,
+) -> AppResult<bool> {
     let re = Regex::new(&format!(
         r#"(?m)^([ \t]*version[ \t]*=[ \t]*){}([ \t]*)$"#,
         regex::escape(old_version)
     ))
     .unwrap();
-    regex_replace_file(file, &re, &format!(r#"${{1}}{new_version}${{2}}"#))
+    regex_replace_file(file, &re, &format!(r#"${{1}}{new_version}${{2}}"#), write)
 }
 
-fn bump_package_lock_json(file: &Path, new_version: &str) -> AppResult<bool> {
+fn bump_package_lock_json(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
 
@@ -788,19 +844,35 @@ fn bump_package_lock_json(file: &Path, new_version: &str) -> AppResult<bool> {
     if source.ends_with('\n') {
         written.push('\n');
     }
-    fs::write(file, written).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    if written == source {
+        return Ok(false);
+    }
+    if write {
+        fs::write(file, written)
+            .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    }
     Ok(true)
 }
 
-fn bump_cmake_lists(file: &Path, new_version: &str) -> AppResult<bool> {
+fn bump_cmake_lists(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {
     let re = Regex::new(
         r#"(?is)(\bproject\s*\([^)]*?\bVERSION[ \t\r\n]+)("?)([0-9]+(?:\.[0-9]+){0,3})("?)([^0-9.])"#,
     )
     .unwrap();
-    regex_replace_file(file, &re, &format!("${{1}}${{2}}{new_version}${{4}}${{5}}"))
+    regex_replace_file(
+        file,
+        &re,
+        &format!("${{1}}${{2}}{new_version}${{4}}${{5}}"),
+        write,
+    )
 }
 
-fn bump_nix_version(file: &Path, old_version: &str, new_version: &str) -> AppResult<bool> {
+fn bump_nix_version(
+    file: &Path,
+    old_version: &str,
+    new_version: &str,
+    write: bool,
+) -> AppResult<bool> {
     // Matches `version = "0.1.0";` with flexible whitespace, preserving
     // the prefix (`version = "`) and suffix (`";`) formatting.
     let re = Regex::new(&format!(
@@ -813,22 +885,32 @@ fn bump_nix_version(file: &Path, old_version: &str, new_version: &str) -> AppRes
     let replacement = format!(r"${{1}}{new_version}${{2}}");
     match re.replace_all(&source, replacement.as_str()) {
         Cow::Borrowed(_) => Ok(false),
+        Cow::Owned(replaced) if replaced == source => Ok(false),
         Cow::Owned(replaced) => {
-            fs::write(file, replaced)
-                .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            if write {
+                fs::write(file, replaced)
+                    .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            }
             Ok(true)
         }
     }
 }
 
-fn bump_toml_path(file: &Path, path: &[&str], new_version: &str) -> AppResult<bool> {
+fn bump_toml_path(file: &Path, path: &[&str], new_version: &str, write: bool) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
     let mut doc: toml_edit::DocumentMut = match source.parse() {
         Ok(doc) => doc,
         Err(_) => {
             if path.len() == 2 {
-                return replace_toml_section_key_line(file, &source, path[0], path[1], new_version);
+                return replace_toml_section_key_line(
+                    file,
+                    &source,
+                    path[0],
+                    path[1],
+                    new_version,
+                    write,
+                );
             }
             return Ok(false);
         }
@@ -852,8 +934,10 @@ fn bump_toml_path(file: &Path, path: &[&str], new_version: &str) -> AppResult<bo
     }
 
     *value = toml_edit::value(new_version);
-    fs::write(file, doc.to_string())
-        .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    if write {
+        fs::write(file, doc.to_string())
+            .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    }
     Ok(true)
 }
 
@@ -863,6 +947,7 @@ fn replace_toml_section_key_line(
     section: &str,
     key: &str,
     new_version: &str,
+    write: bool,
 ) -> AppResult<bool> {
     let re = Regex::new(&format!(
         r#"(?m)(^\[{}\][^\[]*?){} = "[^"]*""#,
@@ -873,9 +958,12 @@ fn replace_toml_section_key_line(
     let replacement = format!(r#"${{1}}{key} = "{new_version}""#);
     match re.replace(source, replacement.as_str()) {
         Cow::Borrowed(_) => Ok(false),
+        Cow::Owned(replaced) if replaced == source => Ok(false),
         Cow::Owned(replaced) => {
-            fs::write(file, replaced)
-                .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            if write {
+                fs::write(file, replaced)
+                    .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+            }
             Ok(true)
         }
     }
@@ -1343,6 +1431,43 @@ mod tests {
             !dependency_update_needed(&unsupported, &bumped).expect("preview unsupported file")
         );
         assert!(!unsupported.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn typed_change_preview_reports_change_without_writing() {
+        let dir = temp_path("typed-preview");
+        fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("README.md");
+        let original = "version 1.2.3\n";
+        fs::write(&path, original).expect("write README");
+
+        assert_eq!(
+            preview_typed_change(&path, "1.2.3", "1.2.4").expect("preview typed change"),
+            TypedChange::Changed
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read README"), original);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn typed_change_preview_ignores_an_already_current_version() {
+        let dir = temp_path("typed-preview-current");
+        fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("package.json");
+        let original = "{\n  \"name\": \"app\",\n  \"version\": \"1.2.4\"\n}\n";
+        fs::write(&path, original).expect("write package.json");
+
+        assert_eq!(
+            preview_typed_change(&path, "1.2.3", "1.2.4").expect("preview typed change"),
+            TypedChange::Unchanged
+        );
+        assert_eq!(
+            fs::read_to_string(&path).expect("read package.json"),
+            original
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

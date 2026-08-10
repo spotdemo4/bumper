@@ -22,6 +22,8 @@ This works well as a github action. Have it run on every push to main and it wil
 bumper [paths...]
 ```
 
+Before changing files, bumper prints a tree of every file it will update with the current and new package versions. Interactive terminal runs ask for confirmation; non-interactive runs such as CI print the same tree and continue without prompting.
+
 Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES` to a whitespace- or newline-separated list of repository-relative directories. Ignored trees do not contribute commits, packages, version files, or dependency updates. Explicitly selected paths inside them are skipped.
 
 ### Package tags

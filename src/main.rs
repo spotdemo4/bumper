@@ -4,13 +4,17 @@ mod model;
 mod versioning;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::fs;
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use bumper::bump::{
     TypedChange, apply_typed_change, bump_cargo_lock_dependencies, bump_cargo_toml_dependencies,
     bump_package_json_dependencies, bump_package_lock_dependencies, dependency_update_needed,
+    preview_typed_change,
 };
 use bumper::package::{Package, is_package_marker, package_version};
 use git2::{Oid, Repository};
@@ -44,6 +48,12 @@ struct ReleaseBase {
     last_tag: String,
     version: String,
     commit: Option<Oid>,
+}
+
+#[derive(Default)]
+struct PreviewNode {
+    children: BTreeMap<OsString, PreviewNode>,
+    versions: Option<(String, String)>,
 }
 
 fn main() -> ExitCode {
@@ -356,6 +366,31 @@ fn run() -> AppResult<()> {
         }
     }
 
+    let files = collect_bump_preview(
+        &repo,
+        &repo_root,
+        &releases,
+        &targets,
+        &known_packages,
+        &ignored_directories,
+        &tracked_files,
+        &tracked_paths,
+        &bumped,
+    )?;
+    print!("{}", render_bump_preview(&files));
+    io::stdout()
+        .flush()
+        .map_err(|e| format!("failed to write preview: {e}"))?;
+
+    let stdin = io::stdin();
+    let interactive = stdin.is_terminal();
+    let mut input = stdin.lock();
+    let mut output = io::stderr();
+    if !confirm_bump(interactive, &mut input, &mut output)? {
+        println!("aborted");
+        return Ok(());
+    }
+
     for release in releases.values() {
         bump_release_targets(
             &repo,
@@ -435,6 +470,182 @@ fn add_bumped_package_names(
             bumped
                 .entry(name)
                 .or_insert_with(|| (release.old_version.clone(), release.new_version.clone()));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_bump_preview(
+    repo: &Repository,
+    repo_root: &Path,
+    releases: &BTreeMap<PathBuf, Release>,
+    targets: &[Target],
+    known_packages: &BTreeMap<PathBuf, Package>,
+    ignored_directories: &[PathBuf],
+    tracked_files: &[PathBuf],
+    tracked_paths: &HashSet<PathBuf>,
+    bumped: &HashMap<String, (String, String)>,
+) -> AppResult<BTreeMap<PathBuf, (String, String)>> {
+    let mut files = BTreeMap::new();
+
+    for release in releases.values() {
+        for target in targets
+            .iter()
+            .filter(|target| target.package_path == release.package.path)
+        {
+            if target.path.is_file() {
+                if preview_file_change(&target.path, release, true)? {
+                    add_preview_file(&mut files, repo_root, &target.path, release)?;
+                }
+                continue;
+            }
+
+            for file in
+                list_tracked_files_under(repo, repo_root, &target.path, ignored_directories)?
+            {
+                if !file.is_file() {
+                    continue;
+                }
+                let hierarchy = resolve_known_package_hierarchy(repo_root, &file, known_packages)?;
+                if hierarchy
+                    .first()
+                    .is_some_and(|package| package.path != release.package.path)
+                {
+                    continue;
+                }
+                if preview_file_change(&file, release, false)? {
+                    add_preview_file(&mut files, repo_root, &file, release)?;
+                }
+            }
+        }
+
+        for file in package_files(&release.package.root, tracked_paths) {
+            if preview_file_change(&file, release, false)? {
+                add_preview_file(&mut files, repo_root, &file, release)?;
+            }
+        }
+    }
+
+    if !bumped.is_empty() {
+        for file in tracked_files {
+            match dependency_update_needed(file, bumped) {
+                Ok(true) => {
+                    let owner = resolve_known_package_hierarchy(repo_root, file, known_packages)?
+                        .into_iter()
+                        .next()
+                        .expect("known package hierarchy contains root");
+                    if let Some(release) = releases.get(&owner.path) {
+                        add_preview_file(&mut files, repo_root, file, release)?;
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => eprintln!("warning: {e}"),
+            }
+        }
+    }
+
+    Ok(files)
+}
+
+fn preview_file_change(file: &Path, release: &Release, replace_unhandled: bool) -> AppResult<bool> {
+    match preview_typed_change(file, &release.old_version, &release.new_version)? {
+        TypedChange::Changed => Ok(true),
+        TypedChange::Unchanged => Ok(false),
+        TypedChange::Unhandled if !replace_unhandled => Ok(false),
+        TypedChange::Unhandled => {
+            let source = fs::read_to_string(file)
+                .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+            if source.contains(&release.old_version) {
+                Ok(true)
+            } else {
+                Err(format!("no occurrences found in {}", file.display()))
+            }
+        }
+    }
+}
+
+fn add_preview_file(
+    files: &mut BTreeMap<PathBuf, (String, String)>,
+    repo_root: &Path,
+    file: &Path,
+    release: &Release,
+) -> AppResult<()> {
+    let relative = file.strip_prefix(repo_root).map_err(|_| {
+        format!(
+            "file '{}' is outside repository root '{}'",
+            file.display(),
+            repo_root.display()
+        )
+    })?;
+    files.insert(
+        relative.to_path_buf(),
+        (release.old_version.clone(), release.new_version.clone()),
+    );
+    Ok(())
+}
+
+fn render_bump_preview(files: &BTreeMap<PathBuf, (String, String)>) -> String {
+    let mut root = PreviewNode::default();
+    for (path, versions) in files {
+        let mut node = &mut root;
+        for component in path.components() {
+            node = node
+                .children
+                .entry(component.as_os_str().to_os_string())
+                .or_default();
+        }
+        node.versions = Some(versions.clone());
+    }
+
+    let mut output = String::from("Files to bump:\n.\n");
+    render_preview_children(&root, "", &mut output);
+    output
+}
+
+fn render_preview_children(node: &PreviewNode, prefix: &str, output: &mut String) {
+    let child_count = node.children.len();
+    for (index, (name, child)) in node.children.iter().enumerate() {
+        let last = index + 1 == child_count;
+        let connector = if last { "`-- " } else { "|-- " };
+        let _ = write!(output, "{prefix}{connector}{}", name.to_string_lossy());
+        if let Some((old_version, new_version)) = &child.versions {
+            let _ = write!(output, " ({old_version} -> {new_version})");
+        }
+        output.push('\n');
+
+        let child_prefix = format!("{prefix}{}", if last { "    " } else { "|   " });
+        render_preview_children(child, &child_prefix, output);
+    }
+}
+
+fn confirm_bump<R: BufRead, W: Write>(
+    interactive: bool,
+    input: &mut R,
+    output: &mut W,
+) -> AppResult<bool> {
+    if !interactive {
+        return Ok(true);
+    }
+
+    loop {
+        write!(output, "Would you like to proceed? [y/N] ")
+            .map_err(|e| format!("failed to write confirmation prompt: {e}"))?;
+        output
+            .flush()
+            .map_err(|e| format!("failed to write confirmation prompt: {e}"))?;
+
+        let mut answer = String::new();
+        let bytes = input
+            .read_line(&mut answer)
+            .map_err(|e| format!("failed to read confirmation: {e}"))?;
+        if bytes == 0 {
+            return Ok(false);
+        }
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => return Ok(true),
+            "" | "n" | "no" => return Ok(false),
+            _ => writeln!(output, "Please answer y or n.")
+                .map_err(|e| format!("failed to write confirmation prompt: {e}"))?,
         }
     }
 }
@@ -839,5 +1050,70 @@ mod tests {
 
         assert!(normalize_ignored_directories(root, &[PathBuf::from("../outside")]).is_err());
         assert!(normalize_ignored_directories(root, &[PathBuf::from("/outside")]).is_err());
+    }
+
+    #[test]
+    fn bump_preview_renders_file_hierarchy_and_versions() {
+        let files = BTreeMap::from([
+            (
+                PathBuf::from("Cargo.toml"),
+                ("1.2.3".to_string(), "1.3.0".to_string()),
+            ),
+            (
+                PathBuf::from("packages/app/Cargo.lock"),
+                ("2.0.0".to_string(), "2.0.1".to_string()),
+            ),
+            (
+                PathBuf::from("packages/app/Cargo.toml"),
+                ("2.0.0".to_string(), "2.0.1".to_string()),
+            ),
+        ]);
+
+        assert_eq!(
+            render_bump_preview(&files),
+            concat!(
+                "Files to bump:\n",
+                ".\n",
+                "|-- Cargo.toml (1.2.3 -> 1.3.0)\n",
+                "`-- packages\n",
+                "    `-- app\n",
+                "        |-- Cargo.lock (2.0.0 -> 2.0.1)\n",
+                "        `-- Cargo.toml (2.0.0 -> 2.0.1)\n",
+            )
+        );
+    }
+
+    #[test]
+    fn interactive_confirmation_accepts_yes_after_invalid_answer() {
+        let mut input = b"maybe\ny\n".as_slice();
+        let mut output = Vec::new();
+
+        assert!(confirm_bump(true, &mut input, &mut output).expect("confirm bump"));
+        assert_eq!(
+            String::from_utf8(output).expect("UTF-8 output"),
+            concat!(
+                "Would you like to proceed? [y/N] ",
+                "Please answer y or n.\n",
+                "Would you like to proceed? [y/N] ",
+            )
+        );
+    }
+
+    #[test]
+    fn interactive_confirmation_defaults_to_no() {
+        let mut input = b"\n".as_slice();
+        let mut output = Vec::new();
+
+        assert!(!confirm_bump(true, &mut input, &mut output).expect("confirm bump"));
+    }
+
+    #[test]
+    fn non_interactive_confirmation_does_not_read_or_prompt() {
+        let mut input = b"n\n".as_slice();
+        let mut output = Vec::new();
+
+        assert!(confirm_bump(false, &mut input, &mut output).expect("confirm bump"));
+        assert!(output.is_empty());
+        assert_eq!(input, b"n\n");
     }
 }

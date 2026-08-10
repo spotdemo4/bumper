@@ -114,6 +114,10 @@ fn go_module_without_a_file_version_bumps_its_existing_package_tag() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Files to bump:\n."));
+    assert!(!stdout.contains("Would you like to proceed?"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Would you like to proceed?"));
     let package_tag = repo
         .revparse_single("refs/tags/packages/service/v2.3.5")
         .expect("find Go package tag")
@@ -279,6 +283,11 @@ fn untagged_root_uses_manifest_version_and_full_history() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("README.md (1.0.0 -> 1.0.1)"));
+    assert!(stdout.contains("package.json (1.0.0 -> 1.0.1)"));
+    assert!(!stdout.contains("Would you like to proceed?"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("Would you like to proceed?"));
     repo.revparse_single("refs/tags/v1.0.1")
         .expect("find first root tag");
     assert!(
