@@ -7,7 +7,7 @@ branding:
 
 inputs:
   files:
-    description: files to bump versions in
+    description: additional files or directories to bump versions in
     required: false
   ignore_directories:
     description: repository-relative directories to ignore
@@ -37,7 +37,7 @@ inputs:
     required: false
     default: "true"
   force:
-    description: force at least a PATCH version bump
+    description: force at least a PATCH bump for every discovered package
     required: false
   allow_dirty:
     description: allow a dirty working directory

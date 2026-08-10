@@ -9,7 +9,7 @@
 - increments the git tag by the impact (v0.0.1 -> PATCH -> v0.0.2)
 - creates hierarchical tags for packages in subdirectories (`packages/consumer/v0.0.2`)
 - releases containing packages with a patch whenever one of their nested packages releases
-- applies the version bump to files given as arguments (`bumper [files...]`)
+- applies the version bump to every discovered package and to additional files given as arguments (`bumper [files...]`)
 - applies the version bump in directories given as arguments to supported project files (`README.md`, `action.yaml`, `action.yml`, `package.json`, `package-lock.json`, `build.gradle`, `build.gradle.kts`, `gradle.properties`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `uv.lock`, `build.zig.zon`, `gleam.toml`, `*.nix` (`version = "x.y.z";`), `CMakeLists.txt`)
 - skips configured directories, likely vendored paths (`vendor`, `node_modules`), and symlinks during directory scans
 - commits the bumped files and pushes them with the new git tag
@@ -22,13 +22,17 @@ This works well as a github action. Have it run on every push to main and it wil
 bumper [paths...]
 ```
 
-Before changing files, bumper prints a tree of every file it will update with the current and new package versions. Interactive terminal runs ask for confirmation; non-interactive runs such as CI print the same tree and continue without prompting.
+Before changing files, bumper reports selected packages without impactful changes as skipped, then prints a tree of every file it will update with the current and new package versions. Interactive terminals color each package group and ask for confirmation; non-interactive runs such as CI print a plain tree and continue without prompting. Set `NO_COLOR` to disable colors.
 
 Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES` to a whitespace- or newline-separated list of repository-relative directories. Ignored trees do not contribute commits, packages, version files, or dependency updates. Explicitly selected paths inside them are skipped.
 
 ### Package tags
 
-Each supplied file or directory belongs to its nearest containing package. A package is a directory with a valid `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, `build.gradle.kts`, or `go.mod`. Go modules use their package tag as the version because `go.mod` has no project version to update. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
+Each supplied file or directory is an additional bump target belonging to its nearest containing package. A package is a directory with a valid `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, `build.gradle.kts`, or `go.mod`. Go modules use their package tag as the version because `go.mod` has no project version to update. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
+
+Bumper always checks every discovered package for a release. Supplying paths adds files or directories to the normal package-root scans; explicit files also support literal version replacement when their format has no dedicated writer. Dependency updates can release packages that reference another bumped package.
+
+Because every package is selected, `--force` forces a bump for every discovered package rather than only packages containing supplied paths.
 
 Root releases use `vX.Y.Z`. Packages below the repository root use their repository-relative path as the tag prefix:
 
@@ -38,7 +42,7 @@ packages/consumer/v1.2.3
 packages/consumer/plugins/cache/v0.5.0
 ```
 
-For example, `bumper packages/consumer/README.md` assigns the README to `packages/consumer`; it does not create a README-specific tag. If the consumer releases, each real package containing it also releases. Descendant propagation is a patch unless the containing package has its own minor or major conventional commit. Multiple supplied paths may release sibling packages, while shared ancestors release only once.
+For example, `bumper packages/consumer/README.md` adds the README to the normal repository-wide bump and assigns it to `packages/consumer`; it does not create a README-specific tag. If the consumer releases, each real package containing it also releases. Descendant propagation is a patch unless the containing package has its own minor or major conventional commit. Shared ancestors release only once.
 
 When a package stream has no tag yet, bumper uses the version in its package manifest. Versionless package formats such as Go modules inherit the version of their nearest package ancestor. The nearest ancestor tag is used as the release-history boundary; if no ancestor has a tag, bumper considers the package's full git history. Existing root repositories continue to use their current `vX.Y.Z` tags.
 
@@ -56,9 +60,9 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
-    force: false # force at least a PATCH version bump, default false
+    force: false # force at least a PATCH bump for every package, default false
 
-    # list of files to bump versions in
+    # additional files or directories to bump versions in
     files: |-
       action.yaml
       README.md

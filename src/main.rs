@@ -3,8 +3,9 @@ mod git_ops;
 mod model;
 mod versioning;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ffi::OsString;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::env;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -53,7 +54,14 @@ struct ReleaseBase {
 #[derive(Default)]
 struct PreviewNode {
     children: BTreeMap<OsString, PreviewNode>,
-    versions: Option<(String, String)>,
+    entry: Option<PreviewEntry>,
+}
+
+#[derive(Clone)]
+struct PreviewEntry {
+    old_version: String,
+    new_version: String,
+    package_path: PathBuf,
 }
 
 fn main() -> ExitCode {
@@ -132,10 +140,6 @@ fn run() -> AppResult<()> {
     let ignored_directories =
         normalize_ignored_directories(&repo_root, &config.ignored_directories)?;
 
-    if config.paths.is_empty() {
-        config.paths = vec![repo_root.clone()];
-    }
-
     if !config.allow_dirty {
         ensure_clean_repo(&repo)?;
     }
@@ -146,9 +150,13 @@ fn run() -> AppResult<()> {
     let tracked_files =
         list_tracked_files_under(&repo, &repo_root, &repo_root, &ignored_directories)?;
     let known_packages = discover_packages(&repo_root, &tracked_files)?;
+    config
+        .paths
+        .extend(known_packages.values().map(|package| package.root.clone()));
     let tracked_paths = tracked_files.iter().cloned().collect::<HashSet<_>>();
     let mut packages = BTreeMap::<PathBuf, Package>::new();
     let mut selected_packages = HashSet::<PathBuf>::new();
+    let mut target_paths = HashSet::<PathBuf>::new();
     let mut targets = Vec::new();
     for path in &config.paths {
         let absolute = if path.is_absolute() {
@@ -176,6 +184,9 @@ fn run() -> AppResult<()> {
         })?;
         if git_ops::is_ignored_path(relative, &ignored_directories) {
             eprintln!("warning: ignoring selected path: {}", absolute.display());
+            continue;
+        }
+        if !target_paths.insert(absolute.clone()) {
             continue;
         }
 
@@ -254,8 +265,14 @@ fn run() -> AppResult<()> {
         }
     }
 
+    let skipped_packages = releases
+        .iter()
+        .filter(|(path, release)| selected_packages.contains(*path) && release.impact.is_none())
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
     releases.retain(|_, release| release.impact.is_some());
     if releases.is_empty() {
+        print_skipped_packages(&skipped_packages, &releases);
         println!("no new impactful commits for the selected packages");
         return Ok(());
     }
@@ -366,6 +383,8 @@ fn run() -> AppResult<()> {
         }
     }
 
+    print_skipped_packages(&skipped_packages, &releases);
+
     let files = collect_bump_preview(
         &repo,
         &repo_root,
@@ -377,7 +396,14 @@ fn run() -> AppResult<()> {
         &tracked_paths,
         &bumped,
     )?;
-    print!("{}", render_bump_preview(&files));
+    let no_color = env::var_os("NO_COLOR");
+    let term = env::var_os("TERM");
+    let color = preview_colors_enabled(
+        io::stdout().is_terminal(),
+        no_color.as_deref(),
+        term.as_deref(),
+    );
+    print!("{}", render_bump_preview(&files, color));
     io::stdout()
         .flush()
         .map_err(|e| format!("failed to write preview: {e}"))?;
@@ -460,6 +486,17 @@ fn run() -> AppResult<()> {
     Ok(())
 }
 
+fn print_skipped_packages(
+    skipped_packages: &BTreeSet<PathBuf>,
+    releases: &BTreeMap<PathBuf, Release>,
+) {
+    for path in skipped_packages {
+        if !releases.contains_key(path) {
+            println!("{}: (skipped)", package_label(path));
+        }
+    }
+}
+
 fn add_bumped_package_names(
     release: &Release,
     tracked_paths: &HashSet<PathBuf>,
@@ -485,7 +522,7 @@ fn collect_bump_preview(
     tracked_files: &[PathBuf],
     tracked_paths: &HashSet<PathBuf>,
     bumped: &HashMap<String, (String, String)>,
-) -> AppResult<BTreeMap<PathBuf, (String, String)>> {
+) -> AppResult<BTreeMap<PathBuf, PreviewEntry>> {
     let mut files = BTreeMap::new();
 
     for release in releases.values() {
@@ -565,7 +602,7 @@ fn preview_file_change(file: &Path, release: &Release, replace_unhandled: bool) 
 }
 
 fn add_preview_file(
-    files: &mut BTreeMap<PathBuf, (String, String)>,
+    files: &mut BTreeMap<PathBuf, PreviewEntry>,
     repo_root: &Path,
     file: &Path,
     release: &Release,
@@ -579,14 +616,45 @@ fn add_preview_file(
     })?;
     files.insert(
         relative.to_path_buf(),
-        (release.old_version.clone(), release.new_version.clone()),
+        PreviewEntry {
+            old_version: release.old_version.clone(),
+            new_version: release.new_version.clone(),
+            package_path: release.package.path.clone(),
+        },
     );
     Ok(())
 }
 
-fn render_bump_preview(files: &BTreeMap<PathBuf, (String, String)>) -> String {
+fn preview_colors_enabled(
+    stdout_is_terminal: bool,
+    no_color: Option<&OsStr>,
+    term: Option<&OsStr>,
+) -> bool {
+    cfg!(not(windows))
+        && stdout_is_terminal
+        && no_color.is_none()
+        && term
+            .and_then(OsStr::to_str)
+            .is_none_or(|term| !term.eq_ignore_ascii_case("dumb"))
+}
+
+fn render_bump_preview(files: &BTreeMap<PathBuf, PreviewEntry>, color: bool) -> String {
+    const PACKAGE_COLORS: &[&str] = &[
+        "\x1b[36m", "\x1b[33m", "\x1b[32m", "\x1b[35m", "\x1b[34m", "\x1b[31m", "\x1b[96m",
+        "\x1b[93m", "\x1b[92m", "\x1b[95m", "\x1b[94m", "\x1b[91m",
+    ];
+
+    let package_paths = files
+        .values()
+        .map(|entry| entry.package_path.clone())
+        .collect::<BTreeSet<_>>();
+    let package_colors = package_paths
+        .into_iter()
+        .enumerate()
+        .map(|(index, path)| (path, PACKAGE_COLORS[index % PACKAGE_COLORS.len()]))
+        .collect::<BTreeMap<_, _>>();
     let mut root = PreviewNode::default();
-    for (path, versions) in files {
+    for (path, entry) in files {
         let mut node = &mut root;
         for component in path.components() {
             node = node
@@ -594,27 +662,73 @@ fn render_bump_preview(files: &BTreeMap<PathBuf, (String, String)>) -> String {
                 .entry(component.as_os_str().to_os_string())
                 .or_default();
         }
-        node.versions = Some(versions.clone());
+        node.entry = Some(entry.clone());
     }
 
-    let mut output = String::from("Files to bump:\n.\n");
-    render_preview_children(&root, "", &mut output);
+    let mut output = String::from("Files to bump:\n");
+    write_preview_node_name(
+        &mut output,
+        ".",
+        package_colors.get(Path::new("")).copied(),
+        color,
+    );
+    output.push('\n');
+    render_preview_children(
+        &root,
+        "",
+        Path::new(""),
+        &package_colors,
+        color,
+        &mut output,
+    );
     output
 }
 
-fn render_preview_children(node: &PreviewNode, prefix: &str, output: &mut String) {
+fn render_preview_children(
+    node: &PreviewNode,
+    prefix: &str,
+    path: &Path,
+    package_colors: &BTreeMap<PathBuf, &str>,
+    color: bool,
+    output: &mut String,
+) {
     let child_count = node.children.len();
     for (index, (name, child)) in node.children.iter().enumerate() {
         let last = index + 1 == child_count;
         let connector = if last { "`-- " } else { "|-- " };
-        let _ = write!(output, "{prefix}{connector}{}", name.to_string_lossy());
-        if let Some((old_version, new_version)) = &child.versions {
-            let _ = write!(output, " ({old_version} -> {new_version})");
+        let child_path = path.join(name);
+        let package_color = package_colors
+            .iter()
+            .filter(|(package_path, _)| {
+                package_path.as_os_str().is_empty() || child_path.starts_with(package_path)
+            })
+            .max_by_key(|(package_path, _)| package_path.components().count())
+            .map(|(_, color)| *color);
+        let _ = write!(output, "{prefix}{connector}");
+        let mut label = name.to_string_lossy().into_owned();
+        if let Some(entry) = &child.entry {
+            let _ = write!(label, " ({} -> {})", entry.old_version, entry.new_version);
         }
+        write_preview_node_name(output, &label, package_color, color);
         output.push('\n');
 
         let child_prefix = format!("{prefix}{}", if last { "    " } else { "|   " });
-        render_preview_children(child, &child_prefix, output);
+        render_preview_children(
+            child,
+            &child_prefix,
+            &child_path,
+            package_colors,
+            color,
+            output,
+        );
+    }
+}
+
+fn write_preview_node_name(output: &mut String, label: &str, ansi: Option<&str>, color: bool) {
+    if color && let Some(ansi) = ansi {
+        let _ = write!(output, "{ansi}{label}\x1b[0m");
+    } else {
+        output.push_str(label);
     }
 }
 
@@ -1057,20 +1171,32 @@ mod tests {
         let files = BTreeMap::from([
             (
                 PathBuf::from("Cargo.toml"),
-                ("1.2.3".to_string(), "1.3.0".to_string()),
+                PreviewEntry {
+                    old_version: "1.2.3".to_string(),
+                    new_version: "1.3.0".to_string(),
+                    package_path: PathBuf::new(),
+                },
             ),
             (
                 PathBuf::from("packages/app/Cargo.lock"),
-                ("2.0.0".to_string(), "2.0.1".to_string()),
+                PreviewEntry {
+                    old_version: "2.0.0".to_string(),
+                    new_version: "2.0.1".to_string(),
+                    package_path: PathBuf::from("packages/app"),
+                },
             ),
             (
                 PathBuf::from("packages/app/Cargo.toml"),
-                ("2.0.0".to_string(), "2.0.1".to_string()),
+                PreviewEntry {
+                    old_version: "2.0.0".to_string(),
+                    new_version: "2.0.1".to_string(),
+                    package_path: PathBuf::from("packages/app"),
+                },
             ),
         ]);
 
         assert_eq!(
-            render_bump_preview(&files),
+            render_bump_preview(&files, false),
             concat!(
                 "Files to bump:\n",
                 ".\n",
@@ -1081,6 +1207,78 @@ mod tests {
                 "        `-- Cargo.toml (2.0.0 -> 2.0.1)\n",
             )
         );
+    }
+
+    #[test]
+    fn bump_preview_colors_paths_by_nearest_package() {
+        let files = BTreeMap::from([
+            (
+                PathBuf::from("Cargo.toml"),
+                PreviewEntry {
+                    old_version: "1.2.3".to_string(),
+                    new_version: "1.3.0".to_string(),
+                    package_path: PathBuf::new(),
+                },
+            ),
+            (
+                PathBuf::from("packages/app/Cargo.toml"),
+                PreviewEntry {
+                    old_version: "2.0.0".to_string(),
+                    new_version: "2.0.1".to_string(),
+                    package_path: PathBuf::from("packages/app"),
+                },
+            ),
+            (
+                PathBuf::from("packages/library/README.md"),
+                PreviewEntry {
+                    old_version: "3.0.0".to_string(),
+                    new_version: "3.1.0".to_string(),
+                    package_path: PathBuf::from("packages/library"),
+                },
+            ),
+            (
+                PathBuf::from("packages/library/plugin/Cargo.toml"),
+                PreviewEntry {
+                    old_version: "4.0.0".to_string(),
+                    new_version: "4.0.1".to_string(),
+                    package_path: PathBuf::from("packages/library/plugin"),
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            render_bump_preview(&files, true),
+            concat!(
+                "Files to bump:\n",
+                "\x1b[36m.\x1b[0m\n",
+                "|-- \x1b[36mCargo.toml (1.2.3 -> 1.3.0)\x1b[0m\n",
+                "`-- \x1b[36mpackages\x1b[0m\n",
+                "    |-- \x1b[33mapp\x1b[0m\n",
+                "    |   `-- \x1b[33mCargo.toml (2.0.0 -> 2.0.1)\x1b[0m\n",
+                "    `-- \x1b[32mlibrary\x1b[0m\n",
+                "        |-- \x1b[32mREADME.md (3.0.0 -> 3.1.0)\x1b[0m\n",
+                "        `-- \x1b[35mplugin\x1b[0m\n",
+                "            `-- \x1b[35mCargo.toml (4.0.0 -> 4.0.1)\x1b[0m\n",
+            )
+        );
+    }
+
+    #[test]
+    fn preview_colors_require_a_capable_terminal() {
+        assert_eq!(preview_colors_enabled(true, None, None), cfg!(not(windows)));
+        assert!(!preview_colors_enabled(false, None, None));
+        assert!(!preview_colors_enabled(true, Some(OsStr::new("1")), None));
+        assert!(!preview_colors_enabled(true, Some(OsStr::new("")), None));
+        assert!(!preview_colors_enabled(
+            true,
+            None,
+            Some(OsStr::new("dumb"))
+        ));
+        assert!(!preview_colors_enabled(
+            true,
+            None,
+            Some(OsStr::new("DUMB"))
+        ));
     }
 
     #[test]

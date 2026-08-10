@@ -520,7 +520,127 @@ fn dependency_updates_release_an_unselected_sibling_package() {
 }
 
 #[test]
-fn unselected_nested_package_changes_do_not_bump_the_parent_directly() {
+fn explicit_file_is_added_to_discovered_package_targets() {
+    let local = TempDir::new("pathless-packages-local");
+    let remote = TempDir::new("pathless-packages-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("packages/library/plugin"))
+        .expect("create nested library package");
+    fs::create_dir_all(local.path().join("packages/app")).expect("create app package");
+    fs::create_dir_all(local.path().join("packages/idle")).expect("create idle package");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("packages/library/package.json"),
+        "{\n  \"name\": \"library\",\n  \"version\": \"2.0.0\"\n}\n",
+    )
+    .expect("write library manifest");
+    fs::write(
+        local.path().join("packages/library/README.md"),
+        "library v2.0.0\n",
+    )
+    .expect("write library readme");
+    fs::write(
+        local.path().join("packages/library/plugin/Cargo.toml"),
+        "[package]\nname = \"plugin\"\nversion = \"3.0.0\"\n",
+    )
+    .expect("write plugin manifest");
+    fs::write(
+        local.path().join("packages/library/plugin/README.md"),
+        "plugin v3.0.0\n",
+    )
+    .expect("write plugin readme");
+    fs::write(
+        local.path().join("packages/library/plugin/version.txt"),
+        "plugin version 3.0.0\n",
+    )
+    .expect("write explicit version file");
+    fs::write(
+        local.path().join("packages/app/package.json"),
+        "{\n  \"name\": \"app\",\n  \"version\": \"4.0.0\",\n  \"dependencies\": {\"library\": \"2.0.0\"}\n}\n",
+    )
+    .expect("write app manifest");
+    fs::write(
+        local.path().join("packages/idle/package.json"),
+        "{\n  \"name\": \"idle\",\n  \"version\": \"5.0.0\"\n}\n",
+    )
+    .expect("write idle manifest");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/library/v2.0.0", baseline);
+    tag(&repo, "packages/library/plugin/v3.0.0", baseline);
+    tag(&repo, "packages/app/v4.0.0", baseline);
+    tag(&repo, "packages/idle/v5.0.0", baseline);
+    fs::write(
+        local.path().join("packages/library/README.md"),
+        "updated library v2.0.0\n",
+    )
+    .expect("update library readme");
+    fs::write(
+        local.path().join("packages/library/plugin/README.md"),
+        "updated plugin v3.0.0\n",
+    )
+    .expect("update plugin readme");
+    commit_all(&repo, "fix: update library packages");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args([
+            "--no-push",
+            "packages/library/plugin/version.txt",
+            "./packages/library/plugin/version.txt",
+        ])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("packages/idle: (skipped)"));
+    assert!(!stdout.contains("packages/app: (skipped)"));
+    assert!(!stdout.contains('\x1b'));
+    repo.revparse_single("refs/tags/packages/library/v2.0.1")
+        .expect("find library tag");
+    repo.revparse_single("refs/tags/packages/library/plugin/v3.0.1")
+        .expect("find nested plugin tag");
+    repo.revparse_single("refs/tags/packages/app/v4.0.1")
+        .expect("find dependent app tag");
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find propagated root tag");
+    let app = fs::read_to_string(local.path().join("packages/app/package.json"))
+        .expect("read app manifest");
+    assert!(app.contains("\"version\": \"4.0.1\""));
+    assert!(app.contains("\"library\": \"2.0.1\""));
+    assert_eq!(
+        fs::read_to_string(local.path().join("packages/library/README.md"))
+            .expect("read library readme"),
+        "updated library v2.0.1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(local.path().join("packages/library/plugin/README.md"))
+            .expect("read plugin readme"),
+        "updated plugin v3.0.1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(local.path().join("packages/library/plugin/version.txt"))
+            .expect("read explicit version file"),
+        "plugin version 3.0.1\n"
+    );
+    assert!(repo.statuses(None).expect("read status").is_empty());
+}
+
+#[test]
+fn explicit_parent_file_is_additive_to_nested_package_detection() {
     let local = TempDir::new("unselected-child-local");
     let remote = TempDir::new("unselected-child-remote");
     let repo = Repository::init(local.path()).expect("init repository");
@@ -579,12 +699,20 @@ fn unselected_nested_package_changes_do_not_bump_the_parent_directly() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        repo.revparse_single("refs/tags/packages/parent/v2.1.0")
-            .is_err()
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("packages/parent: (skipped)"));
+    repo.revparse_single("refs/tags/packages/parent/plugins/cache/v3.1.0")
+        .expect("find nested cache tag");
+    repo.revparse_single("refs/tags/packages/parent/v2.0.1")
+        .expect("find parent tag");
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find root tag");
+    assert_ne!(repo.head().expect("read HEAD").target(), before);
+    assert_eq!(
+        fs::read_to_string(local.path().join("packages/parent/README.md"))
+            .expect("read parent readme"),
+        "parent v2.0.1\n"
     );
-    assert!(repo.revparse_single("refs/tags/v1.1.0").is_err());
-    assert_eq!(repo.head().expect("read HEAD").target(), before);
 }
 
 #[test]

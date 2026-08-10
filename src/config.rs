@@ -13,7 +13,7 @@ use crate::model::Config;
     version
 )]
 struct Cli {
-    /// Paths to check for version files (defaults to repo root) [env: PATHS]
+    /// Additional files or directories to bump [env: PATHS]
     #[arg(value_name = "PATH")]
     paths: Vec<PathBuf>,
 
@@ -61,7 +61,7 @@ struct Cli {
     #[arg(long, overrides_with = "push")]
     no_push: bool,
 
-    /// Force a version bump even without relevant commits [env: FORCE]
+    /// Force every discovered package to bump without relevant commits [env: FORCE]
     #[arg(long)]
     force: bool,
 
