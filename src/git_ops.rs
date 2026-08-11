@@ -142,6 +142,7 @@ pub struct ImpactConfig<'a> {
     pub patch_types: &'a HashSet<String>,
     pub skip_scopes: &'a HashSet<String>,
     pub ignored_directories: &'a [PathBuf],
+    pub impact_paths: &'a [PathBuf],
     pub force: bool,
 }
 
@@ -179,6 +180,7 @@ pub fn get_impact_for_package(
             &commit,
             package_path,
             child_package_paths,
+            config.impact_paths,
             config.ignored_directories,
         )? {
             continue;
@@ -236,6 +238,7 @@ fn commit_touches_package(
     commit: &git2::Commit<'_>,
     package_path: &Path,
     child_package_paths: &[PathBuf],
+    impact_paths: &[PathBuf],
     ignored_directories: &[PathBuf],
 ) -> AppResult<bool> {
     let tree = commit
@@ -266,6 +269,7 @@ fn commit_touches_package(
                     path,
                     package_path,
                     child_package_paths,
+                    impact_paths,
                     ignored_directories,
                 )
             })
@@ -276,13 +280,17 @@ fn path_belongs_to_package(
     path: &Path,
     package_path: &Path,
     child_package_paths: &[PathBuf],
+    impact_paths: &[PathBuf],
     ignored_directories: &[PathBuf],
 ) -> bool {
-    (package_path.as_os_str().is_empty() || path.starts_with(package_path))
+    let ordinarily_owned = (package_path.as_os_str().is_empty() || path.starts_with(package_path))
         && !child_package_paths
             .iter()
-            .any(|child| path.starts_with(child))
-        && !is_ignored_path(path, ignored_directories)
+            .any(|child| path.starts_with(child));
+    let explicitly_owned = impact_paths
+        .iter()
+        .any(|impact_path| path.starts_with(impact_path));
+    (ordinarily_owned || explicitly_owned) && !is_ignored_path(path, ignored_directories)
 }
 
 fn has_breaking_change_footer(message: &str) -> bool {
@@ -752,6 +760,23 @@ mod tests {
         index.write().expect("write git index");
     }
 
+    fn commit_index(repo: &Repository, message: &str) -> Oid {
+        let mut index = repo.index().expect("open git index");
+        index.write().expect("write git index");
+        let tree_oid = index.write_tree().expect("write tree");
+        let tree = repo.find_tree(tree_oid).expect("find tree");
+        let sig = git2::Signature::now("Bumper Test", "bumper@example.com").expect("signature");
+        let parents = repo
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_commit().ok())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let parent_refs = parents.iter().collect::<Vec<_>>();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .expect("commit")
+    }
+
     fn commit_file(
         repo: &Repository,
         dir: &Path,
@@ -766,18 +791,8 @@ mod tests {
         let mut index = repo.index().expect("open git index");
         index.add_path(Path::new(name)).expect("add index path");
         index.write().expect("write git index");
-        let tree_oid = index.write_tree().expect("write tree");
-        let tree = repo.find_tree(tree_oid).expect("find tree");
-        let sig = git2::Signature::now("Bumper Test", "bumper@example.com").expect("signature");
-        let parents = repo
-            .head()
-            .ok()
-            .and_then(|head| head.peel_to_commit().ok())
-            .into_iter()
-            .collect::<Vec<_>>();
-        let parent_refs = parents.iter().collect::<Vec<_>>();
-        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
-            .expect("commit")
+        drop(index);
+        commit_index(repo, message)
     }
 
     fn lightweight_tag(repo: &Repository, name: &str, oid: Oid) {
@@ -950,6 +965,177 @@ mod tests {
     }
 
     #[test]
+    fn explicit_impact_paths_are_additive_and_respect_boundaries_and_ignores() {
+        let package = Path::new("packages/app");
+        let children = [PathBuf::from("packages/app/plugin")];
+        let impacts = [
+            PathBuf::from("native/shared"),
+            PathBuf::from("packages/app/plugin/generated"),
+        ];
+
+        assert!(path_belongs_to_package(
+            Path::new("packages/app/src/lib.rs"),
+            package,
+            &children,
+            &impacts,
+            &[],
+        ));
+        assert!(path_belongs_to_package(
+            Path::new("native/shared/src/lib.rs"),
+            package,
+            &children,
+            &impacts,
+            &[],
+        ));
+        assert!(!path_belongs_to_package(
+            Path::new("native/shared-other/src/lib.rs"),
+            package,
+            &children,
+            &impacts,
+            &[],
+        ));
+        assert!(path_belongs_to_package(
+            Path::new("packages/app/plugin/generated/output.rs"),
+            package,
+            &children,
+            &impacts,
+            &[],
+        ));
+        assert!(!path_belongs_to_package(
+            Path::new("packages/app/plugin/src/lib.rs"),
+            package,
+            &children,
+            &impacts,
+            &[],
+        ));
+        assert!(path_belongs_to_package(
+            Path::new("native/shared/src/lib.rs"),
+            Path::new("packages/other"),
+            &[],
+            &[PathBuf::from("native/shared")],
+            &[],
+        ));
+        assert!(!path_belongs_to_package(
+            Path::new("native/shared/generated/output.rs"),
+            package,
+            &children,
+            &impacts,
+            &[PathBuf::from("native/shared/generated")],
+        ));
+    }
+
+    #[test]
+    fn configured_impact_paths_match_deleted_and_moved_delta_endpoints() {
+        let dir = temp_path("impact-path-deltas");
+        let repo = Repository::init(&dir).expect("init repo");
+        commit_file(
+            &repo,
+            &dir,
+            "native/deleted.rs",
+            "deleted",
+            "chore: initialize deleted source",
+        );
+        commit_file(
+            &repo,
+            &dir,
+            "outside/moved-in.rs",
+            "moved in",
+            "chore: initialize moved source",
+        );
+        commit_file(
+            &repo,
+            &dir,
+            "native/moved-out.rs",
+            "moved out",
+            "chore: initialize moved source",
+        );
+
+        std::fs::remove_file(dir.join("native/deleted.rs")).expect("delete impacted file");
+        let mut index = repo.index().expect("open git index");
+        index
+            .remove_path(Path::new("native/deleted.rs"))
+            .expect("remove deleted path");
+        index.write().expect("write deletion to index");
+        drop(index);
+        let deleted = commit_index(&repo, "feat: delete native source");
+        let deleted = repo.find_commit(deleted).expect("find deletion commit");
+        assert!(
+            commit_touches_package(
+                &repo,
+                &deleted,
+                Path::new("packages/app"),
+                &[],
+                &[PathBuf::from("native")],
+                &[],
+            )
+            .expect("check deletion impact")
+        );
+        drop(deleted);
+
+        std::fs::create_dir_all(dir.join("native")).expect("create native directory");
+        std::fs::rename(
+            dir.join("outside/moved-in.rs"),
+            dir.join("native/moved-in.rs"),
+        )
+        .expect("move file into impact path");
+        let mut index = repo.index().expect("open git index");
+        index
+            .remove_path(Path::new("outside/moved-in.rs"))
+            .expect("remove old moved-in path");
+        index
+            .add_path(Path::new("native/moved-in.rs"))
+            .expect("add new moved-in path");
+        index.write().expect("write move into index");
+        drop(index);
+        let moved_in = commit_index(&repo, "feat: move source into native tree");
+        let moved_in = repo.find_commit(moved_in).expect("find move-in commit");
+        assert!(
+            commit_touches_package(
+                &repo,
+                &moved_in,
+                Path::new("packages/app"),
+                &[],
+                &[PathBuf::from("native")],
+                &[],
+            )
+            .expect("check move-in impact")
+        );
+        drop(moved_in);
+
+        std::fs::create_dir_all(dir.join("outside")).expect("create outside directory");
+        std::fs::rename(
+            dir.join("native/moved-out.rs"),
+            dir.join("outside/moved-out.rs"),
+        )
+        .expect("move file out of impact path");
+        let mut index = repo.index().expect("open git index");
+        index
+            .remove_path(Path::new("native/moved-out.rs"))
+            .expect("remove old moved-out path");
+        index
+            .add_path(Path::new("outside/moved-out.rs"))
+            .expect("add new moved-out path");
+        index.write().expect("write move out to index");
+        drop(index);
+        let moved_out = commit_index(&repo, "feat: move source out of native tree");
+        let moved_out = repo.find_commit(moved_out).expect("find move-out commit");
+        assert!(
+            commit_touches_package(
+                &repo,
+                &moved_out,
+                Path::new("packages/app"),
+                &[],
+                &[PathBuf::from("native")],
+                &[],
+            )
+            .expect("check move-out impact")
+        );
+        drop(moved_out);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn impact_detects_breaking_change_footer() {
         let dir = temp_path("breaking-footer");
         let repo = Repository::init(&dir).expect("init repo");
@@ -974,6 +1160,7 @@ mod tests {
                 patch_types: &HashSet::from(["fix".to_string()]),
                 skip_scopes: &HashSet::new(),
                 ignored_directories: &[],
+                impact_paths: &[],
                 force: false,
             },
         )
@@ -1007,6 +1194,7 @@ mod tests {
                 patch_types: &HashSet::from(["fix".to_string()]),
                 skip_scopes: &HashSet::new(),
                 ignored_directories: &[PathBuf::from("generated")],
+                impact_paths: &[],
                 force: false,
             },
         )
@@ -1047,6 +1235,7 @@ mod tests {
             patch_types: &patch,
             skip_scopes: &skipped,
             ignored_directories: &[],
+            impact_paths: &[],
             force: false,
         };
 

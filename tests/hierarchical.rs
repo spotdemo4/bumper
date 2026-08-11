@@ -515,14 +515,18 @@ fn dependency_updates_release_an_unselected_sibling_package() {
         .peel_to_commit()
         .expect("peel HEAD to commit");
     assert_eq!(
-        commit.message(),
-        Some("bump: v1.0.1\n\nPackage: packages/app/v3.0.1\nPackage: packages/library/v2.0.1")
+        commit.message().expect("read commit message"),
+        "bump: v1.0.1\n\nPackage: packages/app/v3.0.1\nPackage: packages/library/v2.0.1"
     );
     let root_tag = repo
         .revparse_single("refs/tags/v1.0.1")
         .expect("find root tag object");
     assert_eq!(
-        root_tag.as_tag().expect("root tag is annotated").message(),
+        root_tag
+            .as_tag()
+            .expect("root tag is annotated")
+            .message()
+            .expect("read tag message"),
         Some(
             "bump: v1.0.0 -> v1.0.1, packages/app/v3.0.0 -> packages/app/v3.0.1, packages/library/v2.0.0 -> packages/library/v2.0.1"
         )
@@ -730,6 +734,106 @@ fn explicit_parent_file_is_additive_to_nested_package_detection() {
         fs::read_to_string(local.path().join("packages/parent/README.md"))
             .expect("read parent readme"),
         "parent v2.0.1\n"
+    );
+}
+
+#[test]
+fn package_impact_path_releases_nested_package_and_propagates_to_ancestors() {
+    let local = TempDir::new("package-impact-path-local");
+    let remote = TempDir::new("package-impact-path-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("packages/parent/artifact"))
+        .expect("create nested artifact package");
+    fs::create_dir_all(local.path().join("packages/native/src"))
+        .expect("create native source package");
+    fs::create_dir_all(local.path().join("packages/idle")).expect("create idle package");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("packages/parent/package.json"),
+        "{\n  \"name\": \"parent\",\n  \"version\": \"2.0.0\"\n}\n",
+    )
+    .expect("write parent manifest");
+    fs::write(
+        local
+            .path()
+            .join("packages/parent/artifact/package.json"),
+        "{\n  \"name\": \"artifact\",\n  \"version\": \"3.0.0\",\n  \"bumper\": {\n    \"impactPaths\": [\"../../../packages/native/src\"],\n    \"futureOption\": true\n  }\n}\n",
+    )
+    .expect("write artifact manifest");
+    fs::write(
+        local.path().join("packages/native/package.json"),
+        "{\n  \"name\": \"native\",\n  \"version\": \"4.0.0\"\n}\n",
+    )
+    .expect("write native manifest");
+    fs::write(
+        local.path().join("packages/native/src/lib.rs"),
+        "pub fn native() {}\n",
+    )
+    .expect("write native source");
+    fs::write(
+        local.path().join("packages/idle/package.json"),
+        "{\n  \"name\": \"idle\",\n  \"version\": \"5.0.0\"\n}\n",
+    )
+    .expect("write idle manifest");
+    let baseline = commit_all(&repo, "chore: initialize native artifact workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/parent/v2.0.0", baseline);
+    tag(&repo, "packages/parent/artifact/v3.0.0", baseline);
+    tag(&repo, "packages/native/v4.0.0", baseline);
+    tag(&repo, "packages/idle/v5.0.0", baseline);
+
+    fs::write(
+        local.path().join("packages/native/src/lib.rs"),
+        "pub fn native() { println!(\"feature\"); }\n",
+    )
+    .expect("update native source");
+    commit_all(&repo, "feat: add native capability");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("packages/idle: (skipped)"), "{stdout}");
+    repo.revparse_single("refs/tags/packages/parent/artifact/v3.1.0")
+        .expect("find artifact minor tag");
+    repo.revparse_single("refs/tags/packages/parent/v2.0.1")
+        .expect("find propagated parent patch tag");
+    repo.revparse_single("refs/tags/packages/native/v4.1.0")
+        .expect("find native package minor tag");
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find propagated root patch tag");
+    assert!(
+        repo.find_reference("refs/tags/packages/idle/v5.0.1")
+            .is_err()
+    );
+    let artifact: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(local.path().join("packages/parent/artifact/package.json"))
+            .expect("read artifact manifest"),
+    )
+    .expect("parse updated artifact manifest");
+    assert_eq!(artifact["version"], "3.1.0");
+    assert_eq!(
+        artifact["bumper"],
+        serde_json::json!({
+            "impactPaths": ["../../../packages/native/src"],
+            "futureOption": true,
+        })
     );
 }
 

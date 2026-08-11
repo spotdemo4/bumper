@@ -51,6 +51,12 @@ struct ReleaseBase {
     commit: Option<Oid>,
 }
 
+#[derive(Debug)]
+struct DiscoveredPackages {
+    packages: BTreeMap<PathBuf, Package>,
+    impact_paths: BTreeMap<PathBuf, Vec<PathBuf>>,
+}
+
 #[derive(Default)]
 struct PreviewNode {
     children: BTreeMap<OsString, PreviewNode>,
@@ -74,39 +80,43 @@ fn main() -> ExitCode {
     }
 }
 
+fn normalize_repository_relative_path(path: &Path) -> Option<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir if normalized.pop() => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(normalized)
+}
+
 fn normalize_ignored_directories(
     repo_root: &Path,
     directories: &[PathBuf],
 ) -> AppResult<Vec<PathBuf>> {
     let mut normalized = Vec::new();
     for directory in directories {
-        let absolute = if directory.is_absolute() {
-            directory.clone()
+        let relative = if directory.is_absolute() {
+            directory.strip_prefix(repo_root).map_err(|_| {
+                format!(
+                    "ignored directory '{}' is outside repository root '{}'",
+                    directory.display(),
+                    repo_root.display()
+                )
+            })?
         } else {
-            repo_root.join(directory)
+            directory.as_path()
         };
-        let relative = absolute.strip_prefix(repo_root).map_err(|_| {
+        let clean = normalize_repository_relative_path(relative).ok_or_else(|| {
             format!(
                 "ignored directory '{}' is outside repository root '{}'",
                 directory.display(),
                 repo_root.display()
             )
         })?;
-        let mut clean = PathBuf::new();
-        for component in relative.components() {
-            match component {
-                Component::CurDir => {}
-                Component::Normal(part) => clean.push(part),
-                Component::ParentDir if clean.pop() => {}
-                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                    return Err(format!(
-                        "ignored directory '{}' is outside repository root '{}'",
-                        directory.display(),
-                        repo_root.display()
-                    ));
-                }
-            }
-        }
         let normalized_absolute = repo_root.join(&clean);
         if normalized_absolute.exists() && !normalized_absolute.is_dir() {
             return Err(format!(
@@ -149,7 +159,9 @@ fn run() -> AppResult<()> {
 
     let tracked_files =
         list_tracked_files_under(&repo, &repo_root, &repo_root, &ignored_directories)?;
-    let known_packages = discover_packages(&repo_root, &tracked_files)?;
+    let discovered_packages = discover_packages(&repo_root, &tracked_files)?;
+    let known_packages = discovered_packages.packages;
+    let package_impact_paths = discovered_packages.impact_paths;
     config
         .paths
         .extend(known_packages.values().map(|package| package.root.clone()));
@@ -231,6 +243,7 @@ fn run() -> AppResult<()> {
                 patch_types: &config.patch_types,
                 skip_scopes: &config.skip_scopes,
                 ignored_directories: &ignored_directories,
+                impact_paths: package_impact_paths.get(&path).map_or(&[], Vec::as_slice),
                 force: config.force && selected_packages.contains(&path),
             },
         )?;
@@ -346,6 +359,9 @@ fn run() -> AppResult<()> {
                             patch_types: &config.patch_types,
                             skip_scopes: &config.skip_scopes,
                             ignored_directories: &ignored_directories,
+                            impact_paths: package_impact_paths
+                                .get(&package.path)
+                                .map_or(&[], Vec::as_slice),
                             force: true,
                         },
                     )?
@@ -896,10 +912,81 @@ fn package_files(package_root: &Path, tracked_paths: &HashSet<PathBuf>) -> Vec<P
     files
 }
 
-fn discover_packages(
-    repo_root: &Path,
-    tracked_files: &[PathBuf],
-) -> AppResult<BTreeMap<PathBuf, Package>> {
+fn package_json_impact_paths(manifest: &Path, package_path: &Path) -> AppResult<Vec<PathBuf>> {
+    let source = fs::read_to_string(manifest).map_err(|e| {
+        format!(
+            "failed to read package manifest '{}': {e}",
+            manifest.display()
+        )
+    })?;
+    let value = serde_json::from_str::<serde_json::Value>(&source).map_err(|e| {
+        format!(
+            "failed to parse package manifest '{}': {e}",
+            manifest.display()
+        )
+    })?;
+    let Some(bumper) = value.get("bumper") else {
+        return Ok(Vec::new());
+    };
+    let bumper = bumper.as_object().ok_or_else(|| {
+        format!(
+            "package manifest '{}' field 'bumper' must be an object",
+            manifest.display()
+        )
+    })?;
+    let Some(impact_paths) = bumper.get("impactPaths") else {
+        return Ok(Vec::new());
+    };
+    let impact_paths = impact_paths.as_array().ok_or_else(|| {
+        format!(
+            "package manifest '{}' field 'bumper.impactPaths' must be an array",
+            manifest.display()
+        )
+    })?;
+
+    let mut normalized = Vec::with_capacity(impact_paths.len());
+    for (index, value) in impact_paths.iter().enumerate() {
+        let field = format!("bumper.impactPaths[{index}]");
+        let path = value.as_str().ok_or_else(|| {
+            format!(
+                "package manifest '{}' field '{field}' must be a string",
+                manifest.display()
+            )
+        })?;
+        if path.is_empty() {
+            return Err(format!(
+                "package manifest '{}' field '{field}' must not be empty",
+                manifest.display()
+            ));
+        }
+        let path = Path::new(path);
+        if path.is_absolute() {
+            return Err(format!(
+                "package manifest '{}' field '{field}' must be relative to the package directory",
+                manifest.display()
+            ));
+        }
+        let path =
+            normalize_repository_relative_path(&package_path.join(path)).ok_or_else(|| {
+                format!(
+                    "package manifest '{}' field '{field}' escapes the repository root",
+                    manifest.display()
+                )
+            })?;
+        if path == package_path {
+            return Err(format!(
+                "package manifest '{}' field '{field}' resolves to the package directory",
+                manifest.display()
+            ));
+        }
+        normalized.push(path);
+    }
+    normalized.sort();
+    normalized.dedup();
+    Ok(normalized)
+}
+
+fn discover_packages(repo_root: &Path, tracked_files: &[PathBuf]) -> AppResult<DiscoveredPackages> {
     let root = fs::canonicalize(repo_root).map_err(|e| {
         format!(
             "failed to resolve repository root '{}': {e}",
@@ -913,6 +1000,7 @@ fn discover_packages(
             path: PathBuf::new(),
         },
     )]);
+    let mut impact_paths = BTreeMap::new();
     for file in tracked_files {
         if !is_package_marker(file) {
             continue;
@@ -936,12 +1024,18 @@ fn discover_packages(
                 )
             })?
             .to_path_buf();
+        if file.file_name() == Some(OsStr::new("package.json")) {
+            impact_paths.insert(path.clone(), package_json_impact_paths(file, &path)?);
+        }
         packages.entry(path.clone()).or_insert(Package {
             root: directory,
             path,
         });
     }
-    Ok(packages)
+    Ok(DiscoveredPackages {
+        packages,
+        impact_paths,
+    })
 }
 
 fn resolve_known_package_hierarchy(
@@ -1156,6 +1250,24 @@ fn bump_typed_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_directory(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("bumper-{name}-{nanos}"));
+        fs::create_dir_all(&path).expect("create temp directory");
+        path
+    }
+
+    fn write_package_json(directory: &Path, source: &str) -> PathBuf {
+        fs::create_dir_all(directory).expect("create package directory");
+        let manifest = directory.join("package.json");
+        fs::write(&manifest, source).expect("write package manifest");
+        manifest
+    }
 
     fn release(path: &str, last_tag: &str, tag: &str) -> Release {
         Release {
@@ -1222,6 +1334,145 @@ mod tests {
 
         assert!(normalize_ignored_directories(root, &[PathBuf::from("../outside")]).is_err());
         assert!(normalize_ignored_directories(root, &[PathBuf::from("/outside")]).is_err());
+    }
+
+    #[test]
+    fn package_json_impact_paths_accept_missing_empty_and_unknown_fields() {
+        let root = temp_directory("impact-path-config");
+        let package = root.join("packages/app");
+        let manifest = write_package_json(
+            &package,
+            r#"{"name":"app","version":"1.0.0","custom":true}"#,
+        );
+        assert_eq!(
+            package_json_impact_paths(&manifest, Path::new("packages/app"))
+                .expect("parse missing bumper config"),
+            Vec::<PathBuf>::new()
+        );
+
+        fs::write(
+            &manifest,
+            r#"{"name":"app","version":"1.0.0","bumper":{"impactPaths":[],"future":true}}"#,
+        )
+        .expect("write empty impact paths");
+        assert_eq!(
+            package_json_impact_paths(&manifest, Path::new("packages/app"))
+                .expect("parse empty impact paths"),
+            Vec::<PathBuf>::new()
+        );
+
+        fs::write(
+            &manifest,
+            r#"{"name":"app","version":"1.0.0","bumper":{"impactPaths":["../../shared/native","future/missing","src/../generated","../../shared/native"],"future":true}}"#,
+        )
+        .expect("write valid impact paths");
+        assert_eq!(
+            package_json_impact_paths(&manifest, Path::new("packages/app"))
+                .expect("parse valid impact paths"),
+            vec![
+                PathBuf::from("packages/app/future/missing"),
+                PathBuf::from("packages/app/generated"),
+                PathBuf::from("shared/native"),
+            ]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn package_json_impact_paths_report_manifest_fields() {
+        let root = temp_directory("invalid-impact-path-config");
+        let manifest = write_package_json(&root, r#"{"name":"root","version":"1.0.0"}"#);
+        for (source, field) in [
+            (
+                r#"{"name":"root","version":"1.0.0","bumper":true}"#,
+                "field 'bumper'",
+            ),
+            (
+                r#"{"name":"root","version":"1.0.0","bumper":{"impactPaths":true}}"#,
+                "field 'bumper.impactPaths'",
+            ),
+            (
+                r#"{"name":"root","version":"1.0.0","bumper":{"impactPaths":["src",1]}}"#,
+                "field 'bumper.impactPaths[1]'",
+            ),
+        ] {
+            fs::write(&manifest, source).expect("write invalid impact config");
+            let error = package_json_impact_paths(&manifest, Path::new(""))
+                .expect_err("invalid impact config should fail");
+            assert!(error.contains(&manifest.display().to_string()), "{error}");
+            assert!(error.contains(field), "{error}");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn package_json_impact_paths_reject_invalid_normalized_paths() {
+        let root = temp_directory("invalid-normalized-impact-paths");
+        let manifest = write_package_json(
+            &root.join("packages/app"),
+            r#"{"name":"app","version":"1.0.0"}"#,
+        );
+        for (path, message) in [
+            ("", "must not be empty"),
+            (".", "resolves to the package directory"),
+            ("src/..", "resolves to the package directory"),
+            ("../../../outside", "escapes the repository root"),
+            ("/outside", "must be relative"),
+        ] {
+            let source = serde_json::json!({
+                "name": "app",
+                "version": "1.0.0",
+                "bumper": {"impactPaths": [path]},
+            });
+            fs::write(&manifest, source.to_string()).expect("write invalid impact path");
+            let error = package_json_impact_paths(&manifest, Path::new("packages/app"))
+                .expect_err("invalid normalized path should fail");
+            assert!(error.contains("bumper.impactPaths[0]"), "{error}");
+            assert!(error.contains(message), "{error}");
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn discovery_keeps_package_json_impact_paths_with_other_markers() {
+        let root = temp_directory("impact-path-discovery");
+        let package = root.join("packages/app");
+        let package_json = write_package_json(
+            &package,
+            r#"{"name":"app","version":"1.0.0","bumper":{"impactPaths":["../../native"]}}"#,
+        );
+        let cargo_toml = package.join("Cargo.toml");
+        fs::write(
+            &cargo_toml,
+            "[package]\nname = \"app-rust\"\nversion = \"1.0.0\"\n",
+        )
+        .expect("write Cargo manifest");
+
+        let discovered = discover_packages(&root, &[cargo_toml, package_json])
+            .expect("discover package metadata");
+
+        assert!(discovered.packages.contains_key(Path::new("packages/app")));
+        assert_eq!(
+            discovered.impact_paths.get(Path::new("packages/app")),
+            Some(&vec![PathBuf::from("native")])
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn malformed_root_impact_config_is_not_masked_by_root_package() {
+        let root = temp_directory("invalid-root-impact-path");
+        let manifest = write_package_json(
+            &root,
+            r#"{"name":"root","version":"1.0.0","bumper":{"impactPaths":"src"}}"#,
+        );
+
+        let error = discover_packages(&root, &[manifest.clone()])
+            .expect_err("malformed root package config should fail");
+
+        assert!(error.contains(&manifest.display().to_string()), "{error}");
+        assert!(error.contains("bumper.impactPaths"), "{error}");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

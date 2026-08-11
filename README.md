@@ -32,6 +32,20 @@ Each supplied file or directory is an additional bump target belonging to its ne
 
 Bumper always checks every discovered package for a release. Supplying paths adds files or directories to the normal package-root scans; explicit files also support literal version replacement when their format has no dedicated writer. Dependency updates can release packages that reference another bumped package.
 
+An npm package can declare additional paths whose commits affect its release in `package.json`:
+
+```json
+{
+  "name": "native-artifact",
+  "version": "1.2.3",
+  "bumper": {
+    "impactPaths": ["../../../native/src", "../shared-schema"]
+  }
+}
+```
+
+Each `impactPaths` entry is a literal path relative to the package directory, not a glob. Paths are additive to normal package ownership, may overlap between packages or point into another package's tree, and do not need to exist in the current checkout. Globally ignored directories still win. These paths only determine which commits affect the package; they are not bump targets and bumper does not scan them for version replacements.
+
 Because every package is selected, `--force` forces a bump for every discovered package rather than only packages containing supplied paths.
 
 Root releases use `vX.Y.Z`. Packages below the repository root use their repository-relative path as the tag prefix:
