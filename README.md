@@ -22,7 +22,22 @@ This works well as a github action. Have it run on every push to main and it wil
 bumper [paths...]
 ```
 
-Before changing files, bumper reports selected packages without impactful changes as skipped, then prints a tree of every file it will update with the current and new package versions. Interactive terminals color each package group and ask for confirmation; non-interactive runs such as CI print a plain tree and continue without prompting. Set `NO_COLOR` to disable colors.
+Before changing files, bumper reports selected packages without impactful changes as skipped, then prints one release-plan tree containing every releasing package, why its bump happened, and every file it will update. Interactive terminals color each package group and ask for confirmation; non-interactive runs such as CI print the same information as a plain tree and continue without prompting. Set `NO_COLOR` to disable colors.
+
+```text
+Release plan:
+. (1.0.0 -> 1.0.1, patch)
+|-- propagated from child packages/library
+`-- packages
+    |-- app (3.0.0 -> 3.0.1, patch)
+    |   |-- propagated from dependency packages/library (library via packages/app/package.json)
+    |   `-- package.json (3.0.0 -> 3.0.1; library 2.0.0 -> 2.0.1)
+    `-- library (2.0.0 -> 2.0.1, patch)
+        |-- direct patch
+        `-- package.json (2.0.0 -> 2.0.1)
+```
+
+Direct conventional-commit impacts, `--force`, immediate child releases, and dependency updates are retained as separate reasons, so a package can show more than one cause. Ancestor and dependency chains use immediate edges (`library -> app -> cli`) rather than flattening every downstream release back to the original package.
 
 Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES` to a whitespace- or newline-separated list of repository-relative directories. Ignored trees do not contribute commits, packages, version files, or dependency updates. Explicitly selected paths inside them are skipped.
 

@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -23,6 +23,32 @@ impl TypedChange {
             Self::Unchanged
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionBump {
+    pub old_version: String,
+    pub new_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyUpdate {
+    Changed(BTreeSet<String>),
+    Unchanged,
+    Unhandled,
+}
+
+struct DependencyTransform {
+    content: String,
+    names: BTreeSet<String>,
+}
+
+#[derive(Clone, Copy)]
+enum DependencyFormat {
+    PackageJson,
+    PackageLock,
+    CargoToml,
+    CargoLock,
 }
 
 pub fn apply_typed_change(
@@ -107,43 +133,81 @@ fn read_package_json_name(path: &Path) -> Option<String> {
     value.get("name")?.as_str().map(|s| s.to_string())
 }
 
+pub fn preview_dependency_update(
+    file: &Path,
+    bumped: &BTreeMap<String, VersionBump>,
+) -> AppResult<DependencyUpdate> {
+    evaluate_dependency_update(file, bumped, false)
+}
+
+pub fn apply_dependency_update(
+    file: &Path,
+    bumped: &BTreeMap<String, VersionBump>,
+) -> AppResult<DependencyUpdate> {
+    evaluate_dependency_update(file, bumped, true)
+}
+
+fn evaluate_dependency_update(
+    file: &Path,
+    bumped: &BTreeMap<String, VersionBump>,
+    write: bool,
+) -> AppResult<DependencyUpdate> {
+    let format = match file.file_name().and_then(|name| name.to_str()) {
+        Some("package.json") => DependencyFormat::PackageJson,
+        Some("package-lock.json") => DependencyFormat::PackageLock,
+        Some("Cargo.toml") => DependencyFormat::CargoToml,
+        Some("Cargo.lock") => DependencyFormat::CargoLock,
+        _ => return Ok(DependencyUpdate::Unhandled),
+    };
+    if bumped.is_empty() {
+        return Ok(DependencyUpdate::Unchanged);
+    }
+
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    let transformed = match format {
+        DependencyFormat::PackageJson => transform_package_json_dependencies(&source, bumped),
+        DependencyFormat::PackageLock => transform_package_lock_dependencies(&source, bumped)
+            .map_err(|e| format!("failed to serialize '{}': {e}", file.display()))?,
+        DependencyFormat::CargoToml => transform_cargo_toml_dependencies(&source, bumped),
+        DependencyFormat::CargoLock => transform_cargo_lock_dependencies(&source, bumped),
+    };
+    let Some(transformed) = transformed else {
+        return Ok(DependencyUpdate::Unchanged);
+    };
+
+    if write {
+        fs::write(file, transformed.content)
+            .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    }
+    Ok(DependencyUpdate::Changed(transformed.names))
+}
+
+fn typed_bumps(bumped: &HashMap<String, (String, String)>) -> BTreeMap<String, VersionBump> {
+    bumped
+        .iter()
+        .map(|(name, (old_version, new_version))| {
+            (
+                name.clone(),
+                VersionBump {
+                    old_version: old_version.clone(),
+                    new_version: new_version.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
 /// Returns whether a dependency propagation writer would update `file` without
 /// modifying the filesystem. Unsupported filenames return `false`.
 pub fn dependency_update_needed(
     file: &Path,
     bumped: &HashMap<String, (String, String)>,
 ) -> AppResult<bool> {
-    Ok(dependency_update_content(file, bumped)?.is_some())
-}
-
-fn dependency_update_content(
-    file: &Path,
-    bumped: &HashMap<String, (String, String)>,
-) -> AppResult<Option<String>> {
-    if bumped.is_empty() {
-        return Ok(None);
-    }
-
-    let Some(file_name) = file.file_name().and_then(|name| name.to_str()) else {
-        return Ok(None);
-    };
-    if !matches!(
-        file_name,
-        "package.json" | "package-lock.json" | "Cargo.toml" | "Cargo.lock"
-    ) {
-        return Ok(None);
-    }
-
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    match file_name {
-        "package.json" => Ok(transform_package_json_dependencies(&source, bumped)),
-        "package-lock.json" => transform_package_lock_dependencies(&source, bumped)
-            .map_err(|e| format!("failed to serialize '{}': {e}", file.display())),
-        "Cargo.toml" => Ok(transform_cargo_toml_dependencies(&source, bumped)),
-        "Cargo.lock" => Ok(transform_cargo_lock_dependencies(&source, bumped)),
-        _ => unreachable!(),
-    }
+    Ok(matches!(
+        preview_dependency_update(file, &typed_bumps(bumped))?,
+        DependencyUpdate::Changed(_)
+    ))
 }
 
 fn write_dependency_update(
@@ -159,11 +223,10 @@ fn write_dependency_update(
         return Ok(false);
     }
 
-    let Some(content) = dependency_update_content(file, bumped)? else {
-        return Ok(false);
-    };
-    fs::write(file, content).map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-    Ok(true)
+    Ok(matches!(
+        apply_dependency_update(file, &typed_bumps(bumped))?,
+        DependencyUpdate::Changed(_)
+    ))
 }
 
 /// Second-pass bump: for a `package.json` file, update any `dependencies`,
@@ -183,62 +246,33 @@ pub fn bump_package_json_dependencies(
 
 fn transform_package_json_dependencies(
     source: &str,
-    bumped: &HashMap<String, (String, String)>,
-) -> Option<String> {
+    bumped: &BTreeMap<String, VersionBump>,
+) -> Option<DependencyTransform> {
     // Parse to determine which dependency names actually appear in
     // dependency sections and whose version contains the old string.
     let value: Value = match serde_json::from_str(source) {
         Ok(v) => v,
         Err(_) => return None,
     };
-    let Value::Object(map) = value else {
+    if !value.is_object() {
         return None;
-    };
-
-    const DEP_SECTIONS: &[&str] = &[
-        "dependencies",
-        "devDependencies",
-        "peerDependencies",
-        "optionalDependencies",
-        "bundledDependencies",
-        "bundleDependencies",
-        "overrides",
-        "resolutions",
-    ];
-
-    let mut to_update: HashSet<String> = HashSet::new();
-    for (pkg_name, (old_version, _new_version)) in bumped {
-        for section in DEP_SECTIONS {
-            if let Some(Value::Object(deps)) = map.get(*section)
-                && let Some(Value::String(ver)) = deps.get(pkg_name)
-                && ver.contains(old_version)
-            {
-                to_update.insert(pkg_name.clone());
-                break;
-            }
-        }
-        // Also handle `overrides`/`resolutions` that may be nested one level deeper?
-        // For simplicity, if not found at top-level, scan recursively for any object value
-        // that contains the package name as key with a string version containing old_version.
-        if !to_update.contains(pkg_name)
-            && json_contains_dep(&Value::Object(map.clone()), pkg_name, old_version)
-        {
-            to_update.insert(pkg_name.clone());
-        }
     }
+
+    let mut to_update = BTreeSet::new();
+    collect_json_dependency_names(&value, bumped, &mut to_update);
 
     if to_update.is_empty() {
         return None;
     }
 
     let mut content = source.to_string();
-    let mut changed_any = false;
+    let mut changed_names = BTreeSet::new();
 
     for pkg_name in to_update {
-        let Some((old_version, new_version)) = bumped.get(&pkg_name) else {
+        let Some(bump) = bumped.get(&pkg_name) else {
             continue;
         };
-        if old_version == new_version {
+        if bump.old_version == bump.new_version {
             continue;
         }
         let escaped = regex::escape(&pkg_name);
@@ -251,8 +285,8 @@ fn transform_package_json_dependencies(
                 let prefix = &caps[1];
                 let version = &caps[2];
                 let suffix = &caps[3];
-                if version.contains(old_version) {
-                    let new_ver = version.replace(old_version, new_version);
+                if version.contains(&bump.old_version) {
+                    let new_ver = version.replace(&bump.old_version, &bump.new_version);
                     format!("{prefix}{new_ver}{suffix}")
                 } else {
                     caps[0].to_string()
@@ -262,37 +296,43 @@ fn transform_package_json_dependencies(
 
         if new_content != content {
             content = new_content;
-            changed_any = true;
+            changed_names.insert(pkg_name);
         }
     }
 
-    if !changed_any || content == source {
+    if changed_names.is_empty() || content == source {
         return None;
     }
 
-    Some(content)
+    Some(DependencyTransform {
+        content,
+        names: changed_names,
+    })
 }
 
-fn json_contains_dep(value: &Value, pkg_name: &str, old_version: &str) -> bool {
+fn collect_json_dependency_names(
+    value: &Value,
+    bumped: &BTreeMap<String, VersionBump>,
+    names: &mut BTreeSet<String>,
+) {
     match value {
         Value::Object(map) => {
-            for (k, v) in map {
-                if k == pkg_name
-                    && let Value::String(s) = v
-                    && s.contains(old_version)
+            for (key, value) in map {
+                if let Some(bump) = bumped.get(key)
+                    && let Value::String(version) = value
+                    && version.contains(&bump.old_version)
                 {
-                    return true;
+                    names.insert(key.clone());
                 }
-                if json_contains_dep(v, pkg_name, old_version) {
-                    return true;
-                }
+                collect_json_dependency_names(value, bumped, names);
             }
-            false
         }
-        Value::Array(arr) => arr
-            .iter()
-            .any(|v| json_contains_dep(v, pkg_name, old_version)),
-        _ => false,
+        Value::Array(values) => {
+            for value in values {
+                collect_json_dependency_names(value, bumped, names);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -308,8 +348,8 @@ pub fn bump_package_lock_dependencies(
 
 fn transform_package_lock_dependencies(
     source: &str,
-    bumped: &HashMap<String, (String, String)>,
-) -> Result<Option<String>, serde_json::Error> {
+    bumped: &BTreeMap<String, VersionBump>,
+) -> Result<Option<DependencyTransform>, serde_json::Error> {
     let mut value: Value = match serde_json::from_str(source) {
         Ok(v) => v,
         Err(_) => return Ok(None),
@@ -318,7 +358,7 @@ fn transform_package_lock_dependencies(
         return Ok(None);
     };
 
-    let mut changed = false;
+    let mut changed_names = BTreeSet::new();
 
     // Update `packages` map (lockfileVersion 2/3)
     if let Some(Value::Object(packages)) = root.get_mut("packages") {
@@ -332,60 +372,74 @@ fn transform_package_lock_dependencies(
             let Some(Value::String(ver)) = obj.get("version") else {
                 continue;
             };
-            for (pkg_name, (old_version, new_version)) in bumped {
-                if ver != old_version {
-                    continue;
-                }
-                let key_matches = key == &format!("node_modules/{pkg_name}")
-                    || key.ends_with(&format!("/{pkg_name}"));
-                let name_matches = obj
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|n| n == pkg_name);
-                if key_matches || name_matches {
-                    obj.insert("version".to_string(), Value::String(new_version.clone()));
-                    changed = true;
-                    break;
-                }
+            let Some(pkg_name) = obj
+                .get("name")
+                .and_then(Value::as_str)
+                .or_else(|| package_lock_entry_name(key))
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let Some(bump) = bumped.get(&pkg_name) else {
+                continue;
+            };
+            if ver == &bump.old_version {
+                obj.insert(
+                    "version".to_string(),
+                    Value::String(bump.new_version.clone()),
+                );
+                changed_names.insert(pkg_name);
             }
         }
     }
 
     // Update legacy `dependencies` map (lockfileVersion 1) recursively
     if let Some(Value::Object(deps)) = root.get_mut("dependencies") {
-        update_lock_dependencies_map(deps, bumped, &mut changed);
+        update_lock_dependencies_map(deps, bumped, &mut changed_names);
     }
 
-    if !changed {
+    if changed_names.is_empty() {
         return Ok(None);
     }
 
     let serialized = serde_json::to_string_pretty(&value)?;
-    let mut written = serialized;
-    if !written.ends_with('\n') {
-        written.push('\n');
+    let mut content = serialized;
+    if !content.ends_with('\n') {
+        content.push('\n');
     }
-    Ok(Some(written))
+    Ok(Some(DependencyTransform {
+        content,
+        names: changed_names,
+    }))
+}
+
+fn package_lock_entry_name(key: &str) -> Option<&str> {
+    key.rsplit_once("/node_modules/")
+        .map(|(_, name)| name)
+        .or_else(|| key.strip_prefix("node_modules/"))
 }
 
 fn update_lock_dependencies_map(
     map: &mut serde_json::Map<String, Value>,
-    bumped: &HashMap<String, (String, String)>,
-    changed: &mut bool,
+    bumped: &BTreeMap<String, VersionBump>,
+    changed_names: &mut BTreeSet<String>,
 ) {
     for (dep_name, dep_val) in map.iter_mut() {
-        if let Some((old_version, new_version)) = bumped.get(dep_name)
+        if let Some(bump) = bumped.get(dep_name)
             && let Some(obj) = dep_val.as_object_mut()
             && let Some(Value::String(ver)) = obj.get("version")
-            && ver == old_version
+            && ver == &bump.old_version
         {
-            obj.insert("version".to_string(), Value::String(new_version.clone()));
-            *changed = true;
+            obj.insert(
+                "version".to_string(),
+                Value::String(bump.new_version.clone()),
+            );
+            changed_names.insert(dep_name.clone());
         }
         if let Some(obj) = dep_val.as_object_mut()
             && let Some(Value::Object(nested)) = obj.get_mut("dependencies")
         {
-            update_lock_dependencies_map(nested, bumped, changed);
+            update_lock_dependencies_map(nested, bumped, changed_names);
         }
     }
 }
@@ -402,27 +456,30 @@ pub fn bump_cargo_toml_dependencies(
 
 fn transform_cargo_toml_dependencies(
     source: &str,
-    bumped: &HashMap<String, (String, String)>,
-) -> Option<String> {
+    bumped: &BTreeMap<String, VersionBump>,
+) -> Option<DependencyTransform> {
     let mut doc: toml_edit::DocumentMut = match source.parse() {
         Ok(d) => d,
         Err(_) => return None,
     };
 
-    let mut changed = false;
-    visit_cargo_toml_table(doc.as_table_mut(), bumped, &mut changed);
+    let mut changed_names = BTreeSet::new();
+    visit_cargo_toml_table(doc.as_table_mut(), bumped, &mut changed_names);
 
-    if !changed {
+    if changed_names.is_empty() {
         return None;
     }
 
-    Some(doc.to_string())
+    Some(DependencyTransform {
+        content: doc.to_string(),
+        names: changed_names,
+    })
 }
 
 fn visit_cargo_toml_table(
     table: &mut toml_edit::Table,
-    bumped: &HashMap<String, (String, String)>,
-    changed: &mut bool,
+    bumped: &BTreeMap<String, VersionBump>,
+    changed_names: &mut BTreeSet<String>,
 ) {
     for (key, item) in table.iter_mut() {
         let key_str = key.to_string();
@@ -433,41 +490,41 @@ fn visit_cargo_toml_table(
             if let Some(dep_table) = item.as_table_mut() {
                 for (dep_name, dep_item) in dep_table.iter_mut() {
                     let dep_name_str = dep_name.to_string();
-                    if let Some((old_version, new_version)) = bumped.get(&dep_name_str) {
+                    if let Some(bump) = bumped.get(&dep_name_str) {
                         // `dep = "0.0.1"`
                         if let Some(ver) = dep_item.as_str()
-                            && ver.contains(old_version)
+                            && ver.contains(&bump.old_version)
                         {
-                            let new_ver = ver.replace(old_version, new_version);
+                            let new_ver = ver.replace(&bump.old_version, &bump.new_version);
                             *dep_item = toml_edit::Item::Value(toml_edit::Value::String(
                                 toml_edit::Formatted::new(new_ver),
                             ));
-                            *changed = true;
+                            changed_names.insert(dep_name_str.clone());
                         } else if let Some(inline) = dep_item.as_inline_table_mut()
                             && let Some(ver_item) = inline.get_mut("version")
                             && let Some(ver) = ver_item.as_str()
-                            && ver.contains(old_version)
+                            && ver.contains(&bump.old_version)
                         {
-                            let new_ver = ver.replace(old_version, new_version);
+                            let new_ver = ver.replace(&bump.old_version, &bump.new_version);
                             *ver_item =
                                 toml_edit::Value::String(toml_edit::Formatted::new(new_ver));
-                            *changed = true;
+                            changed_names.insert(dep_name_str.clone());
                         } else if let Some(tbl) = dep_item.as_table_mut()
                             && let Some(ver_item) = tbl.get_mut("version")
                             && let Some(ver) = ver_item.as_str()
-                            && ver.contains(old_version)
+                            && ver.contains(&bump.old_version)
                         {
-                            let new_ver = ver.replace(old_version, new_version);
+                            let new_ver = ver.replace(&bump.old_version, &bump.new_version);
                             *ver_item = toml_edit::Item::Value(toml_edit::Value::String(
                                 toml_edit::Formatted::new(new_ver),
                             ));
-                            *changed = true;
+                            changed_names.insert(dep_name_str.clone());
                         }
                     }
                 }
             }
         } else if let Some(sub_table) = item.as_table_mut() {
-            visit_cargo_toml_table(sub_table, bumped, changed);
+            visit_cargo_toml_table(sub_table, bumped, changed_names);
         }
     }
 }
@@ -483,8 +540,8 @@ pub fn bump_cargo_lock_dependencies(
 
 fn transform_cargo_lock_dependencies(
     source: &str,
-    bumped: &HashMap<String, (String, String)>,
-) -> Option<String> {
+    bumped: &BTreeMap<String, VersionBump>,
+) -> Option<DependencyTransform> {
     // Split into segments per `[[package]]` as in `bump_package_in_lock`.
     let mut segments: Vec<Vec<String>> = vec![Vec::new()];
     for line in source.lines() {
@@ -495,7 +552,7 @@ fn transform_cargo_lock_dependencies(
         }
     }
 
-    let mut changed = false;
+    let mut changed_names = BTreeSet::new();
     for segment in &mut segments {
         // Extract package name for this segment, if any, to handle `version` bump for the package itself.
         let pkg_name_in_segment = segment.iter().find_map(|l| {
@@ -513,7 +570,7 @@ fn transform_cargo_lock_dependencies(
             // Update unconditionally when the current version differs from `new_version` so
             // stale locks (where the on-disk version is behind the tag) are repaired.
             if let Some(ref name) = pkg_name_in_segment
-                && let Some((_, new_version)) = bumped.get(name)
+                && let Some(bump) = bumped.get(name)
             {
                 let trimmed = line.trim();
                 if trimmed.starts_with("version = \"")
@@ -523,11 +580,11 @@ fn transform_cargo_lock_dependencies(
                     && start != end
                 {
                     let current = &trimmed[start + 1..end];
-                    if current != new_version {
+                    if current != bump.new_version {
                         let indent: String =
                             line.chars().take_while(|c| c.is_whitespace()).collect();
-                        *line = format!("{indent}version = \"{new_version}\"");
-                        changed = true;
+                        *line = format!("{indent}version = \"{}\"", bump.new_version);
+                        changed_names.insert(name.clone());
                     }
                 }
             }
@@ -550,21 +607,21 @@ fn transform_cargo_lock_dependencies(
                     let inside = line[f + 1..l].to_string();
                     let mut tokens = inside.split_whitespace();
                     if let Some(pkg_token) = tokens.next()
-                        && let Some((_, new_version)) = bumped.get(pkg_token)
+                        && let Some(bump) = bumped.get(pkg_token)
                         && let Some(ver_token) = tokens.next()
-                        && ver_token != new_version
+                        && ver_token != bump.new_version
                     {
                         let rest: Vec<&str> = tokens.collect();
                         let new_inside = if rest.is_empty() {
-                            format!("{pkg_token} {new_version}")
+                            format!("{pkg_token} {}", bump.new_version)
                         } else {
-                            format!("{pkg_token} {new_version} {}", rest.join(" "))
+                            format!("{pkg_token} {} {}", bump.new_version, rest.join(" "))
                         };
                         if new_inside != inside {
                             let new_line =
                                 format!("{}{}{}", &line[..f + 1], new_inside, &line[l..]);
                             *line = new_line;
-                            changed = true;
+                            changed_names.insert(pkg_token.to_string());
                         }
                     }
                 }
@@ -572,20 +629,23 @@ fn transform_cargo_lock_dependencies(
         }
     }
 
-    if !changed {
+    if changed_names.is_empty() {
         return None;
     }
 
-    let mut written = segments
+    let mut content = segments
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
         .join("\n");
     if source.ends_with('\n') {
-        written.push('\n');
+        content.push('\n');
     }
 
-    Some(written)
+    Some(DependencyTransform {
+        content,
+        names: changed_names,
+    })
 }
 
 fn read_toml_name(path: &Path, section: &str) -> AppResult<String> {
@@ -1383,6 +1443,57 @@ mod tests {
                 "preview must not modify {file_name}"
             );
         }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn dependency_update_reports_changed_names_for_preview_and_apply() {
+        let dir = temp_path("dependency-preview-names");
+        fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("package.json");
+        let original = concat!(
+            "{\n",
+            "  \"dependencies\": {\n",
+            "    \"pkg-a\": \"^0.13.0\",\n",
+            "    \"pkg-b\": \"~2.0.0\"\n",
+            "  }\n",
+            "}\n",
+        );
+        fs::write(&path, original).expect("write package.json");
+        let bumped = BTreeMap::from([
+            (
+                "pkg-a".to_string(),
+                VersionBump {
+                    old_version: "0.13.0".to_string(),
+                    new_version: "0.14.0".to_string(),
+                },
+            ),
+            (
+                "pkg-b".to_string(),
+                VersionBump {
+                    old_version: "2.0.0".to_string(),
+                    new_version: "2.1.0".to_string(),
+                },
+            ),
+        ]);
+        let expected_names = BTreeSet::from(["pkg-a".to_string(), "pkg-b".to_string()]);
+
+        assert_eq!(
+            preview_dependency_update(&path, &bumped).expect("preview dependency update"),
+            DependencyUpdate::Changed(expected_names.clone())
+        );
+        assert_eq!(
+            fs::read_to_string(&path).expect("read previewed file"),
+            original
+        );
+        assert_eq!(
+            apply_dependency_update(&path, &bumped).expect("apply dependency update"),
+            DependencyUpdate::Changed(expected_names)
+        );
+        let updated = fs::read_to_string(&path).expect("read updated file");
+        assert!(updated.contains("^0.14.0"));
+        assert!(updated.contains("~2.1.0"));
 
         let _ = fs::remove_dir_all(dir);
     }

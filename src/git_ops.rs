@@ -143,7 +143,6 @@ pub struct ImpactConfig<'a> {
     pub skip_scopes: &'a HashSet<String>,
     pub ignored_directories: &'a [PathBuf],
     pub impact_paths: &'a [PathBuf],
-    pub force: bool,
 }
 
 pub fn get_impact_for_package(
@@ -153,11 +152,7 @@ pub fn get_impact_for_package(
     child_package_paths: &[PathBuf],
     config: &ImpactConfig<'_>,
 ) -> AppResult<Option<Impact>> {
-    let mut impact = if config.force {
-        Some(Impact::Patch)
-    } else {
-        None
-    };
+    let mut impact = None;
 
     let mut walk = repo
         .revwalk()
@@ -1161,7 +1156,6 @@ mod tests {
                 skip_scopes: &HashSet::new(),
                 ignored_directories: &[],
                 impact_paths: &[],
-                force: false,
             },
         )
         .expect("get impact");
@@ -1195,7 +1189,6 @@ mod tests {
                 skip_scopes: &HashSet::new(),
                 ignored_directories: &[PathBuf::from("generated")],
                 impact_paths: &[],
-                force: false,
             },
         )
         .expect("get impact");
@@ -1236,7 +1229,6 @@ mod tests {
             skip_scopes: &skipped,
             ignored_directories: &[],
             impact_paths: &[],
-            force: false,
         };
 
         let root = get_impact_for_package(

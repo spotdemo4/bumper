@@ -115,7 +115,10 @@ fn go_module_without_a_file_version_bumps_its_existing_package_tag() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Files to bump:\n."));
+    assert!(stdout.contains("Release plan:\n. (1.0.0 -> 1.0.1, patch)"));
+    assert!(stdout.contains("propagated from child packages/service"));
+    assert!(stdout.contains("service (2.3.4 -> 2.3.5, patch)"));
+    assert!(stdout.contains("direct patch"));
     assert!(!stdout.contains("Would you like to proceed?"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("Would you like to proceed?"));
     let package_tag = repo
@@ -405,6 +408,16 @@ fn readme_uses_nearest_package_stream_and_propagates_to_root() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("propagated from child packages/consumer"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("consumer (2.0.0 -> 2.0.1, patch)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("direct patch"), "{stdout}");
     let root_tag = repo
         .revparse_single("refs/tags/v1.0.1")
         .expect("find propagated root tag")
@@ -502,6 +515,17 @@ fn dependency_updates_release_an_unselected_sibling_package() {
         "bumper failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "propagated from dependency packages/library (library via packages/app/package.json)"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("package.json (3.0.0 -> 3.0.1; library 2.0.0 -> 2.0.1)"),
+        "{stdout}"
     );
     repo.revparse_single("refs/tags/packages/library/v2.0.1")
         .expect("find library tag");
@@ -723,6 +747,14 @@ fn explicit_parent_file_is_additive_to_nested_package_detection() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("packages/parent: (skipped)"));
+    assert!(
+        stdout.contains("propagated from child packages/parent/plugins/cache"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("propagated from child packages/parent"),
+        "{stdout}"
+    );
     repo.revparse_single("refs/tags/packages/parent/plugins/cache/v3.1.0")
         .expect("find nested cache tag");
     repo.revparse_single("refs/tags/packages/parent/v2.0.1")
@@ -810,6 +842,18 @@ fn package_impact_path_releases_nested_package_and_propagates_to_ancestors() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("packages/idle: (skipped)"), "{stdout}");
+    assert!(
+        stdout.contains("artifact (3.0.0 -> 3.1.0, minor)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("native (4.0.0 -> 4.1.0, minor)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("propagated from child packages/parent/artifact"),
+        "{stdout}"
+    );
     repo.revparse_single("refs/tags/packages/parent/artifact/v3.1.0")
         .expect("find artifact minor tag");
     repo.revparse_single("refs/tags/packages/parent/v2.0.1")
@@ -886,6 +930,13 @@ fn untagged_dependent_uses_manifest_version() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "propagated from dependency packages/library (library via packages/app/package.json)"
+        ),
+        "{stdout}"
+    );
     assert!(
         fs::read_to_string(local.path().join("packages/library/package.json"))
             .expect("read library manifest")
@@ -904,4 +955,109 @@ fn untagged_dependent_uses_manifest_version() {
         .expect("find library tag");
     repo.revparse_single("refs/tags/packages/app/v3.0.1")
         .expect("find dependent tag");
+}
+
+#[test]
+fn dependency_propagation_tree_shows_each_immediate_hop() {
+    let local = TempDir::new("dependency-chain-local");
+    let remote = TempDir::new("dependency-chain-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    for package in ["library", "app", "cli"] {
+        fs::create_dir_all(local.path().join(format!("packages/{package}")))
+            .expect("create package");
+    }
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("packages/library/package.json"),
+        "{\n  \"name\": \"library\",\n  \"version\": \"2.0.0\"\n}\n",
+    )
+    .expect("write library manifest");
+    fs::write(
+        local.path().join("packages/library/README.md"),
+        "library v2.0.0\n",
+    )
+    .expect("write library readme");
+    fs::write(
+        local.path().join("packages/app/package.json"),
+        "{\n  \"name\": \"app\",\n  \"version\": \"3.0.0\",\n  \"dependencies\": {\"library\": \"2.0.0\"}\n}\n",
+    )
+    .expect("write app manifest");
+    fs::write(
+        local.path().join("packages/cli/package.json"),
+        "{\n  \"name\": \"cli\",\n  \"version\": \"4.0.0\",\n  \"dependencies\": {\"app\": \"3.0.0\"}\n}\n",
+    )
+    .expect("write cli manifest");
+    let baseline = commit_all(&repo, "chore: initialize dependency chain");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/library/v2.0.0", baseline);
+    tag(&repo, "packages/app/v3.0.0", baseline);
+    tag(&repo, "packages/cli/v4.0.0", baseline);
+    fs::write(
+        local.path().join("packages/library/README.md"),
+        "updated library v2.0.0\n",
+    )
+    .expect("update library readme");
+    commit_all(&repo, "fix: update library");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "propagated from dependency packages/library (library via packages/app/package.json)"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "propagated from dependency packages/app (app via packages/cli/package.json)"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains(
+            "propagated from dependency packages/library (library via packages/cli/package.json)"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("package.json (4.0.0 -> 4.0.1; app 3.0.0 -> 3.0.1)"),
+        "{stdout}"
+    );
+
+    for tag_name in [
+        "v1.0.1",
+        "packages/library/v2.0.1",
+        "packages/app/v3.0.1",
+        "packages/cli/v4.0.1",
+    ] {
+        repo.revparse_single(&format!("refs/tags/{tag_name}"))
+            .unwrap_or_else(|_| panic!("find {tag_name}"));
+    }
+    let app = fs::read_to_string(local.path().join("packages/app/package.json"))
+        .expect("read app manifest");
+    assert!(app.contains("\"version\": \"3.0.1\""));
+    assert!(app.contains("\"library\": \"2.0.1\""));
+    let cli = fs::read_to_string(local.path().join("packages/cli/package.json"))
+        .expect("read cli manifest");
+    assert!(cli.contains("\"version\": \"4.0.1\""));
+    assert!(cli.contains("\"app\": \"3.0.1\""));
+    assert!(repo.statuses(None).expect("read status").is_empty());
 }
