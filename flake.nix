@@ -222,7 +222,7 @@
               clippy
             ];
             script = ''
-              cargo clippy --offline -- -D warnings
+              cargo clippy --offline --all-targets -- -D warnings
             '';
           };
 

@@ -810,7 +810,7 @@ mod tests {
             r#"{"name":"root","version":"1.0.0","bumper":{"impactPaths":"src"}}"#,
         );
 
-        let error = discover_packages(&root, &[manifest.clone()])
+        let error = discover_packages(&root, std::slice::from_ref(&manifest))
             .expect_err("malformed root package config should fail");
 
         assert!(error.contains(&manifest.display().to_string()), "{error}");

@@ -6,7 +6,7 @@ use clap::Parser;
 
 use crate::model::{AppResult, Config, Impact};
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[command(
     name = "bumper",
     about = "Minimal CLI for version bumps based on conventional commits",
