@@ -56,7 +56,7 @@ inputs:
 
 runs:
   using: docker
-  image: docker://ghcr.io/spotdemo4/bumper:0.27.0
+  image: docker://ghcr.io/spotdemo4/bumper:0.28.0
   env:
     PATHS: ${{ inputs.files }}
     IGNORE_DIRECTORIES: ${{ inputs.ignore_directories }}
