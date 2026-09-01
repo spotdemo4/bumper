@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::model::Config;
+use crate::model::{AppResult, Config, Impact};
 
 #[derive(Parser)]
 #[command(
@@ -65,12 +65,16 @@ struct Cli {
     #[arg(long)]
     force: bool,
 
+    /// Version bump type used by --force [env: FORCE_BUMP_TYPE] [default: patch]
+    #[arg(long, value_name = "TYPE")]
+    force_bump_type: Option<Impact>,
+
     /// Allow bumping in a dirty working tree [env: ALLOW_DIRTY]
     #[arg(long)]
     allow_dirty: bool,
 }
 
-pub fn load_config() -> Config {
+pub fn load_config() -> AppResult<Config> {
     let cli = Cli::parse();
 
     let mut paths = parse_list_env("PATHS");
@@ -87,7 +91,7 @@ pub fn load_config() -> Config {
     let tag = resolve_bool(cli.tag, cli.no_tag, "TAG", true);
     let push = resolve_bool(cli.push, cli.no_push, "PUSH", true);
 
-    Config {
+    Ok(Config {
         paths,
         ignored_directories,
         major_types,
@@ -98,7 +102,22 @@ pub fn load_config() -> Config {
         tag,
         push,
         force: cli.force || parse_bool_env("FORCE", false),
+        force_bump_type: resolve_force_bump_type(cli.force_bump_type)?,
         allow_dirty: cli.allow_dirty || parse_bool_env("ALLOW_DIRTY", false),
+    })
+}
+
+fn resolve_force_bump_type(cli_value: Option<Impact>) -> AppResult<Impact> {
+    if let Some(impact) = cli_value {
+        return Ok(impact);
+    }
+
+    match env::var("FORCE_BUMP_TYPE") {
+        Ok(value) if value.trim().is_empty() => Ok(Impact::Patch),
+        Ok(value) => value
+            .parse()
+            .map_err(|error| format!("invalid FORCE_BUMP_TYPE: {error}")),
+        Err(_) => Ok(Impact::Patch),
     }
 }
 
@@ -241,6 +260,25 @@ mod tests {
         assert_eq!(
             cli.ignore_directories,
             vec![PathBuf::from("generated"), PathBuf::from("packages/legacy")]
+        );
+    }
+
+    #[test]
+    fn parses_force_bump_type_option() {
+        let cli = Cli::try_parse_from(["bumper", "--force-bump-type", "minor"]).expect("parse CLI");
+
+        assert_eq!(cli.force_bump_type, Some(Impact::Minor));
+    }
+
+    #[test]
+    fn rejects_invalid_force_bump_type_option() {
+        let error = Cli::try_parse_from(["bumper", "--force-bump-type", "breaking"])
+            .expect_err("reject invalid bump type");
+
+        assert!(
+            error
+                .to_string()
+                .contains("expected patch, minor, or major")
         );
     }
 }

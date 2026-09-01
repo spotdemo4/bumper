@@ -76,6 +76,87 @@ fn tag(repo: &Repository, name: &str, commit: Oid) {
         .expect("create tag");
 }
 
+fn force_fixture(name: &str) -> (TempDir, TempDir) {
+    let local = TempDir::new(&format!("{name}-local"));
+    let remote = TempDir::new(&format!("{name}-remote"));
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.2.3\"\n}\n",
+    )
+    .expect("write root manifest");
+    let baseline = commit_all(&repo, "chore: initialize package");
+    tag(&repo, "v1.2.3", baseline);
+    (local, remote)
+}
+
+fn assert_forced_bump(command: &mut Command, expected_version: &str, expected_impact: &str) {
+    let output = command
+        .args(["--no-commit", "--no-tag", "--no-push", "--force"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&format!(
+        ". (1.2.3 -> {expected_version}, {expected_impact})"
+    )));
+    assert!(stdout.contains(&format!("forced {expected_impact} (--force)")));
+}
+
+#[test]
+fn forced_bump_type_defaults_to_patch_and_accepts_cli_or_environment() {
+    let (default_local, _default_remote) = force_fixture("force-default");
+    assert_forced_bump(
+        Command::new(env!("CARGO_BIN_EXE_bumper"))
+            .current_dir(default_local.path())
+            .env_remove("FORCE_BUMP_TYPE"),
+        "1.2.4",
+        "patch",
+    );
+
+    let (cli_local, _cli_remote) = force_fixture("force-cli");
+    assert_forced_bump(
+        Command::new(env!("CARGO_BIN_EXE_bumper"))
+            .current_dir(cli_local.path())
+            .env("FORCE_BUMP_TYPE", "major")
+            .args(["--force-bump-type", "minor"]),
+        "1.3.0",
+        "minor",
+    );
+
+    let (env_local, _env_remote) = force_fixture("force-env");
+    assert_forced_bump(
+        Command::new(env!("CARGO_BIN_EXE_bumper"))
+            .current_dir(env_local.path())
+            .env("FORCE_BUMP_TYPE", "major"),
+        "2.0.0",
+        "major",
+    );
+}
+
+#[test]
+fn invalid_force_bump_type_environment_value_fails_before_running() {
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .env("FORCE_BUMP_TYPE", "breaking")
+        .output()
+        .expect("run bumper");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("invalid FORCE_BUMP_TYPE: invalid bump type 'breaking'")
+    );
+}
+
 #[test]
 fn go_module_without_a_file_version_bumps_its_existing_package_tag() {
     let local = TempDir::new("go-module-local");

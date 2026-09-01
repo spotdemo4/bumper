@@ -14,17 +14,22 @@ use crate::versioning::next_version;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReleaseReasons {
     pub direct: Option<Impact>,
-    pub forced: bool,
+    pub forced: Option<Impact>,
     pub descendants: BTreeSet<PathBuf>,
     pub dependencies: BTreeMap<PathBuf, DependencyCause>,
 }
 
 impl ReleaseReasons {
     pub fn impact(&self) -> Option<Impact> {
-        self.direct.or_else(|| {
-            (self.forced || !self.descendants.is_empty() || !self.dependencies.is_empty())
-                .then_some(Impact::Patch)
-        })
+        [
+            self.direct,
+            self.forced,
+            (!self.descendants.is_empty() || !self.dependencies.is_empty())
+                .then_some(Impact::Patch),
+        ]
+        .into_iter()
+        .flatten()
+        .max()
     }
 }
 
@@ -133,7 +138,8 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
                     .map_or(&[], Vec::as_slice),
             },
         )?;
-        let forced = input.config.force && input.selected_packages.contains(&path);
+        let forced = (input.config.force && input.selected_packages.contains(&path))
+            .then_some(input.config.force_bump_type);
         let names = package_files(&package.root, input.tracked_paths)
             .into_iter()
             .filter_map(|file| package_name_for_file(&file))
@@ -588,10 +594,10 @@ mod tests {
     }
 
     #[test]
-    fn release_reasons_keep_direct_precedence_and_propagated_evidence() {
+    fn release_reasons_use_highest_impact_and_keep_propagated_evidence() {
         let reasons = ReleaseReasons {
-            direct: Some(Impact::Minor),
-            forced: true,
+            direct: Some(Impact::Patch),
+            forced: Some(Impact::Minor),
             descendants: BTreeSet::from([PathBuf::from("packages/app")]),
             dependencies: BTreeMap::from([(
                 PathBuf::from("packages/library"),
@@ -603,7 +609,7 @@ mod tests {
         };
 
         assert_eq!(reasons.impact(), Some(Impact::Minor));
-        assert!(reasons.forced);
+        assert_eq!(reasons.forced, Some(Impact::Minor));
         assert_eq!(reasons.descendants.len(), 1);
         assert_eq!(reasons.dependencies.len(), 1);
     }

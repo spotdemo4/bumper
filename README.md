@@ -61,7 +61,7 @@ An npm package can declare additional paths whose commits affect its release in 
 
 Each `impactPaths` entry is a literal path relative to the package directory, not a glob. Paths are additive to normal package ownership, may overlap between packages or point into another package's tree, and do not need to exist in the current checkout. Globally ignored directories still win. These paths only determine which commits affect the package; they are not bump targets and bumper does not scan them for version replacements.
 
-Because every package is selected, `--force` forces a bump for every discovered package rather than only packages containing supplied paths.
+Because every package is selected, `--force` forces a bump for every discovered package rather than only packages containing supplied paths. Forced bumps default to PATCH; use `--force-bump-type minor` (or `major`) or set `FORCE_BUMP_TYPE` to choose a different minimum impact.
 
 Root releases use `vX.Y.Z`. Packages below the repository root use their repository-relative path as the tag prefix:
 
@@ -89,7 +89,8 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
-    force: false # force at least a PATCH bump for every package, default false
+    force: false # force a bump for every package, default false
+    force_bump_type: patch # patch, minor or major; default patch
 
     # additional files or directories to bump versions in
     files: |-

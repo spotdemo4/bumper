@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 pub type AppResult<T> = Result<T, String>;
 
@@ -15,6 +16,7 @@ pub struct Config {
     pub tag: bool,
     pub push: bool,
     pub force: bool,
+    pub force_bump_type: Impact,
     pub allow_dirty: bool,
 }
 
@@ -31,6 +33,21 @@ impl Impact {
             Impact::Patch => "patch",
             Impact::Minor => "minor",
             Impact::Major => "major",
+        }
+    }
+}
+
+impl FromStr for Impact {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "patch" => Ok(Impact::Patch),
+            "minor" => Ok(Impact::Minor),
+            "major" => Ok(Impact::Major),
+            _ => Err(format!(
+                "invalid bump type '{value}': expected patch, minor, or major"
+            )),
         }
     }
 }

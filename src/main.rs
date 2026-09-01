@@ -103,7 +103,7 @@ fn normalize_ignored_directories(
 }
 
 fn run() -> AppResult<()> {
-    let mut config = load_config();
+    let mut config = load_config()?;
     let repo = Repository::discover(".")
         .or_else(|e| {
             // In Docker with bind-mounted repos the directory may be owned by a different
