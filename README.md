@@ -10,7 +10,7 @@
 - creates hierarchical tags for packages in subdirectories (`packages/consumer/v0.0.2`)
 - releases containing packages with a patch whenever one of their nested packages releases
 - applies the version bump to every discovered package and to additional files given as arguments (`bumper [files...]`)
-- applies the version bump in directories given as arguments to supported project files (`README.md`, `action.yaml`, `action.yml`, `package.json`, `package-lock.json`, `build.gradle`, `build.gradle.kts`, `gradle.properties`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `uv.lock`, `build.zig.zon`, `gleam.toml`, `*.nix` (`version = "x.y.z";`), `CMakeLists.txt`)
+- applies the version bump in directories given as arguments to supported project files (`README.md`, `action.yaml`, `action.yml`, `openapi*.yaml` (case-sensitive, top-level `info.version` only), `package.json`, `package-lock.json`, `build.gradle`, `build.gradle.kts`, `gradle.properties`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `uv.lock`, `build.zig.zon`, `gleam.toml`, `*.nix` (`version = "x.y.z";`), `CMakeLists.txt`)
 - skips configured directories, likely vendored paths (`vendor`, `node_modules`), and symlinks during directory scans
 - commits the bumped files and pushes them with the new git tag
 
@@ -46,6 +46,8 @@ Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES`
 Each supplied file or directory is an additional bump target belonging to its nearest containing package. A package is a directory with a valid `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, `build.gradle.kts`, or `go.mod`. Go modules use their package tag as the version because `go.mod` has no project version to update. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
 
 Bumper always checks every discovered package for a release. Supplying paths adds files or directories to the normal package-root scans; explicit files also support literal version replacement when their format has no dedicated writer. Dependency updates can release packages that reference another bumped package.
+
+OpenAPI documents are version targets owned by their nearest package; they do not create package boundaries.
 
 An npm package can declare additional paths whose commits affect its release in `package.json`:
 

@@ -382,6 +382,72 @@ fn untagged_root_uses_manifest_version_and_full_history() {
 }
 
 #[test]
+fn tracked_openapi_yaml_is_bumped_during_package_scan() {
+    let local = TempDir::new("openapi-scan-local");
+    let remote = TempDir::new("openapi-scan-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("openapi-public.yaml"),
+        concat!(
+            "openapi: 3.1.0\n",
+            "info:\n",
+            "  title: Fixture API\n",
+            "  version: 1.0.0 # release version\n",
+            "components:\n",
+            "  examples:\n",
+            "    release:\n",
+            "      value: 1.0.0\n",
+        ),
+    )
+    .expect("write OpenAPI document");
+    let baseline = commit_all(&repo, "chore: initialize repository");
+    tag(&repo, "v1.0.0", baseline);
+    fs::write(local.path().join("README.md"), "document API behavior\n")
+        .expect("write release change");
+    commit_all(&repo, "fix: document API behavior");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("openapi-public.yaml (1.0.0 -> 1.0.1)"));
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find root tag");
+    assert_eq!(
+        fs::read_to_string(local.path().join("openapi-public.yaml"))
+            .expect("read OpenAPI document"),
+        concat!(
+            "openapi: 3.1.0\n",
+            "info:\n",
+            "  title: Fixture API\n",
+            "  version: 1.0.1 # release version\n",
+            "components:\n",
+            "  examples:\n",
+            "    release:\n",
+            "      value: 1.0.0\n",
+        )
+    );
+    assert!(repo.statuses(None).expect("read status").is_empty());
+}
+
+#[test]
 fn ignored_directory_changes_do_not_trigger_or_receive_a_release() {
     let local = TempDir::new("ignored-directory-local");
     let remote = TempDir::new("ignored-directory-remote");

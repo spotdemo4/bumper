@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::ops::Range;
 use std::path::Path;
 
 use regex::Regex;
@@ -102,6 +103,9 @@ fn evaluate_typed_change(
         "build.zig.zon" => replace_line_value(file, ".version", new_version, write),
         "gleam.toml" => bump_toml_path(file, &["version"], new_version, write),
         "go.mod" => Ok(false),
+        _ if name.starts_with("openapi") && name.ends_with(".yaml") => {
+            bump_openapi_yaml(file, new_version, write)
+        }
         _ if name.ends_with(".nix") => bump_nix_version(file, old_version, new_version, write),
         _ => return Ok(TypedChange::Unhandled),
     }?;
@@ -778,6 +782,326 @@ fn replace_line_value(file: &Path, key: &str, new_version: &str, write: bool) ->
         &format!(r#"${{1}}{key} = "{new_version}","#),
         write,
     )
+}
+
+fn bump_openapi_yaml(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    let Some(range) = find_openapi_version_range(&source) else {
+        return Ok(false);
+    };
+    if source.get(range.clone()) == Some(new_version) {
+        return Ok(false);
+    }
+
+    let mut replaced = source;
+    replaced.replace_range(range, new_version);
+    if write {
+        fs::write(file, replaced)
+            .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    }
+    Ok(true)
+}
+
+fn find_openapi_version_range(source: &str) -> Option<Range<usize>> {
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for raw_line in source.split_inclusive('\n') {
+        let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        lines.push((offset, line));
+        offset += raw_line.len();
+    }
+
+    let mut found_info = false;
+    let mut saw_content = false;
+    let mut saw_document_start = false;
+    let mut target = None;
+
+    for (index, (line_offset, line)) in lines.iter().enumerate() {
+        let indent = yaml_indent(line).ok()?;
+        let trimmed = &line[indent..];
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if indent != 0 {
+            continue;
+        }
+        if trimmed == "---" {
+            if saw_content || saw_document_start {
+                return None;
+            }
+            saw_document_start = true;
+            continue;
+        }
+        if trimmed == "..." {
+            return None;
+        }
+        saw_content = true;
+
+        if is_quoted_yaml_key(trimmed, "info") {
+            return None;
+        }
+        let Some(value_start) = yaml_key_value_start(trimmed, "info") else {
+            continue;
+        };
+        if found_info {
+            return None;
+        }
+        found_info = true;
+
+        let value_start = line_offset + value_start;
+        let value = &source[value_start..line_offset + line.len()];
+        let leading = value.len() - value.trim_start_matches([' ', '\t']).len();
+        let value_start = value_start + leading;
+        let value = &source[value_start..line_offset + line.len()];
+        target = if value.is_empty() || value.starts_with('#') {
+            find_block_openapi_version(source, &lines, index).ok()?
+        } else if value.starts_with('{') {
+            find_flow_openapi_version(source, value_start, line_offset + line.len()).ok()?
+        } else {
+            return None;
+        };
+    }
+
+    target.filter(|_| found_info)
+}
+
+fn find_block_openapi_version(
+    source: &str,
+    lines: &[(usize, &str)],
+    info_index: usize,
+) -> Result<Option<Range<usize>>, ()> {
+    let mut child_indent = None;
+    let mut target = None;
+
+    for (line_offset, line) in lines.iter().skip(info_index + 1) {
+        let indent = yaml_indent(line)?;
+        let trimmed = &line[indent..];
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if indent == 0 {
+            break;
+        }
+
+        let direct_indent = *child_indent.get_or_insert(indent);
+        if indent < direct_indent {
+            return Err(());
+        }
+        if indent != direct_indent {
+            continue;
+        }
+        if is_quoted_yaml_key(trimmed, "version") {
+            return Err(());
+        }
+        let Some(value_start) = yaml_key_value_start(trimmed, "version") else {
+            continue;
+        };
+        if target.is_some() {
+            return Err(());
+        }
+
+        let start = line_offset + indent + value_start;
+        target = Some(yaml_scalar_range(
+            source,
+            start,
+            line_offset + line.len(),
+            true,
+        )?);
+    }
+
+    Ok(target)
+}
+
+fn find_flow_openapi_version(
+    source: &str,
+    open: usize,
+    line_end: usize,
+) -> Result<Option<Range<usize>>, ()> {
+    let bytes = source.as_bytes();
+    let mut stack = vec![b'{'];
+    let mut quote = None;
+    let mut entry_start = open + 1;
+    let mut entry_colon = None;
+    let mut target = None;
+    let mut index = open + 1;
+
+    while index < line_end {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if active_quote == b'\"' && byte == b'\\' {
+                index += 2;
+                continue;
+            }
+            if byte == active_quote {
+                if active_quote == b'\'' && bytes.get(index + 1) == Some(&b'\'') {
+                    index += 2;
+                    continue;
+                }
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+
+        match byte {
+            b'\'' | b'\"' => quote = Some(byte),
+            b'{' | b'[' => stack.push(byte),
+            b'}' if stack.len() == 1 => {
+                set_flow_openapi_target(source, entry_start, entry_colon, index, &mut target)?;
+                let suffix = source[index + 1..line_end].trim();
+                if !suffix.is_empty() && !suffix.starts_with('#') {
+                    return Err(());
+                }
+                return Ok(target);
+            }
+            b'}' => {
+                if stack.pop() != Some(b'{') {
+                    return Err(());
+                }
+            }
+            b']' => {
+                if stack.pop() != Some(b'[') {
+                    return Err(());
+                }
+            }
+            b':' if stack.len() == 1 && entry_colon.is_none() => entry_colon = Some(index),
+            b',' if stack.len() == 1 => {
+                set_flow_openapi_target(source, entry_start, entry_colon, index, &mut target)?;
+                entry_start = index + 1;
+                entry_colon = None;
+            }
+            b'#' => return Err(()),
+            _ => {}
+        }
+        index += 1;
+    }
+
+    Err(())
+}
+
+fn set_flow_openapi_target(
+    source: &str,
+    entry_start: usize,
+    entry_colon: Option<usize>,
+    entry_end: usize,
+    target: &mut Option<Range<usize>>,
+) -> Result<(), ()> {
+    let Some(colon) = entry_colon else {
+        return Ok(());
+    };
+    let key = source[entry_start..colon].trim();
+    if key == "'version'" || key == "\"version\"" {
+        return Err(());
+    }
+    if key != "version" {
+        return Ok(());
+    }
+    if target.is_some() {
+        return Err(());
+    }
+    *target = Some(yaml_scalar_range(source, colon + 1, entry_end, false)?);
+    Ok(())
+}
+
+fn yaml_indent(line: &str) -> Result<usize, ()> {
+    let mut indent = 0;
+    for byte in line.bytes() {
+        match byte {
+            b' ' => indent += 1,
+            b'\t' => return Err(()),
+            _ => break,
+        }
+    }
+    Ok(indent)
+}
+
+fn yaml_key_value_start(line: &str, key: &str) -> Option<usize> {
+    let rest = line.strip_prefix(key)?;
+    let spaces = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+    if rest.as_bytes().get(spaces) != Some(&b':') {
+        return None;
+    }
+    Some(key.len() + spaces + 1)
+}
+
+fn is_quoted_yaml_key(line: &str, key: &str) -> bool {
+    (*b"'\"").into_iter().any(|quote| {
+        line.as_bytes().first() == Some(&quote)
+            && line.get(1..).is_some_and(|rest| {
+                rest.strip_prefix(key)
+                    .and_then(|rest| rest.strip_prefix(quote as char))
+                    .is_some_and(|rest| rest.trim_start_matches([' ', '\t']).starts_with(':'))
+            })
+    })
+}
+
+fn yaml_scalar_range(
+    source: &str,
+    mut start: usize,
+    mut end: usize,
+    allow_comment: bool,
+) -> Result<Range<usize>, ()> {
+    while start < end && matches!(source.as_bytes()[start], b' ' | b'\t') {
+        start += 1;
+    }
+    while end > start && matches!(source.as_bytes()[end - 1], b' ' | b'\t') {
+        end -= 1;
+    }
+    if start == end {
+        return Err(());
+    }
+
+    match source.as_bytes()[start] {
+        quote @ (b'\'' | b'\"') => {
+            let mut index = start + 1;
+            while index < end {
+                let byte = source.as_bytes()[index];
+                if quote == b'\"' && byte == b'\\' {
+                    index += 2;
+                    continue;
+                }
+                if byte == quote {
+                    if quote == b'\'' && source.as_bytes().get(index + 1) == Some(&b'\'') {
+                        index += 2;
+                        continue;
+                    }
+                    let suffix = source[index + 1..end].trim();
+                    if suffix.is_empty() || (allow_comment && suffix.starts_with('#')) {
+                        return Ok(start + 1..index);
+                    }
+                    return Err(());
+                }
+                index += 1;
+            }
+            Err(())
+        }
+        b'*' | b'&' | b'!' | b'|' | b'>' | b'{' | b'[' => Err(()),
+        _ => {
+            if allow_comment {
+                let bytes = source.as_bytes();
+                let mut index = start;
+                while index < end {
+                    if bytes[index] == b'#'
+                        && (index == start || matches!(bytes[index - 1], b' ' | b'\t'))
+                    {
+                        end = index;
+                        break;
+                    }
+                    index += 1;
+                }
+                while end > start && matches!(bytes[end - 1], b' ' | b'\t') {
+                    end -= 1;
+                }
+            }
+            if start == end {
+                Err(())
+            } else {
+                Ok(start..end)
+            }
+        }
+    }
 }
 
 fn bump_package_json(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {

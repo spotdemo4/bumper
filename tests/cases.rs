@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use bumper::bump::{
     TypedChange, apply_typed_change, bump_cargo_lock_dependencies, bump_cargo_toml_dependencies,
-    bump_package_json_dependencies, bump_package_lock_dependencies,
+    bump_package_json_dependencies, bump_package_lock_dependencies, preview_typed_change,
 };
 
 fn copy_fixture(case_name: &str) -> PathBuf {
@@ -36,6 +36,16 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
             fs::copy(&path, &target).expect("failed to copy fixture file");
         }
     }
+}
+
+fn temp_case_dir(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time should be after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("bumper-case-{name}-{nanos}"));
+    fs::create_dir_all(&dir).expect("create fixture directory");
+    dir
 }
 
 #[test]
@@ -559,4 +569,129 @@ fn action_yaml_literal_replacement_can_update_non_image_values() {
     assert_eq!(changed, TypedChange::Changed);
     assert!(action.contains("image: Dockerfile"));
     assert!(action.contains("FIXTURE_VERSION: 0.0.2"));
+}
+
+#[test]
+fn openapi_yaml_updates_only_info_version() {
+    let dir = temp_case_dir("openapi");
+    let path = dir.join("openapi.yaml");
+    let original = r#"openapi: 3.1.0
+version: 1.2.3
+info:
+  title: Fixture API
+  version: 9.9.9 # release version
+  contact:
+    version: 1.2.3
+components:
+  schemas:
+    Example:
+      example: 1.2.3
+# documentation for 1.2.3
+"#;
+    let expected = original.replacen("9.9.9 # release version", "1.2.4 # release version", 1);
+    fs::write(&path, original).expect("write openapi.yaml");
+
+    let changed = apply_typed_change(&path, "1.2.3", "1.2.4").expect("bump openapi.yaml");
+
+    assert_eq!(changed, TypedChange::Changed);
+    assert_eq!(
+        fs::read_to_string(&path).expect("read openapi.yaml"),
+        expected
+    );
+}
+
+#[test]
+fn openapi_yaml_preserves_quotes_and_supports_flow_info() {
+    let dir = temp_case_dir("openapi-styles");
+    let cases = [
+        (
+            "openapi-single.yaml",
+            "info:\n  version: '1.2.3' # stable\n",
+            "info:\n  version: '1.2.4' # stable\n",
+        ),
+        (
+            "openapi-double.yaml",
+            "info:\n  version: \"1.2.3\"\n",
+            "info:\n  version: \"1.2.4\"\n",
+        ),
+        (
+            "openapi-public.yaml",
+            "info: { title: Fixture, contact: { version: 1.2.3 }, version: 1.2.3 }\n",
+            "info: { title: Fixture, contact: { version: 1.2.3 }, version: 1.2.4 }\n",
+        ),
+    ];
+
+    for (name, original, expected) in cases {
+        let path = dir.join(name);
+        fs::write(&path, original).expect("write OpenAPI source");
+        assert_eq!(
+            apply_typed_change(&path, "1.2.3", "1.2.4").expect("bump OpenAPI source"),
+            TypedChange::Changed
+        );
+        assert_eq!(
+            fs::read_to_string(path).expect("read OpenAPI source"),
+            expected
+        );
+    }
+}
+
+#[test]
+fn openapi_yaml_preview_and_invalid_targets_do_not_write() {
+    let dir = temp_case_dir("openapi-preview");
+    let preview_path = dir.join("openapi-preview.yaml");
+    let original = "info:\r\n  version: 1.2.3 # current\r\n";
+    fs::write(&preview_path, original).expect("write preview source");
+
+    assert_eq!(
+        preview_typed_change(&preview_path, "1.2.3", "1.2.4").expect("preview OpenAPI bump"),
+        TypedChange::Changed
+    );
+    assert_eq!(
+        fs::read_to_string(&preview_path).expect("read preview source"),
+        original
+    );
+
+    let cases = [
+        ("openapi-current.yaml", "info:\n  version: 1.2.4\n"),
+        ("openapi-missing.yaml", "info:\n  title: Fixture\n"),
+        (
+            "openapi-duplicate.yaml",
+            "info:\n  version: 1.2.3\n  version: 1.2.3\n",
+        ),
+        (
+            "openapi-documents.yaml",
+            "---\ninfo:\n  version: 1.2.3\n---\ninfo:\n  version: 1.2.3\n",
+        ),
+        ("openapi-alias.yaml", "info:\n  version: *release\n"),
+        (
+            "openapi-multiline-flow.yaml",
+            "info: {\n  version: 1.2.3\n}\n",
+        ),
+    ];
+    for (name, source) in cases {
+        let path = dir.join(name);
+        fs::write(&path, source).expect("write invalid OpenAPI source");
+        assert_eq!(
+            apply_typed_change(&path, "1.2.3", "1.2.4").expect("evaluate OpenAPI source"),
+            TypedChange::Unchanged,
+            "{name} should remain unchanged"
+        );
+        assert_eq!(
+            fs::read_to_string(path).expect("read invalid OpenAPI source"),
+            source
+        );
+    }
+}
+
+#[test]
+fn openapi_yaml_filename_matching_is_case_sensitive() {
+    let dir = temp_case_dir("openapi-names");
+
+    for name in ["openapi.yml", "OpenAPI.yaml", "api-openapi.yaml"] {
+        assert_eq!(
+            apply_typed_change(&dir.join(name), "1.2.3", "1.2.4")
+                .expect("evaluate nonmatching name"),
+            TypedChange::Unhandled
+        );
+    }
 }
