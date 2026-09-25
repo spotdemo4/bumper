@@ -38,3 +38,21 @@ jobs:
             images.x86_64-linux.default.x86_64-unknown-linux-gnu
             images.x86_64-linux.default.aarch64-unknown-linux-gnu
             images.x86_64-linux.default.armv7l-unknown-linux-gnueabihf
+
+  check:
+    needs: release
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Dry run
+        uses: $/
+        with:
+          commit: false
+          tag: false
+          push: false
+          force: true
