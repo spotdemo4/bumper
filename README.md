@@ -138,7 +138,7 @@ inputs = {
 
 outputs = { bumper, ... }: {
     devShells.x86_64-linux.default = pkgs.mkShell {
-        packages = [ bumper.x86_64-linux.default ];
+        packages = [ bumper.packages.x86_64-linux.default ];
     };
 }
 ```
