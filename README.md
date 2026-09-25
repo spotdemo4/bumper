@@ -87,7 +87,7 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v0.30.0
+  uses: spotdemo4/bumper@v0.30.1
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
@@ -152,7 +152,7 @@ docker run -it \
   -w /app \
   -v "$(pwd):/app" \
   -v "$HOME/.ssh:/root/.ssh" \
-  ghcr.io/spotdemo4/bumper:0.30.0
+  ghcr.io/spotdemo4/bumper:0.30.1
 ```
 
 ### Downloads
