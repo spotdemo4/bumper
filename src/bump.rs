@@ -762,7 +762,27 @@ fn replace_literal(
 ) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let replaced = source.replace(old_version, new_version);
+    let mut replaced = String::with_capacity(source.len());
+    let mut cursor = 0;
+    for (start, matched) in source.match_indices(old_version) {
+        let end = start + matched.len();
+        let before = &source[..start];
+        let after = &source[end..];
+
+        // A dot only blocks replacement when it connects to another numeric component.
+        let before = before.strip_suffix('.').unwrap_or(before);
+        let after = after.strip_prefix('.').unwrap_or(after);
+        if before.as_bytes().last().is_some_and(u8::is_ascii_digit)
+            || after.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        {
+            continue;
+        }
+
+        replaced.push_str(&source[cursor..start]);
+        replaced.push_str(new_version);
+        cursor = end;
+    }
+    replaced.push_str(&source[cursor..]);
     if source == replaced {
         return Ok(false);
     }
@@ -1866,6 +1886,108 @@ mod tests {
             !dependency_update_needed(&unsupported, &bumped).expect("preview unsupported file")
         );
         assert!(!unsupported.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn literal_replacement_respects_numeric_boundaries() {
+        let dir = temp_path("literal-numeric-boundaries");
+        fs::create_dir_all(&dir).expect("create dir");
+        let cases = [
+            ("127.0.0.1:8080", "127.0.0.1:8080"),
+            ("10.0.1", "10.0.1"),
+            ("0.0.10", "0.0.10"),
+            ("0.0.1.2", "0.0.1.2"),
+            ("127.0.0.1.2", "127.0.0.1.2"),
+            ("0.0.1", "0.1.0"),
+            ("v0.0.1", "v0.1.0"),
+            ("version 0.0.1\n", "version 0.1.0\n"),
+            ("fixture:0.0.1", "fixture:0.1.0"),
+            ("fixture:v0.0.1-alpine", "fixture:v0.1.0-alpine"),
+            ("\"0.0.1\"", "\"0.1.0\""),
+            ("`0.0.1`", "`0.1.0`"),
+            ("Version 0.0.1.", "Version 0.1.0."),
+            ("project-0.0.1.tar.gz", "project-0.1.0.tar.gz"),
+            ("project.0.0.1", "project.0.1.0"),
+            (".0.0.1.", ".0.1.0."),
+            ("版本：0.0.1。", "版本：0.1.0。"),
+            ("0.0.1,0.0.1", "0.1.0,0.1.0"),
+            ("no version here", "no version here"),
+        ];
+
+        for file_name in ["README.md", "action.yaml", "action.yml"] {
+            let path = dir.join(file_name);
+            for (original, expected) in cases {
+                fs::write(&path, original).expect("write source file");
+                let change = TypedChange::from_changed(original != expected);
+
+                assert_eq!(
+                    preview_typed_change(&path, "0.0.1", "0.1.0").expect("preview typed change"),
+                    change,
+                    "preview {file_name}: {original}"
+                );
+                assert_eq!(
+                    fs::read_to_string(&path).expect("read previewed file"),
+                    original,
+                    "preview must not modify {file_name}"
+                );
+                assert_eq!(
+                    apply_typed_change(&path, "0.0.1", "0.1.0").expect("apply typed change"),
+                    change,
+                    "apply {file_name}: {original}"
+                );
+                assert_eq!(
+                    fs::read_to_string(&path).expect("read updated file"),
+                    expected,
+                    "content {file_name}: {original}"
+                );
+            }
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn literal_replacement_updates_versions_without_changing_ip_addresses() {
+        let dir = temp_path("literal-mixed-boundaries");
+        fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("README.md");
+        let original = concat!(
+            "Connect to 127.0.0.1:8080.\n",
+            "Install `v0.0.1` or fixture:0.0.1.\n",
+            "Leave 0.0.10 and 0.0.1.2 unchanged.\n",
+            "Download project-0.0.1.tar.gz.\n",
+            "Also leave 127.0.0.1 unchanged.\n",
+        );
+        let expected = concat!(
+            "Connect to 127.0.0.1:8080.\n",
+            "Install `v0.1.0` or fixture:0.1.0.\n",
+            "Leave 0.0.10 and 0.0.1.2 unchanged.\n",
+            "Download project-0.1.0.tar.gz.\n",
+            "Also leave 127.0.0.1 unchanged.\n",
+        );
+        fs::write(&path, original).expect("write README");
+
+        assert_eq!(
+            preview_typed_change(&path, "0.0.1", "0.1.0").expect("preview typed change"),
+            TypedChange::Changed
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read README"), original);
+        assert_eq!(
+            apply_typed_change(&path, "0.0.1", "0.1.0").expect("apply typed change"),
+            TypedChange::Changed
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read README"), expected);
+        assert_eq!(
+            preview_typed_change(&path, "0.0.1", "0.1.0").expect("preview remaining matches"),
+            TypedChange::Unchanged
+        );
+        assert_eq!(
+            apply_typed_change(&path, "0.0.1", "0.1.0").expect("apply remaining matches"),
+            TypedChange::Unchanged
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read README"), expected);
 
         let _ = fs::remove_dir_all(dir);
     }
