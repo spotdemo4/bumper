@@ -113,6 +113,8 @@
                 fileset = fileset.unions [
                   ./Cargo.lock
                   ./Cargo.toml
+                  ./LICENSE
+                  ./README.md
                   ./src
                   ./tests
                 ];
