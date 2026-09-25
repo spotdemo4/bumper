@@ -123,7 +123,7 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
 
 ### Nix
 
-```elm
+```sh
 nix run github:spotdemo4/bumper
 ```
 
@@ -133,15 +133,12 @@ nix run github:spotdemo4/bumper
 inputs = {
     bumper = {
         url = "github:spotdemo4/bumper";
-        inputs.nixpkgs.follows = "nixpkgs";
     };
 };
 
 outputs = { bumper, ... }: {
     devShells.x86_64-linux.default = pkgs.mkShell {
-        packages = [
-            bumper.x86_64-linux.default
-        ];
+        packages = [ bumper.x86_64-linux.default ];
     };
 }
 ```
@@ -150,10 +147,14 @@ also available from the [nix user repository](https://nur.nix-community.org/repo
 
 ### Docker
 
-```elm
+```sh
 docker run -it \
   -w /app \
   -v "$(pwd):/app" \
   -v "$HOME/.ssh:/root/.ssh" \
   ghcr.io/spotdemo4/bumper:0.30.0
 ```
+
+### Downloads
+
+https://trev.zip/llc/bumper/releases
