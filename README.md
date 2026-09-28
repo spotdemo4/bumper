@@ -116,9 +116,10 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
     patch_types: |-
       fix
 
-    # conventional commit scopes to skip over, default "ci"
+    # conventional commit scopes to skip over, default "ci", "docs"
     skip_scopes: |-
       ci
+      docs
 ```
 
 ### Nix

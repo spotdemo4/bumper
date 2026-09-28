@@ -33,7 +33,7 @@ struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "TYPE")]
     patch_types: Vec<String>,
 
-    /// Commit scopes to skip when determining version bump [env: SKIP_SCOPES] [default: ci]
+    /// Commit scopes to skip when determining version bump [env: SKIP_SCOPES] [default: ci,docs]
     #[arg(long, value_delimiter = ',', value_name = "SCOPE")]
     skip_scopes: Vec<String>,
 
@@ -85,7 +85,7 @@ pub fn load_config() -> AppResult<Config> {
     let major_types = resolve_set(cli.major_types, "MAJOR_TYPES", &["BREAKING CHANGE"]);
     let minor_types = resolve_set(cli.minor_types, "MINOR_TYPES", &["feat"]);
     let patch_types = resolve_set(cli.patch_types, "PATCH_TYPES", &["fix"]);
-    let skip_scopes = resolve_set(cli.skip_scopes, "SKIP_SCOPES", &["ci"]);
+    let skip_scopes = resolve_set(cli.skip_scopes, "SKIP_SCOPES", &["ci", "docs"]);
 
     let commit = resolve_bool(cli.commit, cli.no_commit, "COMMIT", true);
     let tag = resolve_bool(cli.tag, cli.no_tag, "TAG", true);
