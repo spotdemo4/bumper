@@ -1320,21 +1320,23 @@ fn bump_toml_path(file: &Path, path: &[&str], new_version: &str, write: bool) ->
         }
     };
 
+    // `Item::get_mut` inserts missing keys, so walk with table lookups that
+    // leave manifests without a version untouched.
     let mut item = doc.as_item_mut();
-    for key in path.iter().take(path.len() - 1) {
-        let Some(next) = item.get_mut(*key) else {
+    for key in path {
+        let Some(next) = item
+            .as_table_like_mut()
+            .and_then(|table| table.get_mut(key))
+        else {
             return Ok(false);
         };
         item = next;
     }
+    let value = item;
 
-    let leaf = path[path.len() - 1];
-    let Some(value) = item.get_mut(leaf) else {
-        return Ok(false);
-    };
-
-    if value.as_str() == Some(new_version) {
-        return Ok(false);
+    match value.as_str() {
+        Some(version) if version != new_version => {}
+        _ => return Ok(false),
     }
 
     *value = toml_edit::value(new_version);
@@ -2005,6 +2007,57 @@ mod tests {
             TypedChange::Changed
         );
         assert_eq!(fs::read_to_string(&path).expect("read README"), original);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn toml_manifests_without_a_version_are_not_modified() {
+        let dir = temp_path("toml-versionless");
+        fs::create_dir_all(&dir).expect("create dir");
+        let cases = [
+            ("pyproject.toml", "[tool.ruff]\nline-length = 100\n"),
+            ("pyproject.toml", "[project]\nname = \"app\"\n"),
+            ("pyproject.toml", "project = \"app\"\n"),
+            ("Cargo.toml", "[workspace]\nmembers = [\"app\"]\n"),
+            ("gleam.toml", "name = \"app\"\n"),
+        ];
+
+        for (file_name, original) in cases {
+            let path = dir.join(file_name);
+            fs::write(&path, original).expect("write manifest");
+
+            assert_eq!(
+                apply_typed_change(&path, "1.2.3", "2.0.0").expect("apply typed change"),
+                TypedChange::Unchanged,
+                "{file_name}: {original}"
+            );
+            assert_eq!(
+                fs::read_to_string(&path).expect("read manifest"),
+                original,
+                "{file_name}: {original}"
+            );
+        }
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn toml_manifests_with_a_version_are_bumped() {
+        let dir = temp_path("toml-versioned");
+        fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("pyproject.toml");
+        fs::write(&path, "project = { name = \"app\", version = \"1.2.3\" }\n")
+            .expect("write manifest");
+
+        assert_eq!(
+            apply_typed_change(&path, "1.2.3", "2.0.0").expect("apply typed change"),
+            TypedChange::Changed
+        );
+        assert_eq!(
+            fs::read_to_string(&path).expect("read manifest"),
+            "project = { name = \"app\", version = \"2.0.0\" }\n"
+        );
 
         let _ = fs::remove_dir_all(dir);
     }
