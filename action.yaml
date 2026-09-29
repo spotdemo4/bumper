@@ -39,8 +39,11 @@ inputs:
   force:
     description: force a bump for every discovered package
     required: false
+  force_packages:
+    description: repository-relative package directories to force a bump for
+    required: false
   force_bump_type:
-    description: minimum version bump type used when force is enabled
+    description: minimum version bump type used for forced bumps
     required: false
     default: patch
   allow_dirty:
@@ -68,6 +71,7 @@ runs:
     TAG: ${{ inputs.tag }}
     PUSH: ${{ inputs.push }}
     FORCE: ${{ inputs.force }}
+    FORCE_PACKAGES: ${{ inputs.force_packages }}
     FORCE_BUMP_TYPE: ${{ inputs.force_bump_type }}
     ALLOW_DIRTY: ${{ inputs.allow_dirty }}
     GITHUB_TOKEN: ${{ inputs.github_token }}

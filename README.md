@@ -37,7 +37,7 @@ Release plan:
         `-- package.json (2.0.0 -> 2.0.1)
 ```
 
-Direct conventional-commit impacts, `--force`, immediate child releases, and dependency updates are retained as separate reasons, so a package can show more than one cause. Ancestor and dependency chains use immediate edges (`library -> app -> cli`) rather than flattening every downstream release back to the original package.
+Direct conventional-commit impacts, forced bumps, immediate child releases, and dependency updates are retained as separate reasons, so a package can show more than one cause. Ancestor and dependency chains use immediate edges (`library -> app -> cli`) rather than flattening every downstream release back to the original package.
 
 Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES` to a whitespace- or newline-separated list of repository-relative directories. Ignored trees do not contribute commits, packages, version files, or dependency updates. Explicitly selected paths inside them are skipped.
 
@@ -63,7 +63,9 @@ An npm package can declare additional paths whose commits affect its release in 
 
 Each `impactPaths` entry is a literal path relative to the package directory, not a glob. Paths are additive to normal package ownership, may overlap between packages or point into another package's tree, and do not need to exist in the current checkout. Globally ignored directories still win. These paths only determine which commits affect the package; they are not bump targets and bumper does not scan them for version replacements.
 
-Because every package is selected, `--force` forces a bump for every discovered package rather than only packages containing supplied paths. Forced bumps default to PATCH; use `--force-bump-type minor` (or `major`) or set `FORCE_BUMP_TYPE` to choose a different minimum impact.
+Because every package is selected, `--force` forces a bump for every discovered package rather than only packages containing supplied paths. To force specific packages instead, pass their repository-relative directories with `--force-package packages/app` (repeatable or comma-separated; `.` is the root) or set `FORCE_PACKAGES` to a whitespace- or newline-separated list. A path that is not a discovered package is an error. Forcing a nested package still releases its ancestors and dependents with a patch, as with any other release. Forced bumps default to PATCH; use `--force-bump-type minor` (or `major`) or set `FORCE_BUMP_TYPE` to choose a different minimum impact.
+
+Run `bumper -i` in a terminal to pick forced packages from a checklist. Each package shows the release it would get without forcing, packages from `--force` or `--force-package` start checked, and the usual release plan and confirmation follow the selection. Press Esc to abort.
 
 Root releases use `vX.Y.Z`. Packages below the repository root use their repository-relative path as the tag prefix:
 
@@ -92,6 +94,10 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
     force: false # force a bump for every package, default false
+
+    # repository-relative package directories to force a bump for
+    force_packages: |-
+      packages/app
     force_bump_type: patch # patch, minor or major; default patch
 
     # additional files or directories to bump versions in
