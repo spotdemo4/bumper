@@ -109,7 +109,7 @@ fn assert_forced_bump(command: &mut Command, expected_version: &str, expected_im
     assert!(stdout.contains(&format!(
         ". (1.2.3 -> {expected_version}, {expected_impact})"
     )));
-    assert!(stdout.contains(&format!("forced {expected_impact} (--force)")));
+    assert!(stdout.contains(&format!("forced {expected_impact}")));
 }
 
 #[test]
@@ -141,6 +141,106 @@ fn forced_bump_type_defaults_to_patch_and_accepts_cli_or_environment() {
         "2.0.0",
         "major",
     );
+}
+
+fn nested_force_fixture(name: &str) -> (TempDir, TempDir) {
+    let local = TempDir::new(&format!("{name}-local"));
+    let remote = TempDir::new(&format!("{name}-remote"));
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    for (directory, name, version) in [
+        ("", "root", "1.0.0"),
+        ("packages/app", "app", "2.0.0"),
+        ("packages/lib", "lib", "3.0.0"),
+    ] {
+        let directory = local.path().join(directory);
+        fs::create_dir_all(&directory).expect("create package");
+        fs::write(
+            directory.join("package.json"),
+            format!("{{\n  \"name\": \"{name}\",\n  \"version\": \"{version}\"\n}}\n"),
+        )
+        .expect("write manifest");
+    }
+    let baseline = commit_all(&repo, "chore: initialize packages");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/app/v2.0.0", baseline);
+    tag(&repo, "packages/lib/v3.0.0", baseline);
+    (local, remote)
+}
+
+#[test]
+fn force_package_bumps_only_the_selected_package_and_its_ancestors() {
+    for (name, configure) in [
+        (
+            "force-package-cli",
+            (|command: &mut Command| {
+                command.args(["--force-package", "packages/app"]);
+            }) as fn(&mut Command),
+        ),
+        ("force-package-env", |command: &mut Command| {
+            command.env("FORCE_PACKAGES", "packages/app");
+        }),
+    ] {
+        let (local, _remote) = nested_force_fixture(name);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bumper"));
+        command
+            .current_dir(local.path())
+            .env_remove("FORCE")
+            .env_remove("FORCE_PACKAGES")
+            .args(["--no-commit", "--no-tag", "--no-push"]);
+        configure(&mut command);
+        let output = command.output().expect("run bumper");
+
+        assert!(
+            output.status.success(),
+            "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("app (2.0.0 -> 2.0.1, patch)"), "{stdout}");
+        assert!(stdout.contains("forced patch"), "{stdout}");
+        assert!(stdout.contains(". (1.0.0 -> 1.0.1, patch)"), "{stdout}");
+        assert!(stdout.contains("packages/lib: (skipped)"), "{stdout}");
+        assert!(
+            fs::read_to_string(local.path().join("packages/lib/package.json"))
+                .expect("read lib manifest")
+                .contains("\"version\": \"3.0.0\"")
+        );
+    }
+}
+
+#[test]
+fn force_package_rejects_paths_that_are_not_packages() {
+    let (local, _remote) = nested_force_fixture("force-package-invalid");
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .env_remove("FORCE_PACKAGES")
+        .args(["--no-commit", "--no-tag", "--no-push"])
+        .args(["--force-package", "packages"])
+        .output()
+        .expect("run bumper");
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("forced package 'packages' is not a discovered package")
+    );
+}
+
+#[test]
+fn interactive_mode_requires_a_terminal() {
+    let (local, _remote) = nested_force_fixture("interactive-no-terminal");
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-commit", "--no-tag", "--no-push", "-i"])
+        .output()
+        .expect("run bumper");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--interactive requires a terminal"));
 }
 
 #[test]

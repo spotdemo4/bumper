@@ -94,6 +94,7 @@ pub struct PlanInput<'a> {
     pub packages: BTreeMap<PathBuf, Package>,
     pub known_packages: &'a BTreeMap<PathBuf, Package>,
     pub selected_packages: &'a HashSet<PathBuf>,
+    pub forced_packages: &'a HashSet<PathBuf>,
     pub tracked_files: &'a [PathBuf],
     pub tracked_paths: &'a HashSet<PathBuf>,
     pub package_impact_paths: &'a BTreeMap<PathBuf, Vec<PathBuf>>,
@@ -138,7 +139,9 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
                     .map_or(&[], Vec::as_slice),
             },
         )?;
-        let forced = (input.config.force && input.selected_packages.contains(&path))
+        let forced = input
+            .forced_packages
+            .contains(&path)
             .then_some(input.config.force_bump_type);
         let names = package_files(&package.root, input.tracked_paths)
             .into_iter()

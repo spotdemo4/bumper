@@ -16,8 +16,10 @@ pub struct Config {
     pub tag: bool,
     pub push: bool,
     pub force: bool,
+    pub force_packages: Vec<PathBuf>,
     pub force_bump_type: Impact,
     pub allow_dirty: bool,
+    pub interactive: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

@@ -8,6 +8,7 @@ mod versioning;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
@@ -16,17 +17,18 @@ use std::process::ExitCode;
 use bumper::bump::{DependencyUpdate, TypedChange, apply_dependency_update, apply_typed_change};
 use bumper::package::{Package, is_package_marker};
 use git2::Repository;
+use inquire::{InquireError, MultiSelect};
 
 use config::load_config;
 use git_ops::{
     current_branch, ensure_clean_repo, git_commit, git_fetch, git_push, git_tag,
     list_tracked_files_under, repo_root, stage_path, staged_files,
 };
-use model::AppResult;
+use model::{AppResult, Config};
 use preview::{PreviewInput, collect_bump_preview, preview_colors_enabled, render_bump_preview};
 use release_plan::{
-    PlanInput, Release, build_release_plan, commit_message, package_files, package_label,
-    release_message, resolve_known_package_hierarchy, resolve_known_package_owner,
+    PlanInput, Release, ReleasePlan, build_release_plan, commit_message, package_files,
+    package_label, release_message, resolve_known_package_hierarchy, resolve_known_package_owner,
 };
 
 #[derive(Debug)]
@@ -193,19 +195,60 @@ fn run() -> AppResult<()> {
         return Err("no valid files or directories were selected".to_string());
     }
 
+    let mut forced_packages =
+        resolve_forced_packages(&repo_root, &config, &known_packages, &selected_packages)?;
+
     println!("determining package releases...");
-    let plan = build_release_plan(PlanInput {
-        repo: &repo,
-        repo_root: &repo_root,
-        packages,
-        known_packages: &known_packages,
-        selected_packages: &selected_packages,
-        tracked_files: &tracked_files,
-        tracked_paths: &tracked_paths,
-        package_impact_paths: &package_impact_paths,
-        ignored_directories: &ignored_directories,
-        config: &config,
-    })?;
+    let plan_releases = |forced_packages: &HashSet<PathBuf>| {
+        build_release_plan(PlanInput {
+            repo: &repo,
+            repo_root: &repo_root,
+            packages: packages.clone(),
+            known_packages: &known_packages,
+            selected_packages: &selected_packages,
+            forced_packages,
+            tracked_files: &tracked_files,
+            tracked_paths: &tracked_paths,
+            package_impact_paths: &package_impact_paths,
+            ignored_directories: &ignored_directories,
+            config: &config,
+        })
+    };
+    if config.interactive {
+        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+            return Err("--interactive requires a terminal".to_string());
+        }
+        let unforced = plan_releases(&HashSet::new())?;
+        let (choices, defaults) = package_choices(&packages, &unforced, &forced_packages);
+        let message = format!(
+            "Select packages to force a {} bump:",
+            config.force_bump_type.as_str()
+        );
+        match MultiSelect::new(&message, choices)
+            .with_default(&defaults)
+            .with_formatter(&|chosen| {
+                if chosen.is_empty() {
+                    return "none".to_string();
+                }
+                chosen
+                    .iter()
+                    .map(|choice| package_label(&choice.value.path))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .prompt()
+        {
+            Ok(chosen) => {
+                forced_packages = chosen.into_iter().map(|choice| choice.path).collect();
+            }
+            Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                println!("aborted");
+                return Ok(());
+            }
+            Err(e) => return Err(format!("failed to select packages: {e}")),
+        }
+    }
+    let plan = plan_releases(&forced_packages)?;
     if plan.releases.is_empty() {
         print_skipped_packages(&plan.skipped_packages);
         println!("no new impactful commits for the selected packages");
@@ -305,6 +348,86 @@ fn run() -> AppResult<()> {
     }
 
     Ok(())
+}
+
+/// Resolves `--force` and `--force-package` into the set of package paths to force.
+fn resolve_forced_packages(
+    repo_root: &Path,
+    config: &Config,
+    known_packages: &BTreeMap<PathBuf, Package>,
+    selected_packages: &HashSet<PathBuf>,
+) -> AppResult<HashSet<PathBuf>> {
+    let mut forced = if config.force {
+        selected_packages.clone()
+    } else {
+        HashSet::new()
+    };
+    for path in &config.force_packages {
+        let absolute = if path.is_absolute() {
+            path.clone()
+        } else {
+            repo_root.join(path)
+        };
+        let absolute = fs::canonicalize(&absolute)
+            .map_err(|e| format!("failed to resolve forced package '{}': {e}", path.display()))?;
+        let relative = absolute
+            .strip_prefix(repo_root)
+            .ok()
+            .filter(|relative| known_packages.contains_key(*relative))
+            .ok_or_else(|| {
+                format!(
+                    "forced package '{}' is not a discovered package",
+                    path.display()
+                )
+            })?;
+        forced.insert(relative.to_path_buf());
+    }
+    Ok(forced)
+}
+
+#[derive(Debug)]
+struct PackageChoice {
+    path: PathBuf,
+    label: String,
+}
+
+impl fmt::Display for PackageChoice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+/// Lists every planned package with its unforced release, preselecting already forced packages.
+fn package_choices(
+    packages: &BTreeMap<PathBuf, Package>,
+    unforced: &ReleasePlan,
+    forced_packages: &HashSet<PathBuf>,
+) -> (Vec<PackageChoice>, Vec<usize>) {
+    let choices = packages
+        .keys()
+        .map(|path| {
+            let status = match unforced.releases.get(path) {
+                Some(release) => format!(
+                    "{} -> {}, {}",
+                    release.old_version,
+                    release.new_version,
+                    release.impact.as_str()
+                ),
+                None => "no changes".to_string(),
+            };
+            PackageChoice {
+                path: path.clone(),
+                label: format!("{} ({status})", package_label(path)),
+            }
+        })
+        .collect::<Vec<_>>();
+    let defaults = choices
+        .iter()
+        .enumerate()
+        .filter(|(_, choice)| forced_packages.contains(&choice.path))
+        .map(|(index, _)| index)
+        .collect();
+    (choices, defaults)
 }
 
 fn print_skipped_packages(skipped_packages: &BTreeSet<PathBuf>) {
@@ -624,6 +747,122 @@ mod tests {
             tag: tag.to_string(),
             reasons: crate::release_plan::ReleaseReasons::default(),
         }
+    }
+
+    fn config_forcing(force: bool, force_packages: &[&str]) -> Config {
+        Config {
+            paths: Vec::new(),
+            ignored_directories: Vec::new(),
+            major_types: HashSet::new(),
+            minor_types: HashSet::new(),
+            patch_types: HashSet::new(),
+            skip_scopes: HashSet::new(),
+            commit: false,
+            tag: false,
+            push: false,
+            force,
+            force_packages: force_packages.iter().map(PathBuf::from).collect(),
+            force_bump_type: crate::model::Impact::Patch,
+            allow_dirty: false,
+            interactive: false,
+        }
+    }
+
+    fn known_packages(repo_root: &Path, paths: &[&str]) -> BTreeMap<PathBuf, Package> {
+        paths
+            .iter()
+            .map(|path| {
+                let root = repo_root.join(path);
+                fs::create_dir_all(&root).expect("create package directory");
+                (
+                    PathBuf::from(path),
+                    Package {
+                        root,
+                        path: PathBuf::from(path),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn forced_packages_resolve_to_known_package_paths() {
+        let repo_root = fs::canonicalize(temp_directory("forced-packages")).expect("canonicalize");
+        let known = known_packages(&repo_root, &["", "packages/app", "packages/lib"]);
+        let selected = known.keys().cloned().collect::<HashSet<_>>();
+
+        let forced = resolve_forced_packages(
+            &repo_root,
+            &config_forcing(false, &[".", "packages/app/"]),
+            &known,
+            &selected,
+        )
+        .expect("resolve forced packages");
+        assert_eq!(
+            forced,
+            HashSet::from([PathBuf::new(), PathBuf::from("packages/app")])
+        );
+
+        let all =
+            resolve_forced_packages(&repo_root, &config_forcing(true, &[]), &known, &selected)
+                .expect("resolve forced packages");
+        assert_eq!(all, selected);
+
+        let error = resolve_forced_packages(
+            &repo_root,
+            &config_forcing(false, &["packages"]),
+            &known,
+            &selected,
+        )
+        .expect_err("reject grouping directory");
+        assert_eq!(
+            error,
+            "forced package 'packages' is not a discovered package"
+        );
+
+        fs::remove_dir_all(&repo_root).expect("remove temp directory");
+    }
+
+    #[test]
+    fn package_choices_describe_unforced_releases_and_preselect_forced_packages() {
+        let packages = ["", "packages/app", "packages/lib"]
+            .into_iter()
+            .map(|path| {
+                (
+                    PathBuf::from(path),
+                    Package {
+                        root: PathBuf::from(path),
+                        path: PathBuf::from(path),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut app = release("packages/app", "packages/app/v2.0.0", "packages/app/v2.1.0");
+        app.old_version = "2.0.0".to_string();
+        app.new_version = "2.1.0".to_string();
+        app.impact = crate::model::Impact::Minor;
+        let unforced = ReleasePlan {
+            releases: BTreeMap::from([(PathBuf::from("packages/app"), app)]),
+            skipped_packages: BTreeSet::new(),
+            named_bumps: BTreeMap::new(),
+            dependency_files: BTreeMap::new(),
+        };
+
+        let (choices, defaults) = package_choices(
+            &packages,
+            &unforced,
+            &HashSet::from([PathBuf::from("packages/lib")]),
+        );
+
+        assert_eq!(
+            choices.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            vec![
+                "root (no changes)",
+                "packages/app (2.0.0 -> 2.1.0, minor)",
+                "packages/lib (no changes)",
+            ]
+        );
+        assert_eq!(defaults, vec![2]);
     }
 
     #[test]

@@ -65,6 +65,10 @@ struct Cli {
     #[arg(long)]
     force: bool,
 
+    /// Force a specific package directory to bump without relevant commits [env: FORCE_PACKAGES]
+    #[arg(long, value_delimiter = ',', value_name = "PATH")]
+    force_package: Vec<PathBuf>,
+
     /// Version bump type used by --force [env: FORCE_BUMP_TYPE] [default: patch]
     #[arg(long, value_name = "TYPE")]
     force_bump_type: Option<Impact>,
@@ -72,6 +76,10 @@ struct Cli {
     /// Allow bumping in a dirty working tree [env: ALLOW_DIRTY]
     #[arg(long)]
     allow_dirty: bool,
+
+    /// Choose which packages to force from an interactive list
+    #[arg(short, long)]
+    interactive: bool,
 }
 
 pub fn load_config() -> AppResult<Config> {
@@ -81,6 +89,8 @@ pub fn load_config() -> AppResult<Config> {
     paths.extend(cli.paths);
     let mut ignored_directories = parse_list_env("IGNORE_DIRECTORIES");
     ignored_directories.extend(cli.ignore_directories);
+    let mut force_packages = parse_list_env("FORCE_PACKAGES");
+    force_packages.extend(cli.force_package);
 
     let major_types = resolve_set(cli.major_types, "MAJOR_TYPES", &["BREAKING CHANGE"]);
     let minor_types = resolve_set(cli.minor_types, "MINOR_TYPES", &["feat"]);
@@ -102,8 +112,10 @@ pub fn load_config() -> AppResult<Config> {
         tag,
         push,
         force: cli.force || parse_bool_env("FORCE", false),
+        force_packages,
         force_bump_type: resolve_force_bump_type(cli.force_bump_type)?,
         allow_dirty: cli.allow_dirty || parse_bool_env("ALLOW_DIRTY", false),
+        interactive: cli.interactive,
     })
 }
 
@@ -261,6 +273,36 @@ mod tests {
             cli.ignore_directories,
             vec![PathBuf::from("generated"), PathBuf::from("packages/legacy")]
         );
+    }
+
+    #[test]
+    fn parses_repeated_and_delimited_force_package_options() {
+        let cli = Cli::try_parse_from([
+            "bumper",
+            "--force-package",
+            "packages/app,packages/lib",
+            "--force-package",
+            ".",
+            "README.md",
+        ])
+        .expect("parse CLI");
+
+        assert_eq!(
+            cli.force_package,
+            vec![
+                PathBuf::from("packages/app"),
+                PathBuf::from("packages/lib"),
+                PathBuf::from(".")
+            ]
+        );
+        assert_eq!(cli.paths, vec![PathBuf::from("README.md")]);
+    }
+
+    #[test]
+    fn parses_interactive_short_option() {
+        let cli = Cli::try_parse_from(["bumper", "-i"]).expect("parse CLI");
+
+        assert!(cli.interactive);
     }
 
     #[test]

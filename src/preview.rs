@@ -328,7 +328,7 @@ fn release_reason_labels(release: &Release) -> Vec<String> {
         labels.push(format!("direct {}", impact.as_str()));
     }
     if let Some(impact) = release.reasons.forced {
-        labels.push(format!("forced {} (--force)", impact.as_str()));
+        labels.push(format!("forced {}", impact.as_str()));
     }
     labels.extend(
         release
@@ -561,7 +561,7 @@ mod tests {
 
         assert!(plain.contains("service (2.3.4 -> 2.3.5, patch)"));
         assert!(plain.contains("direct patch"));
-        assert!(plain.contains("forced minor (--force)"));
+        assert!(plain.contains("forced minor"));
         assert_eq!(
             colored
                 .replace("\x1b[33m", "")
