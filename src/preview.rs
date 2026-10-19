@@ -486,6 +486,7 @@ mod tests {
                 },
             )]),
             dependency_files: BTreeMap::new(),
+            current_versions: BTreeMap::new(),
         };
         let preview = BumpPreview {
             files: BTreeMap::from([
@@ -566,6 +567,7 @@ mod tests {
             skipped_packages: BTreeSet::new(),
             named_bumps: BTreeMap::new(),
             dependency_files: BTreeMap::new(),
+            current_versions: BTreeMap::new(),
         };
 
         let plain = render_bump_preview(&plan, &BumpPreview::default(), false);

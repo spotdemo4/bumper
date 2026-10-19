@@ -74,8 +74,12 @@ struct Cli {
     force_bump_type: Option<Impact>,
 
     /// Give every package the same version, bumping all of them when any releases [env: FIXED_VERSION]
-    #[arg(long)]
+    #[arg(long, overrides_with = "no_fixed_version")]
     fixed_version: bool,
+
+    /// Version packages independently without asking about a fixed version
+    #[arg(long, overrides_with = "fixed_version")]
+    no_fixed_version: bool,
 
     /// Allow bumping in a dirty working tree [env: ALLOW_DIRTY]
     #[arg(long)]
@@ -118,7 +122,11 @@ pub fn load_config() -> AppResult<Config> {
         force: cli.force || parse_bool_env("FORCE", false),
         force_packages,
         force_bump_type: resolve_force_bump_type(cli.force_bump_type)?,
-        fixed_version: cli.fixed_version || parse_bool_env("FIXED_VERSION", false),
+        fixed_version: resolve_optional_bool(
+            cli.fixed_version,
+            cli.no_fixed_version,
+            "FIXED_VERSION",
+        ),
         allow_dirty: cli.allow_dirty || parse_bool_env("ALLOW_DIRTY", false),
         interactive: cli.interactive,
     })
@@ -151,23 +159,32 @@ fn resolve_set(cli_values: Vec<String>, env_name: &str, defaults: &[&str]) -> Ha
 
 /// Resolves a boolean config field: explicit CLI flag beats env var, which beats the default.
 fn resolve_bool(flag: bool, no_flag: bool, env_name: &str, default: bool) -> bool {
+    resolve_optional_bool(flag, no_flag, env_name).unwrap_or(default)
+}
+
+/// Resolves a boolean config field like `resolve_bool`, returning `None` when nothing was set.
+fn resolve_optional_bool(flag: bool, no_flag: bool, env_name: &str) -> Option<bool> {
     if no_flag {
-        false
+        Some(false)
     } else if flag {
-        true
+        Some(true)
     } else {
-        parse_bool_env(env_name, default)
+        parse_optional_bool_env(env_name)
     }
 }
 
 fn parse_bool_env(name: &str, default: bool) -> bool {
+    parse_optional_bool_env(name).unwrap_or(default)
+}
+
+fn parse_optional_bool_env(name: &str) -> Option<bool> {
     match env::var(name) {
-        Ok(value) if value.trim().is_empty() => default,
-        Ok(value) => matches!(
+        Ok(value) if value.trim().is_empty() => None,
+        Ok(value) => Some(matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
-        ),
-        Err(_) => default,
+        )),
+        Err(_) => None,
     }
 }
 
@@ -315,6 +332,27 @@ mod tests {
         let cli = Cli::try_parse_from(["bumper", "--fixed-version"]).expect("parse CLI");
 
         assert!(cli.fixed_version);
+        assert_eq!(
+            resolve_optional_bool(true, false, "BUMPER_TEST_UNSET"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn last_fixed_version_option_wins() {
+        let cli = Cli::try_parse_from(["bumper", "--fixed-version", "--no-fixed-version"])
+            .expect("parse CLI");
+
+        assert!(!cli.fixed_version);
+        assert!(cli.no_fixed_version);
+        assert_eq!(
+            resolve_optional_bool(cli.fixed_version, cli.no_fixed_version, "BUMPER_TEST_UNSET"),
+            Some(false)
+        );
+        assert_eq!(
+            resolve_optional_bool(false, false, "BUMPER_TEST_UNSET"),
+            None
+        );
     }
 
     #[test]

@@ -198,8 +198,12 @@ fn run() -> AppResult<()> {
     let mut forced_packages =
         resolve_forced_packages(&repo_root, &config, &known_packages, &selected_packages)?;
 
+    if config.interactive && (!io::stdin().is_terminal() || !io::stderr().is_terminal()) {
+        return Err("--interactive requires a terminal".to_string());
+    }
+
     println!("determining package releases...");
-    let plan_releases = |forced_packages: &HashSet<PathBuf>| {
+    let plan_releases = |forced_packages: &HashSet<PathBuf>, fixed_version: bool| {
         build_release_plan(PlanInput {
             repo: &repo,
             repo_root: &repo_root,
@@ -212,13 +216,30 @@ fn run() -> AppResult<()> {
             package_impact_paths: &package_impact_paths,
             ignored_directories: &ignored_directories,
             config: &config,
+            fixed_version,
         })
     };
-    if config.interactive {
-        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
-            return Err("--interactive requires a terminal".to_string());
+    let mut fixed_version = config.fixed_version.unwrap_or(false);
+    let mut plan = plan_releases(&forced_packages, fixed_version)?;
+    if config.fixed_version.is_none()
+        && io::stdin().is_terminal()
+        && let Some(version) = plan.shared_current_version()
+    {
+        let fixed_plan = plan_releases(&forced_packages, true)?;
+        // The forced selection can still change with --interactive, so the answer may matter later.
+        if config.interactive || release_versions(&plan) != release_versions(&fixed_plan) {
+            let question = format!(
+                "All {} packages are at version {version}. Release them with a fixed version (--fixed-version)?",
+                plan.current_versions.len()
+            );
+            if confirm(&question, &mut io::stdin().lock(), &mut io::stderr())? {
+                fixed_version = true;
+                plan = fixed_plan;
+            }
         }
-        let unforced = plan_releases(&HashSet::new())?;
+    }
+    if config.interactive {
+        let unforced = plan_releases(&HashSet::new(), fixed_version)?;
         let (choices, defaults) = package_choices(&packages, &unforced, &forced_packages);
         let message = format!(
             "Select packages to force a {} bump:",
@@ -247,8 +268,8 @@ fn run() -> AppResult<()> {
             }
             Err(e) => return Err(format!("failed to select packages: {e}")),
         }
+        plan = plan_releases(&forced_packages, fixed_version)?;
     }
-    let plan = plan_releases(&forced_packages)?;
     if plan.releases.is_empty() {
         print_skipped_packages(&plan.skipped_packages);
         println!("no new impactful commits for the selected packages");
@@ -436,6 +457,14 @@ fn print_skipped_packages(skipped_packages: &BTreeSet<PathBuf>) {
     }
 }
 
+/// Maps each releasing package to its new version, for comparing two plans.
+fn release_versions(plan: &ReleasePlan) -> BTreeMap<&Path, &str> {
+    plan.releases
+        .iter()
+        .map(|(path, release)| (path.as_path(), release.new_version.as_str()))
+        .collect()
+}
+
 fn confirm_bump<R: BufRead, W: Write>(
     interactive: bool,
     input: &mut R,
@@ -444,9 +473,13 @@ fn confirm_bump<R: BufRead, W: Write>(
     if !interactive {
         return Ok(true);
     }
+    confirm("Would you like to proceed?", input, output)
+}
 
+/// Asks a yes/no question, treating an empty answer or end of input as no.
+fn confirm<R: BufRead, W: Write>(question: &str, input: &mut R, output: &mut W) -> AppResult<bool> {
     loop {
-        write!(output, "Would you like to proceed? [y/N] ")
+        write!(output, "{question} [y/N] ")
             .map_err(|e| format!("failed to write confirmation prompt: {e}"))?;
         output
             .flush()
@@ -764,7 +797,7 @@ mod tests {
             force_packages: force_packages.iter().map(PathBuf::from).collect(),
             force_bump_type: crate::model::Impact::Patch,
             allow_dirty: false,
-            fixed_version: false,
+            fixed_version: None,
             interactive: false,
         }
     }
@@ -847,6 +880,7 @@ mod tests {
             skipped_packages: BTreeSet::new(),
             named_bumps: BTreeMap::new(),
             dependency_files: BTreeMap::new(),
+            current_versions: BTreeMap::new(),
         };
 
         let (choices, defaults) = package_choices(
@@ -1098,6 +1132,18 @@ mod tests {
         let mut output = Vec::new();
 
         assert!(!confirm_bump(true, &mut input, &mut output).expect("confirm bump"));
+    }
+
+    #[test]
+    fn confirmation_asks_the_given_question() {
+        let mut input = b"yes\n".as_slice();
+        let mut output = Vec::new();
+
+        assert!(confirm("Use a fixed version?", &mut input, &mut output).expect("confirm"));
+        assert_eq!(
+            String::from_utf8(output).expect("UTF-8 output"),
+            "Use a fixed version? [y/N] "
+        );
     }
 
     #[test]

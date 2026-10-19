@@ -76,11 +76,23 @@ pub struct ReleasePlan {
     pub skipped_packages: BTreeSet<PathBuf>,
     pub named_bumps: BTreeMap<String, NamedPackageBump>,
     pub dependency_files: BTreeMap<PathBuf, DependencyFilePlan>,
+    pub current_versions: BTreeMap<PathBuf, String>,
 }
 
 impl ReleasePlan {
     pub fn version_bumps(&self) -> BTreeMap<String, VersionBump> {
         version_bumps(&self.named_bumps)
+    }
+
+    /// The version every package currently has, when there are several packages and they all agree.
+    pub fn shared_current_version(&self) -> Option<&str> {
+        let first = self.current_versions.values().next()?;
+        (self.current_versions.len() > 1
+            && self
+                .current_versions
+                .values()
+                .all(|version| version == first))
+        .then_some(first.as_str())
     }
 }
 
@@ -111,6 +123,7 @@ pub struct PlanInput<'a> {
     pub package_impact_paths: &'a BTreeMap<PathBuf, Vec<PathBuf>>,
     pub ignored_directories: &'a [PathBuf],
     pub config: &'a Config,
+    pub fixed_version: bool,
 }
 
 pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
@@ -174,7 +187,7 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         );
     }
 
-    if input.config.fixed_version {
+    if input.fixed_version {
         apply_fixed_version(&mut states)?;
     } else {
         propagate_descendants(&mut states, &deepest_first, &parents);
@@ -246,7 +259,7 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         }
     }
 
-    if input.config.fixed_version {
+    if input.fixed_version {
         // Every package already releases at the shared version, so propagation adds no information.
         for state in states.values_mut() {
             state.reasons.descendants.clear();
@@ -263,12 +276,17 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         .map(|(path, _)| path.clone())
         .collect();
     let named_bumps = named_package_bumps(&states)?;
+    let current_versions = states
+        .iter()
+        .map(|(path, state)| (path.clone(), state.base.version.clone()))
+        .collect();
 
     Ok(ReleasePlan {
         releases,
         skipped_packages,
         named_bumps,
         dependency_files,
+        current_versions,
     })
 }
 
@@ -663,6 +681,38 @@ mod tests {
             shared_version: None,
             reasons,
         }
+    }
+
+    fn plan_with_versions(versions: &[(&str, &str)]) -> ReleasePlan {
+        ReleasePlan {
+            releases: BTreeMap::new(),
+            skipped_packages: BTreeSet::new(),
+            named_bumps: BTreeMap::new(),
+            dependency_files: BTreeMap::new(),
+            current_versions: versions
+                .iter()
+                .map(|(path, version)| (PathBuf::from(path), version.to_string()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn shared_current_version_requires_several_matching_packages() {
+        assert_eq!(
+            plan_with_versions(&[("", "1.2.3"), ("packages/app", "1.2.3")])
+                .shared_current_version(),
+            Some("1.2.3")
+        );
+        assert_eq!(
+            plan_with_versions(&[("", "1.2.3"), ("packages/app", "1.2.4")])
+                .shared_current_version(),
+            None
+        );
+        assert_eq!(
+            plan_with_versions(&[("", "1.2.3")]).shared_current_version(),
+            None
+        );
+        assert_eq!(plan_with_versions(&[]).shared_current_version(), None);
     }
 
     #[test]

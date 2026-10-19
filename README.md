@@ -83,6 +83,8 @@ When a package stream has no tag yet, bumper uses the version in its package man
 
 Pass `--fixed-version` or set `FIXED_VERSION=true` to give every package in the repository the same version. When any package has a direct or forced impact, every discovered package releases at the highest of those impacts, applied to the highest current version among all packages so no package moves backwards. Each package still gets its own tag (`v3.1.0`, `packages/app/v3.1.0`, ...), which keeps Go submodules resolvable and lets you turn the mode off later.
 
+When neither the flag nor `FIXED_VERSION` is set and every package (two or more) currently has the same version, an interactive terminal run asks whether to release them with a fixed version, but only when the answer would change the release plan (or when `-i` lets you choose packages afterwards). Pass `--fixed-version` or `--no-fixed-version`, or set `FIXED_VERSION` to `true` or `false`, to skip the question. Non-interactive runs never ask and version packages independently.
+
 Packages keep their own release-history boundaries, so commits are never counted twice when switching to fixed versions. The first fixed release aligns packages whose versions differ; the release plan shows each package's old version.
 
 ```text

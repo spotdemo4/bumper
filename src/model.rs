@@ -18,7 +18,8 @@ pub struct Config {
     pub force: bool,
     pub force_packages: Vec<PathBuf>,
     pub force_bump_type: Impact,
-    pub fixed_version: bool,
+    /// `None` when neither the flags nor the environment chose, so a terminal run may ask.
+    pub fixed_version: Option<bool>,
     pub allow_dirty: bool,
     pub interactive: bool,
 }
