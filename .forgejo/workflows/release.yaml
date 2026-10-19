@@ -29,12 +29,11 @@ jobs:
       - name: Release to Forgejo
         run: flake-release
         env:
-          GITHUB_TOKEN: ${{ secrets.DOCTOR_TOKEN }}
-          REGISTRY: trev.zip
-          REGISTRY_PASSWORD: ${{ secrets.PACKAGE_TOKEN }}
-          PUBLISH_PACKAGES: cargo
+          GIT_TOKEN: ${{ secrets.DOCTOR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           PACKAGE_REGISTRY_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
-          DELETE_OLD_RELEASE_ARTIFACTS: true
+          CONTAINER_REGISTRY_PASSWORD: ${{ secrets.PACKAGE_TOKEN }}
+          DELETE_OLD_RELEASE_ARTIFACTS: 2
           PACKAGES: |
             packages.x86_64-linux.default.x86_64-unknown-linux-musl
             packages.x86_64-linux.default.aarch64-unknown-linux-musl
