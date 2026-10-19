@@ -764,6 +764,7 @@ mod tests {
             force_packages: force_packages.iter().map(PathBuf::from).collect(),
             force_bump_type: crate::model::Impact::Patch,
             allow_dirty: false,
+            fixed_version: false,
             interactive: false,
         }
     }

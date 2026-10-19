@@ -704,6 +704,113 @@ fn readme_uses_nearest_package_stream_and_propagates_to_root() {
     );
 }
 
+fn fixed_version_fixture(name: &str) -> (TempDir, TempDir, Repository) {
+    let local = TempDir::new(&format!("{name}-local"));
+    let remote = TempDir::new(&format!("{name}-remote"));
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("packages/library")).expect("create library");
+    fs::create_dir_all(local.path().join("packages/app")).expect("create app");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("packages/library/package.json"),
+        "{\n  \"name\": \"library\",\n  \"version\": \"3.0.0\"\n}\n",
+    )
+    .expect("write library manifest");
+    fs::write(
+        local.path().join("packages/app/package.json"),
+        "{\n  \"name\": \"app\",\n  \"version\": \"2.0.0\",\n  \"dependencies\": {\"library\": \"3.0.0\"}\n}\n",
+    )
+    .expect("write app manifest");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/library/v3.0.0", baseline);
+    tag(&repo, "packages/app/v2.0.0", baseline);
+    (local, remote, repo)
+}
+
+#[test]
+fn fixed_version_releases_every_package_at_one_version() {
+    let (local, _remote, repo) = fixed_version_fixture("fixed-version");
+    fs::write(
+        local.path().join("packages/library/index.js"),
+        "export {};\n",
+    )
+    .expect("write library source");
+    commit_all(&repo, "feat: add library entrypoint");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .env_remove("FIXED_VERSION")
+        .args(["--no-push", "--fixed-version"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(". (1.0.0 -> 3.1.0, minor)"), "{stdout}");
+    assert!(stdout.contains("app (2.0.0 -> 3.1.0, minor)"), "{stdout}");
+    assert!(
+        stdout.contains("library (3.0.0 -> 3.1.0, minor)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("direct minor"), "{stdout}");
+    assert!(
+        stdout.contains("fixed version (minor from packages/library)"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("propagated from"), "{stdout}");
+    for tag in ["v3.1.0", "packages/app/v3.1.0", "packages/library/v3.1.0"] {
+        repo.revparse_single(&format!("refs/tags/{tag}"))
+            .unwrap_or_else(|e| panic!("find tag {tag}: {e}"));
+    }
+    assert!(
+        fs::read_to_string(local.path().join("package.json"))
+            .expect("read root manifest")
+            .contains("\"version\": \"3.1.0\"")
+    );
+    let app = fs::read_to_string(local.path().join("packages/app/package.json"))
+        .expect("read app manifest");
+    assert!(app.contains("\"version\": \"3.1.0\""), "{app}");
+    assert!(app.contains("\"library\": \"3.1.0\""), "{app}");
+}
+
+#[test]
+fn fixed_version_without_impactful_commits_releases_nothing() {
+    let (local, _remote, repo) = fixed_version_fixture("fixed-version-unchanged");
+    fs::write(
+        local.path().join("packages/library/index.js"),
+        "export {};\n",
+    )
+    .expect("write library source");
+    commit_all(&repo, "chore: add library entrypoint");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .env("FIXED_VERSION", "true")
+        .args(["--no-commit", "--no-tag", "--no-push"])
+        .output()
+        .expect("run bumper");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("no new impactful commits for the selected packages"),
+        "{stdout}"
+    );
+}
+
 #[test]
 fn dependency_updates_release_an_unselected_sibling_package() {
     let local = TempDir::new("dependency-local");

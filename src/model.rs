@@ -18,6 +18,7 @@ pub struct Config {
     pub force: bool,
     pub force_packages: Vec<PathBuf>,
     pub force_bump_type: Impact,
+    pub fixed_version: bool,
     pub allow_dirty: bool,
     pub interactive: bool,
 }

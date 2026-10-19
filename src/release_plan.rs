@@ -9,7 +9,7 @@ use git2::{Oid, Repository};
 
 use crate::git_ops::{ImpactConfig, get_impact_for_package, latest_tag_or_none};
 use crate::model::{AppResult, Config, Impact};
-use crate::versioning::next_version;
+use crate::versioning::{next_version, parse_version};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReleaseReasons {
@@ -17,6 +17,7 @@ pub struct ReleaseReasons {
     pub forced: Option<Impact>,
     pub descendants: BTreeSet<PathBuf>,
     pub dependencies: BTreeMap<PathBuf, DependencyCause>,
+    pub fixed: Option<FixedCause>,
 }
 
 impl ReleaseReasons {
@@ -24,6 +25,7 @@ impl ReleaseReasons {
         [
             self.direct,
             self.forced,
+            self.fixed.as_ref().map(|cause| cause.impact),
             (!self.descendants.is_empty() || !self.dependencies.is_empty())
                 .then_some(Impact::Patch),
         ]
@@ -31,6 +33,13 @@ impl ReleaseReasons {
         .flatten()
         .max()
     }
+}
+
+/// A release caused by `--fixed-version`: every package takes the highest impact in the repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedCause {
+    pub impact: Impact,
+    pub sources: BTreeSet<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -85,6 +94,8 @@ struct PackageState {
     package: Package,
     names: BTreeSet<String>,
     base: ReleaseBase,
+    /// The version bumped to produce the release, when it differs from `base.version`.
+    shared_version: Option<String>,
     reasons: ReleaseReasons,
 }
 
@@ -153,6 +164,7 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
                 package,
                 names,
                 base,
+                shared_version: None,
                 reasons: ReleaseReasons {
                     direct,
                     forced,
@@ -162,7 +174,11 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         );
     }
 
-    propagate_descendants(&mut states, &deepest_first, &parents);
+    if input.config.fixed_version {
+        apply_fixed_version(&mut states)?;
+    } else {
+        propagate_descendants(&mut states, &deepest_first, &parents);
+    }
     let mut dependency_files = BTreeMap::new();
 
     loop {
@@ -230,6 +246,14 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         }
     }
 
+    if input.config.fixed_version {
+        // Every package already releases at the shared version, so propagation adds no information.
+        for state in states.values_mut() {
+            state.reasons.descendants.clear();
+            state.reasons.dependencies.clear();
+        }
+    }
+
     let releases = materialize_releases(&states)?;
     let skipped_packages = states
         .iter()
@@ -253,6 +277,50 @@ fn active_package_count(states: &BTreeMap<PathBuf, PackageState>) -> usize {
         .values()
         .filter(|state| state.reasons.impact().is_some())
         .count()
+}
+
+/// Releases every package at one version when any package has a direct or forced impact.
+///
+/// The shared version bumps the highest current version so no package ever moves backwards.
+fn apply_fixed_version(states: &mut BTreeMap<PathBuf, PackageState>) -> AppResult<()> {
+    let own_impact = |state: &PackageState| state.reasons.direct.max(state.reasons.forced);
+    let Some(impact) = states.values().filter_map(own_impact).max() else {
+        return Ok(());
+    };
+    let sources = states
+        .iter()
+        .filter(|(_, state)| own_impact(state) == Some(impact))
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+    let shared_version = states
+        .values()
+        .map(|state| parse_version(&state.base.version).map(|version| (version, state)))
+        .collect::<AppResult<Vec<_>>>()?
+        .into_iter()
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, state)| state.base.version.clone())
+        .expect("a package with an impact has a version");
+
+    for state in states.values_mut() {
+        state.shared_version = Some(shared_version.clone());
+        if own_impact(state) != Some(impact) {
+            state.reasons.fixed = Some(FixedCause {
+                impact,
+                sources: sources.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn planned_version(state: &PackageState, impact: Impact) -> AppResult<String> {
+    next_version(
+        state
+            .shared_version
+            .as_deref()
+            .unwrap_or(&state.base.version),
+        impact,
+    )
 }
 
 fn propagate_descendants(
@@ -283,7 +351,7 @@ fn materialize_releases(
         .iter()
         .filter_map(|(path, state)| {
             state.reasons.impact().map(|impact| {
-                let new_version = next_version(&state.base.version, impact)?;
+                let new_version = planned_version(state, impact)?;
                 let tag = tag_name(path, &new_version)?;
                 Ok((
                     path.clone(),
@@ -310,7 +378,7 @@ fn named_package_bumps(
         let Some(impact) = state.reasons.impact() else {
             continue;
         };
-        let new_version = next_version(&state.base.version, impact)?;
+        let new_version = planned_version(state, impact)?;
         for name in &state.names {
             bumped
                 .entry(name.clone())
@@ -592,6 +660,7 @@ mod tests {
                 version: "1.0.0".to_string(),
                 commit: None,
             },
+            shared_version: None,
             reasons,
         }
     }
@@ -609,6 +678,7 @@ mod tests {
                     manifests: BTreeSet::from([PathBuf::from("packages/app/package.json")]),
                 },
             )]),
+            fixed: None,
         };
 
         assert_eq!(reasons.impact(), Some(Impact::Minor));

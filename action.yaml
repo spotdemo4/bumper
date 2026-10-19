@@ -46,6 +46,9 @@ inputs:
     description: minimum version bump type used for forced bumps
     required: false
     default: patch
+  fixed_version:
+    description: give every package the same version, bumping all of them when any releases
+    required: false
   allow_dirty:
     description: allow a dirty working directory
     required: false
@@ -73,6 +76,7 @@ runs:
     FORCE: ${{ inputs.force }}
     FORCE_PACKAGES: ${{ inputs.force_packages }}
     FORCE_BUMP_TYPE: ${{ inputs.force_bump_type }}
+    FIXED_VERSION: ${{ inputs.fixed_version }}
     ALLOW_DIRTY: ${{ inputs.allow_dirty }}
     GITHUB_TOKEN: ${{ inputs.github_token }}
     DEBUG: ${{ inputs.debug }}

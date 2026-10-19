@@ -330,6 +330,18 @@ fn release_reason_labels(release: &Release) -> Vec<String> {
     if let Some(impact) = release.reasons.forced {
         labels.push(format!("forced {}", impact.as_str()));
     }
+    if let Some(cause) = &release.reasons.fixed {
+        let sources = cause
+            .sources
+            .iter()
+            .map(|path| package_label(path))
+            .collect::<Vec<_>>()
+            .join(", ");
+        labels.push(format!(
+            "fixed version ({} from {sources})",
+            cause.impact.as_str()
+        ));
+    }
     labels.extend(
         release
             .reasons

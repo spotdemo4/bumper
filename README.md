@@ -79,6 +79,26 @@ For example, `bumper packages/consumer/README.md` adds the README to the normal 
 
 When a package stream has no tag yet, bumper uses the version in its package manifest. Versionless package formats such as Go modules inherit the version of their nearest package ancestor. The nearest ancestor tag is used as the release-history boundary; if no ancestor has a tag, bumper considers the package's full git history. Existing root repositories continue to use their current `vX.Y.Z` tags.
 
+### Fixed versions
+
+Pass `--fixed-version` or set `FIXED_VERSION=true` to give every package in the repository the same version. When any package has a direct or forced impact, every discovered package releases at the highest of those impacts, applied to the highest current version among all packages so no package moves backwards. Each package still gets its own tag (`v3.1.0`, `packages/app/v3.1.0`, ...), which keeps Go submodules resolvable and lets you turn the mode off later.
+
+Packages keep their own release-history boundaries, so commits are never counted twice when switching to fixed versions. The first fixed release aligns packages whose versions differ; the release plan shows each package's old version.
+
+```text
+Release plan:
+. (1.0.0 -> 3.1.0, minor)
+|-- fixed version (minor from packages/library)
+|-- package.json (1.0.0 -> 3.1.0)
+`-- packages
+    |-- app (2.0.0 -> 3.1.0, minor)
+    |   |-- fixed version (minor from packages/library)
+    |   `-- package.json (2.0.0 -> 3.1.0; library 3.0.0 -> 3.1.0)
+    `-- library (3.0.0 -> 3.1.0, minor)
+        |-- direct minor
+        `-- package.json (3.0.0 -> 3.1.0)
+```
+
 ## Why
 
 Most of the popular actions are antagonistic about making _any_ changes to the source code during version bumps. Unfortunately for me, two of the technologies I use quite heavily (nix & npm) use version numbers in source, and I would rather deal with the occasional rebase than have version numbers out of sync. Of those that support bumping versions in source, I didn't find any I liked that also supported bumping for arbitrary files. I've found it quite common to have a version that needs to be updated in a readme, or a hardcoded version in the source code.
@@ -99,6 +119,7 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
     force_packages: |-
       packages/app
     force_bump_type: patch # patch, minor or major; default patch
+    fixed_version: false # give every package the same version, default false
 
     # additional files or directories to bump versions in
     files: |-

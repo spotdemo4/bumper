@@ -73,6 +73,10 @@ struct Cli {
     #[arg(long, value_name = "TYPE")]
     force_bump_type: Option<Impact>,
 
+    /// Give every package the same version, bumping all of them when any releases [env: FIXED_VERSION]
+    #[arg(long)]
+    fixed_version: bool,
+
     /// Allow bumping in a dirty working tree [env: ALLOW_DIRTY]
     #[arg(long)]
     allow_dirty: bool,
@@ -114,6 +118,7 @@ pub fn load_config() -> AppResult<Config> {
         force: cli.force || parse_bool_env("FORCE", false),
         force_packages,
         force_bump_type: resolve_force_bump_type(cli.force_bump_type)?,
+        fixed_version: cli.fixed_version || parse_bool_env("FIXED_VERSION", false),
         allow_dirty: cli.allow_dirty || parse_bool_env("ALLOW_DIRTY", false),
         interactive: cli.interactive,
     })
@@ -303,6 +308,13 @@ mod tests {
         let cli = Cli::try_parse_from(["bumper", "-i"]).expect("parse CLI");
 
         assert!(cli.interactive);
+    }
+
+    #[test]
+    fn parses_fixed_version_option() {
+        let cli = Cli::try_parse_from(["bumper", "--fixed-version"]).expect("parse CLI");
+
+        assert!(cli.fixed_version);
     }
 
     #[test]
