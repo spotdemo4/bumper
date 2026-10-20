@@ -42,6 +42,9 @@ inputs:
   force_packages:
     description: repository-relative package directories to force a bump for
     required: false
+  bump_type:
+    description: version bump type that overrides the one implied by commits
+    required: false
   force_bump_type:
     description: minimum version bump type used for forced bumps
     required: false
@@ -75,6 +78,7 @@ runs:
     PUSH: ${{ inputs.push }}
     FORCE: ${{ inputs.force }}
     FORCE_PACKAGES: ${{ inputs.force_packages }}
+    BUMP_TYPE: ${{ inputs.bump_type }}
     FORCE_BUMP_TYPE: ${{ inputs.force_bump_type }}
     FIXED_VERSION: ${{ inputs.fixed_version }}
     ALLOW_DIRTY: ${{ inputs.allow_dirty }}

@@ -65,6 +65,8 @@ Each `impactPaths` entry is a literal path relative to the package directory, no
 
 Because every package is selected, `--force` forces a bump for every discovered package rather than only packages containing supplied paths. To force specific packages instead, pass their repository-relative directories with `--force-package packages/app` (repeatable or comma-separated; `.` is the root) or set `FORCE_PACKAGES` to a whitespace- or newline-separated list. A path that is not a discovered package is an error. Forcing a nested package still releases its ancestors and dependents with a patch, as with any other release. Forced bumps default to PATCH; use `--force-bump-type minor` (or `major`) or set `FORCE_BUMP_TYPE` to choose a different minimum impact.
 
+To release with a different bump type than the commits imply, pass `--bump-type minor` (or `patch`, `major`) or set `BUMP_TYPE`. It replaces the commit-derived impact of every package that has impactful commits, so a breaking change can ship as a minor release; packages without impactful commits still skip. Forced bumps keep their own `--force-bump-type`, ancestors and dependents still release with a patch, and the release plan shows the replaced impact (`direct minor (bump type overrides major)`).
+
 Run `bumper -i` in a terminal to pick forced packages from a checklist. Each package shows the release it would get without forcing, packages from `--force` or `--force-package` start checked, and the usual release plan and confirmation follow the selection. Press Esc to abort.
 
 Root releases use `vX.Y.Z`. Packages below the repository root use their repository-relative path as the tag prefix:
@@ -120,6 +122,7 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
     # repository-relative package directories to force a bump for
     force_packages: |-
       packages/app
+    bump_type: minor # patch, minor or major; overrides the bump type implied by commits
     force_bump_type: patch # patch, minor or major; default patch
     fixed_version: false # give every package the same version, default false
 

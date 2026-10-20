@@ -325,7 +325,14 @@ fn file_change_labels(file: &PreviewFile, plan: &ReleasePlan) -> Vec<String> {
 fn release_reason_labels(release: &Release) -> Vec<String> {
     let mut labels = Vec::new();
     if let Some(impact) = release.reasons.direct {
-        labels.push(format!("direct {}", impact.as_str()));
+        match release.reasons.overridden {
+            Some(overridden) => labels.push(format!(
+                "direct {} (bump type overrides {})",
+                impact.as_str(),
+                overridden.as_str()
+            )),
+            None => labels.push(format!("direct {}", impact.as_str())),
+        }
     }
     if let Some(impact) = release.reasons.forced {
         labels.push(format!("forced {}", impact.as_str()));

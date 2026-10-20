@@ -143,6 +143,80 @@ fn forced_bump_type_defaults_to_patch_and_accepts_cli_or_environment() {
     );
 }
 
+fn run_breaking_change(name: &str, configure: impl FnOnce(&mut Command)) -> String {
+    let (local, _remote) = force_fixture(name);
+    let repo = Repository::open(local.path()).expect("open repository");
+    fs::write(local.path().join("index.js"), "export {};\n").expect("write source");
+    commit_all(&repo, "feat!: replace the public API");
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bumper"));
+    command
+        .current_dir(local.path())
+        .env_remove("BUMP_TYPE")
+        .env_remove("FORCE_BUMP_TYPE")
+        .args(["--no-commit", "--no-tag", "--no-push"]);
+    configure(&mut command);
+    let output = command.output().expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn bump_type_overrides_the_impact_of_breaking_commits() {
+    let default = run_breaking_change("bump-type-default", |_| {});
+    assert!(default.contains(". (1.2.3 -> 2.0.0, major)"));
+    assert!(default.contains("direct major\n"));
+
+    let cli = run_breaking_change("bump-type-cli", |command| {
+        command
+            .env("BUMP_TYPE", "patch")
+            .args(["--bump-type", "minor"]);
+    });
+    assert!(cli.contains(". (1.2.3 -> 1.3.0, minor)"));
+    assert!(cli.contains("direct minor (bump type overrides major)"));
+
+    let env = run_breaking_change("bump-type-env", |command| {
+        command.env("BUMP_TYPE", "patch");
+    });
+    assert!(env.contains(". (1.2.3 -> 1.2.4, patch)"));
+
+    let forced = run_breaking_change("bump-type-forced", |command| {
+        command.args([
+            "--bump-type",
+            "minor",
+            "--force",
+            "--force-bump-type",
+            "major",
+        ]);
+    });
+    assert!(forced.contains(". (1.2.3 -> 2.0.0, major)"));
+}
+
+#[test]
+fn bump_type_does_not_release_packages_without_impactful_commits() {
+    let (local, _remote) = force_fixture("bump-type-no-impact");
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args([
+            "--no-commit",
+            "--no-tag",
+            "--no-push",
+            "--bump-type",
+            "major",
+        ])
+        .output()
+        .expect("run bumper");
+
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("Release plan:"));
+}
+
 fn nested_force_fixture(name: &str) -> (TempDir, TempDir) {
     let local = TempDir::new(&format!("{name}-local"));
     let remote = TempDir::new(&format!("{name}-remote"));

@@ -14,6 +14,8 @@ use crate::versioning::{next_version, parse_version};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReleaseReasons {
     pub direct: Option<Impact>,
+    /// The impact implied by the commits when `--bump-type` replaced it with `direct`.
+    pub overridden: Option<Impact>,
     pub forced: Option<Impact>,
     pub descendants: BTreeSet<PathBuf>,
     pub dependencies: BTreeMap<PathBuf, DependencyCause>,
@@ -163,6 +165,7 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
                     .map_or(&[], Vec::as_slice),
             },
         )?;
+        let (direct, overridden) = override_impact(direct, input.config.bump_type);
         let forced = input
             .forced_packages
             .contains(&path)
@@ -180,6 +183,7 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
                 shared_version: None,
                 reasons: ReleaseReasons {
                     direct,
+                    overridden,
                     forced,
                     ..ReleaseReasons::default()
                 },
@@ -288,6 +292,17 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         dependency_files,
         current_versions,
     })
+}
+
+/// Applies `--bump-type` to a commit-derived impact, returning it with the impact it replaced.
+fn override_impact(
+    direct: Option<Impact>,
+    bump_type: Option<Impact>,
+) -> (Option<Impact>, Option<Impact>) {
+    match (direct, bump_type) {
+        (Some(impact), Some(bump_type)) if impact != bump_type => (Some(bump_type), Some(impact)),
+        _ => (direct, None),
+    }
 }
 
 fn active_package_count(states: &BTreeMap<PathBuf, PackageState>) -> usize {
@@ -729,12 +744,34 @@ mod tests {
                 },
             )]),
             fixed: None,
+            overridden: None,
         };
 
         assert_eq!(reasons.impact(), Some(Impact::Minor));
         assert_eq!(reasons.forced, Some(Impact::Minor));
         assert_eq!(reasons.descendants.len(), 1);
         assert_eq!(reasons.dependencies.len(), 1);
+    }
+
+    #[test]
+    fn bump_type_replaces_commit_impact_only_when_commits_have_one() {
+        assert_eq!(
+            override_impact(Some(Impact::Major), Some(Impact::Minor)),
+            (Some(Impact::Minor), Some(Impact::Major))
+        );
+        assert_eq!(
+            override_impact(Some(Impact::Patch), Some(Impact::Minor)),
+            (Some(Impact::Minor), Some(Impact::Patch))
+        );
+        assert_eq!(
+            override_impact(Some(Impact::Minor), Some(Impact::Minor)),
+            (Some(Impact::Minor), None)
+        );
+        assert_eq!(override_impact(None, Some(Impact::Minor)), (None, None));
+        assert_eq!(
+            override_impact(Some(Impact::Major), None),
+            (Some(Impact::Major), None)
+        );
     }
 
     #[test]

@@ -17,6 +17,8 @@ pub struct Config {
     pub push: bool,
     pub force: bool,
     pub force_packages: Vec<PathBuf>,
+    /// Replaces the impact implied by a package's commits when set.
+    pub bump_type: Option<Impact>,
     pub force_bump_type: Impact,
     /// `None` when neither the flags nor the environment chose, so a terminal run may ask.
     pub fixed_version: Option<bool>,

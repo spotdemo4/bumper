@@ -69,6 +69,10 @@ struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     force_package: Vec<PathBuf>,
 
+    /// Bump type for packages with impactful commits, overriding the type the commits imply [env: BUMP_TYPE]
+    #[arg(long, value_name = "TYPE")]
+    bump_type: Option<Impact>,
+
     /// Version bump type used by --force [env: FORCE_BUMP_TYPE] [default: patch]
     #[arg(long, value_name = "TYPE")]
     force_bump_type: Option<Impact>,
@@ -121,7 +125,9 @@ pub fn load_config() -> AppResult<Config> {
         push,
         force: cli.force || parse_bool_env("FORCE", false),
         force_packages,
-        force_bump_type: resolve_force_bump_type(cli.force_bump_type)?,
+        bump_type: resolve_bump_type(cli.bump_type, "BUMP_TYPE")?,
+        force_bump_type: resolve_bump_type(cli.force_bump_type, "FORCE_BUMP_TYPE")?
+            .unwrap_or(Impact::Patch),
         fixed_version: resolve_optional_bool(
             cli.fixed_version,
             cli.no_fixed_version,
@@ -132,17 +138,19 @@ pub fn load_config() -> AppResult<Config> {
     })
 }
 
-fn resolve_force_bump_type(cli_value: Option<Impact>) -> AppResult<Impact> {
-    if let Some(impact) = cli_value {
-        return Ok(impact);
+/// Resolves a bump type config field: CLI arg beats env var, returning `None` when neither was set.
+fn resolve_bump_type(cli_value: Option<Impact>, env_name: &str) -> AppResult<Option<Impact>> {
+    if cli_value.is_some() {
+        return Ok(cli_value);
     }
 
-    match env::var("FORCE_BUMP_TYPE") {
-        Ok(value) if value.trim().is_empty() => Ok(Impact::Patch),
+    match env::var(env_name) {
+        Ok(value) if value.trim().is_empty() => Ok(None),
         Ok(value) => value
             .parse()
-            .map_err(|error| format!("invalid FORCE_BUMP_TYPE: {error}")),
-        Err(_) => Ok(Impact::Patch),
+            .map(Some)
+            .map_err(|error| format!("invalid {env_name}: {error}")),
+        Err(_) => Ok(None),
     }
 }
 
@@ -360,6 +368,18 @@ mod tests {
         let cli = Cli::try_parse_from(["bumper", "--force-bump-type", "minor"]).expect("parse CLI");
 
         assert_eq!(cli.force_bump_type, Some(Impact::Minor));
+    }
+
+    #[test]
+    fn parses_bump_type_option() {
+        let cli = Cli::try_parse_from(["bumper", "--bump-type", "minor"]).expect("parse CLI");
+
+        assert_eq!(cli.bump_type, Some(Impact::Minor));
+        assert_eq!(
+            resolve_bump_type(cli.bump_type, "BUMPER_TEST_UNSET"),
+            Ok(Some(Impact::Minor))
+        );
+        assert_eq!(resolve_bump_type(None, "BUMPER_TEST_UNSET"), Ok(None));
     }
 
     #[test]
