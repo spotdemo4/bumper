@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::OsStr;
 use std::fs;
+use std::hash::BuildHasher;
 use std::ops::Range;
 use std::path::Path;
 
@@ -52,6 +54,11 @@ enum DependencyFormat {
     CargoLock,
 }
 
+/// Bumps the version in `file` with the writer for its file name.
+///
+/// # Errors
+///
+/// Fails when the file can't be read, parsed or written.
 pub fn apply_typed_change(
     file: &Path,
     old_version: &str,
@@ -61,6 +68,10 @@ pub fn apply_typed_change(
 }
 
 /// Returns the change a typed writer would make without modifying the filesystem.
+///
+/// # Errors
+///
+/// Fails when the file can't be read or parsed.
 pub fn preview_typed_change(
     file: &Path,
     old_version: &str,
@@ -81,13 +92,14 @@ fn evaluate_typed_change(
         .ok_or_else(|| format!("invalid file path '{}'", file.display()))?;
 
     let changed = match name {
-        "README.md" => replace_literal(file, old_version, new_version, write),
-        "action.yaml" => replace_literal(file, old_version, new_version, write),
-        "action.yml" => replace_literal(file, old_version, new_version, write),
+        "README.md" | "action.yaml" | "action.yml" => {
+            replace_literal(file, old_version, new_version, write)
+        }
         "package.json" => bump_package_json(file, new_version, write),
         "package-lock.json" => bump_package_lock_json(file, new_version, write),
-        "build.gradle" => bump_gradle_build(file, old_version, new_version, write),
-        "build.gradle.kts" => bump_gradle_build(file, old_version, new_version, write),
+        "build.gradle" | "build.gradle.kts" => {
+            bump_gradle_build(file, old_version, new_version, write)
+        }
         "gradle.properties" => bump_gradle_properties(file, old_version, new_version, write),
         "CMakeLists.txt" => bump_cmake_lists(file, new_version, write),
         "Cargo.toml" => bump_toml_path(file, &["package", "version"], new_version, write),
@@ -103,16 +115,20 @@ fn evaluate_typed_change(
         "build.zig.zon" => replace_line_value(file, ".version", new_version, write),
         "gleam.toml" => bump_toml_path(file, &["version"], new_version, write),
         "go.mod" => Ok(false),
-        _ if name.starts_with("openapi") && name.ends_with(".yaml") => {
+        // case-sensitive, as documented
+        _ if name.starts_with("openapi") && file.extension() == Some(OsStr::new("yaml")) => {
             bump_openapi_yaml(file, new_version, write)
         }
-        _ if name.ends_with(".nix") => bump_nix_version(file, old_version, new_version, write),
+        _ if file.extension() == Some(OsStr::new("nix")) => {
+            bump_nix_version(file, old_version, new_version, write)
+        }
         _ => return Ok(TypedChange::Unhandled),
     }?;
 
     Ok(TypedChange::from_changed(changed))
 }
 
+#[must_use]
 pub fn package_name_for_file(file: &Path) -> Option<String> {
     let name = file.file_name().and_then(|n| n.to_str())?;
     match name {
@@ -134,9 +150,17 @@ pub fn package_name_for_file(file: &Path) -> Option<String> {
 fn read_package_json_name(path: &Path) -> Option<String> {
     let source = fs::read_to_string(path).ok()?;
     let value: Value = serde_json::from_str(&source).ok()?;
-    value.get("name")?.as_str().map(|s| s.to_string())
+    value
+        .get("name")?
+        .as_str()
+        .map(std::string::ToString::to_string)
 }
 
+/// Returns the dependency update `file` would get without modifying the filesystem.
+///
+/// # Errors
+///
+/// Fails when the file can't be read or serialized.
 pub fn preview_dependency_update(
     file: &Path,
     bumped: &BTreeMap<String, VersionBump>,
@@ -144,6 +168,11 @@ pub fn preview_dependency_update(
     evaluate_dependency_update(file, bumped, false)
 }
 
+/// Updates the versions of bumped dependencies in `file`.
+///
+/// # Errors
+///
+/// Fails when the file can't be read, serialized or written.
 pub fn apply_dependency_update(
     file: &Path,
     bumped: &BTreeMap<String, VersionBump>,
@@ -187,7 +216,9 @@ fn evaluate_dependency_update(
     Ok(DependencyUpdate::Changed(transformed.names))
 }
 
-fn typed_bumps(bumped: &HashMap<String, (String, String)>) -> BTreeMap<String, VersionBump> {
+fn typed_bumps<S: BuildHasher>(
+    bumped: &HashMap<String, (String, String), S>,
+) -> BTreeMap<String, VersionBump> {
     bumped
         .iter()
         .map(|(name, (old_version, new_version))| {
@@ -204,9 +235,13 @@ fn typed_bumps(bumped: &HashMap<String, (String, String)>) -> BTreeMap<String, V
 
 /// Returns whether a dependency propagation writer would update `file` without
 /// modifying the filesystem. Unsupported filenames return `false`.
-pub fn dependency_update_needed(
+///
+/// # Errors
+///
+/// Fails when the file can't be read or serialized.
+pub fn dependency_update_needed<S: BuildHasher>(
     file: &Path,
-    bumped: &HashMap<String, (String, String)>,
+    bumped: &HashMap<String, (String, String), S>,
 ) -> AppResult<bool> {
     Ok(matches!(
         preview_dependency_update(file, &typed_bumps(bumped))?,
@@ -214,9 +249,9 @@ pub fn dependency_update_needed(
     ))
 }
 
-fn write_dependency_update(
+fn write_dependency_update<S: BuildHasher>(
     file: &Path,
-    bumped: &HashMap<String, (String, String)>,
+    bumped: &HashMap<String, (String, String), S>,
     expected_file_name: &str,
 ) -> AppResult<bool> {
     let file_name = file
@@ -241,9 +276,13 @@ fn write_dependency_update(
 ///
 /// Preserves original formatting by operating on raw text with regexes
 /// rather than re-serializing JSON.
-pub fn bump_package_json_dependencies(
+///
+/// # Errors
+///
+/// Fails when the file can't be read, serialized or written.
+pub fn bump_package_json_dependencies<S: BuildHasher>(
     file: &Path,
-    bumped: &HashMap<String, (String, String)>,
+    bumped: &HashMap<String, (String, String), S>,
 ) -> AppResult<bool> {
     write_dependency_update(file, bumped, "package.json")
 }
@@ -282,7 +321,9 @@ fn transform_package_json_dependencies(
         let escaped = regex::escape(&pkg_name);
         // Captures: 1 = `"pkg" \s*:\s*"` (including opening quote of value), 2 = version content, 3 = closing quote
         let pattern = format!(r#"("{escaped}"\s*:\s*")([^"]*)(")"#);
-        let re = Regex::new(&pattern).unwrap();
+        let Ok(re) = Regex::new(&pattern) else {
+            continue;
+        };
 
         let new_content = re
             .replace_all(&content, |caps: &regex::Captures| {
@@ -343,9 +384,13 @@ fn collect_json_dependency_names(
 /// Second-pass bump for `package-lock.json`: update `packages["node_modules/<name>"].version`
 /// and legacy `dependencies["<name>"].version` entries whose version exactly matches
 /// `old_version` for a bumped package.
-pub fn bump_package_lock_dependencies(
+///
+/// # Errors
+///
+/// Fails when the file can't be read, serialized or written.
+pub fn bump_package_lock_dependencies<S: BuildHasher>(
     file: &Path,
-    bumped: &HashMap<String, (String, String)>,
+    bumped: &HashMap<String, (String, String), S>,
 ) -> AppResult<bool> {
     write_dependency_update(file, bumped, "package-lock.json")
 }
@@ -451,9 +496,13 @@ fn update_lock_dependencies_map(
 /// Second-pass bump for `Cargo.toml`: update `dependencies`/`dev-dependencies`/
 /// `build-dependencies` (including `workspace.dependencies` and `target.<cfg>.dependencies`)
 /// entries whose `version` matches `old_version` for a bumped crate.
-pub fn bump_cargo_toml_dependencies(
+///
+/// # Errors
+///
+/// Fails when the file can't be read, serialized or written.
+pub fn bump_cargo_toml_dependencies<S: BuildHasher>(
     file: &Path,
-    bumped: &HashMap<String, (String, String)>,
+    bumped: &HashMap<String, (String, String), S>,
 ) -> AppResult<bool> {
     write_dependency_update(file, bumped, "Cargo.toml")
 }
@@ -535,9 +584,13 @@ fn visit_cargo_toml_table(
 
 /// Second-pass bump for `Cargo.lock`: update `dependencies` entries like
 /// `"test 0.0.1 (registry+...)"` inside any `[[package]]` block that references a bumped crate.
-pub fn bump_cargo_lock_dependencies(
+///
+/// # Errors
+///
+/// Fails when the file can't be read, serialized or written.
+pub fn bump_cargo_lock_dependencies<S: BuildHasher>(
     file: &Path,
-    bumped: &HashMap<String, (String, String)>,
+    bumped: &HashMap<String, (String, String), S>,
 ) -> AppResult<bool> {
     write_dependency_update(file, bumped, "Cargo.lock")
 }
@@ -546,27 +599,15 @@ fn transform_cargo_lock_dependencies(
     source: &str,
     bumped: &BTreeMap<String, VersionBump>,
 ) -> Option<DependencyTransform> {
-    // Split into segments per `[[package]]` as in `bump_package_in_lock`.
-    let mut segments: Vec<Vec<String>> = vec![Vec::new()];
-    for line in source.lines() {
-        if line.trim() == "[[package]]" {
-            segments.push(vec![line.to_string()]);
-        } else {
-            segments.last_mut().unwrap().push(line.to_string());
-        }
-    }
+    let mut segments = lock_segments(source);
 
     let mut changed_names = BTreeSet::new();
     for segment in &mut segments {
         // Extract package name for this segment, if any, to handle `version` bump for the package itself.
-        let pkg_name_in_segment = segment.iter().find_map(|l| {
-            let t = l.trim();
-            if t.starts_with("name = \"") && t.ends_with('"') {
-                Some(t["name = \"".len()..t.len() - 1].to_string())
-            } else {
-                None
-            }
-        });
+        let pkg_name_in_segment = segment
+            .iter()
+            .find_map(|l| quoted_value(l, "name"))
+            .map(str::to_string);
 
         let mut in_deps = false;
         for line in segment.iter_mut() {
@@ -575,22 +616,11 @@ fn transform_cargo_lock_dependencies(
             // stale locks (where the on-disk version is behind the tag) are repaired.
             if let Some(ref name) = pkg_name_in_segment
                 && let Some(bump) = bumped.get(name)
+                && quoted_value(line, "version").is_some_and(|current| current != bump.new_version)
             {
-                let trimmed = line.trim();
-                if trimmed.starts_with("version = \"")
-                    && trimmed.ends_with('"')
-                    && let Some(start) = trimmed.find('"')
-                    && let Some(end) = trimmed.rfind('"')
-                    && start != end
-                {
-                    let current = &trimmed[start + 1..end];
-                    if current != bump.new_version {
-                        let indent: String =
-                            line.chars().take_while(|c| c.is_whitespace()).collect();
-                        *line = format!("{indent}version = \"{}\"", bump.new_version);
-                        changed_names.insert(name.clone());
-                    }
-                }
+                let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                *line = format!("{indent}version = \"{}\"", bump.new_version);
+                changed_names.insert(name.clone());
             }
 
             if line.trim() == "dependencies = [" {
@@ -605,10 +635,9 @@ fn transform_cargo_lock_dependencies(
                 // Update dependency strings like `"pkg 0.1.0"` or `"pkg 0.1.0 (registry+...)"`
                 // by replacing the version token for any bumped package, regardless of
                 // whether the on-disk version matches `old_version` (handles stale locks).
-                if let (Some(f), Some(l)) = (line.find('"'), line.rfind('"'))
-                    && f != l
+                if let Some((head, rest)) = line.split_once('"')
+                    && let Some((inside, tail)) = rest.rsplit_once('"')
                 {
-                    let inside = line[f + 1..l].to_string();
                     let mut tokens = inside.split_whitespace();
                     if let Some(pkg_token) = tokens.next()
                         && let Some(bump) = bumped.get(pkg_token)
@@ -622,10 +651,9 @@ fn transform_cargo_lock_dependencies(
                             format!("{pkg_token} {} {}", bump.new_version, rest.join(" "))
                         };
                         if new_inside != inside {
-                            let new_line =
-                                format!("{}{}{}", &line[..f + 1], new_inside, &line[l..]);
-                            *line = new_line;
-                            changed_names.insert(pkg_token.to_string());
+                            let pkg_token = pkg_token.to_string();
+                            *line = format!("{head}\"{new_inside}\"{tail}");
+                            changed_names.insert(pkg_token);
                         }
                     }
                 }
@@ -652,14 +680,34 @@ fn transform_cargo_lock_dependencies(
     })
 }
 
+/// Splits a lock file into a preamble followed by one segment per `[[package]]` block.
+fn lock_segments(source: &str) -> Vec<Vec<String>> {
+    let mut segments = vec![Vec::new()];
+    for line in source.lines() {
+        if line.trim() == "[[package]]" {
+            segments.push(vec![line.to_string()]);
+        } else if let Some(segment) = segments.last_mut() {
+            segment.push(line.to_string());
+        }
+    }
+    segments
+}
+
+/// Returns `value` from a `key = "value"` line.
+fn quoted_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.trim()
+        .strip_prefix(key)?
+        .strip_prefix(" = \"")?
+        .strip_suffix('"')
+}
+
 fn read_toml_name(path: &Path, section: &str) -> AppResult<String> {
     let source = fs::read_to_string(path)
         .map_err(|e| format!("failed to read '{}': {e}", path.display()))?;
-    let re = Regex::new(&format!(
+    let re = regex(&format!(
         "(?m)^\\[{}\\][^\\[]*?name = \"([^\"]*)\"",
         regex::escape(section)
-    ))
-    .unwrap();
+    ))?;
     re.captures(&source)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_owned())
@@ -678,16 +726,7 @@ fn bump_package_in_lock(
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
 
-    // Split into segments: first segment is the preamble, remaining segments each start with
-    // a `[[package]]` line.
-    let mut segments: Vec<Vec<String>> = vec![Vec::new()];
-    for line in source.lines() {
-        if line.trim() == "[[package]]" {
-            segments.push(vec![line.to_string()]);
-        } else {
-            segments.last_mut().unwrap().push(line.to_string());
-        }
-    }
+    let mut segments = lock_segments(&source);
 
     let mut changed = false;
     for segment in &mut segments {
@@ -698,21 +737,11 @@ fn bump_package_in_lock(
 
         if is_target {
             for line in segment.iter_mut() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("version = \"")
-                    && trimmed.ends_with('"')
-                    && let Some(start) = trimmed.find('"')
-                    && let Some(end) = trimmed.rfind('"')
-                    && start != end
-                {
-                    let current = &trimmed[start + 1..end];
-                    // Update even when `current != _old_version` so stale locks are repaired.
-                    if current != new_version {
-                        let indent: String =
-                            line.chars().take_while(|c| c.is_whitespace()).collect();
-                        *line = format!("{indent}version = \"{new_version}\"");
-                        changed = true;
-                    }
+                // Update even when `current != _old_version` so stale locks are repaired.
+                if quoted_value(line, "version").is_some_and(|current| current != new_version) {
+                    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                    *line = format!("{indent}version = \"{new_version}\"");
+                    changed = true;
                 }
             }
         }
@@ -736,6 +765,10 @@ fn bump_package_in_lock(
             .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
     }
     Ok(true)
+}
+
+fn regex(pattern: &str) -> AppResult<Regex> {
+    Regex::new(pattern).map_err(|e| format!("invalid pattern '{pattern}': {e}"))
 }
 
 fn regex_replace_file(file: &Path, re: &Regex, replacement: &str, write: bool) -> AppResult<bool> {
@@ -765,9 +798,10 @@ fn replace_literal(
     let mut replaced = String::with_capacity(source.len());
     let mut cursor = 0;
     for (start, matched) in source.match_indices(old_version) {
-        let end = start + matched.len();
-        let before = &source[..start];
-        let after = &source[end..];
+        let end = start.saturating_add(matched.len());
+        let (Some(before), Some(after)) = (source.get(..start), source.get(end..)) else {
+            continue;
+        };
 
         // A dot only blocks replacement when it connects to another numeric component.
         let before = before.strip_suffix('.').unwrap_or(before);
@@ -778,11 +812,11 @@ fn replace_literal(
             continue;
         }
 
-        replaced.push_str(&source[cursor..start]);
+        replaced.push_str(source.get(cursor..start).unwrap_or_default());
         replaced.push_str(new_version);
         cursor = end;
     }
-    replaced.push_str(&source[cursor..]);
+    replaced.push_str(source.get(cursor..).unwrap_or_default());
     if source == replaced {
         return Ok(false);
     }
@@ -795,7 +829,7 @@ fn replace_literal(
 }
 
 fn replace_line_value(file: &Path, key: &str, new_version: &str, write: bool) -> AppResult<bool> {
-    let re = Regex::new(&format!(r#"(?m)^(\s*){} = "[^"]*".*$"#, regex::escape(key))).unwrap();
+    let re = regex(&format!(r#"(?m)^(\s*){} = "[^"]*".*$"#, regex::escape(key)))?;
     regex_replace_file(
         file,
         &re,
@@ -825,12 +859,12 @@ fn bump_openapi_yaml(file: &Path, new_version: &str, write: bool) -> AppResult<b
 
 fn find_openapi_version_range(source: &str) -> Option<Range<usize>> {
     let mut lines = Vec::new();
-    let mut offset = 0;
+    let mut offset = 0_usize;
     for raw_line in source.split_inclusive('\n') {
         let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
         let line = line.strip_suffix('\r').unwrap_or(line);
         lines.push((offset, line));
-        offset += raw_line.len();
+        offset = offset.saturating_add(raw_line.len());
     }
 
     let mut found_info = false;
@@ -838,9 +872,9 @@ fn find_openapi_version_range(source: &str) -> Option<Range<usize>> {
     let mut saw_document_start = false;
     let mut target = None;
 
-    for (index, (line_offset, line)) in lines.iter().enumerate() {
+    for (index, &(line_offset, line)) in lines.iter().enumerate() {
         let indent = yaml_indent(line).ok()?;
-        let trimmed = &line[indent..];
+        let trimmed = line.get(indent..)?;
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
@@ -870,15 +904,15 @@ fn find_openapi_version_range(source: &str) -> Option<Range<usize>> {
         }
         found_info = true;
 
-        let value_start = line_offset + value_start;
-        let value = &source[value_start..line_offset + line.len()];
-        let leading = value.len() - value.trim_start_matches([' ', '\t']).len();
-        let value_start = value_start + leading;
-        let value = &source[value_start..line_offset + line.len()];
+        let line_end = line_offset.saturating_add(line.len());
+        let value = source
+            .get(line_offset.saturating_add(value_start)..line_end)?
+            .trim_start_matches([' ', '\t']);
+        let value_start = line_end.saturating_sub(value.len());
         target = if value.is_empty() || value.starts_with('#') {
             find_block_openapi_version(source, &lines, index).ok()?
         } else if value.starts_with('{') {
-            find_flow_openapi_version(source, value_start, line_offset + line.len()).ok()?
+            find_flow_openapi_version(source, value_start, line_end).ok()?
         } else {
             return None;
         };
@@ -895,9 +929,9 @@ fn find_block_openapi_version(
     let mut child_indent = None;
     let mut target = None;
 
-    for (line_offset, line) in lines.iter().skip(info_index + 1) {
+    for &(line_offset, line) in lines.iter().skip(info_index.saturating_add(1)) {
         let indent = yaml_indent(line)?;
-        let trimmed = &line[indent..];
+        let trimmed = line.get(indent..).ok_or(())?;
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
@@ -922,11 +956,13 @@ fn find_block_openapi_version(
             return Err(());
         }
 
-        let start = line_offset + indent + value_start;
+        let start = line_offset
+            .saturating_add(indent)
+            .saturating_add(value_start);
         target = Some(yaml_scalar_range(
             source,
             start,
-            line_offset + line.len(),
+            line_offset.saturating_add(line.len()),
             true,
         )?);
     }
@@ -942,26 +978,27 @@ fn find_flow_openapi_version(
     let bytes = source.as_bytes();
     let mut stack = vec![b'{'];
     let mut quote = None;
-    let mut entry_start = open + 1;
+    let mut entry_start = open.saturating_add(1);
     let mut entry_colon = None;
     let mut target = None;
-    let mut index = open + 1;
+    let mut index = entry_start;
 
     while index < line_end {
-        let byte = bytes[index];
+        let byte = *bytes.get(index).ok_or(())?;
+        let next = bytes.get(index.saturating_add(1)).copied();
         if let Some(active_quote) = quote {
             if active_quote == b'\"' && byte == b'\\' {
-                index += 2;
+                index = index.saturating_add(2);
                 continue;
             }
             if byte == active_quote {
-                if active_quote == b'\'' && bytes.get(index + 1) == Some(&b'\'') {
-                    index += 2;
+                if active_quote == b'\'' && next == Some(b'\'') {
+                    index = index.saturating_add(2);
                     continue;
                 }
                 quote = None;
             }
-            index += 1;
+            index = index.saturating_add(1);
             continue;
         }
 
@@ -970,7 +1007,10 @@ fn find_flow_openapi_version(
             b'{' | b'[' => stack.push(byte),
             b'}' if stack.len() == 1 => {
                 set_flow_openapi_target(source, entry_start, entry_colon, index, &mut target)?;
-                let suffix = source[index + 1..line_end].trim();
+                let suffix = source
+                    .get(index.saturating_add(1)..line_end)
+                    .ok_or(())?
+                    .trim();
                 if !suffix.is_empty() && !suffix.starts_with('#') {
                     return Err(());
                 }
@@ -989,13 +1029,13 @@ fn find_flow_openapi_version(
             b':' if stack.len() == 1 && entry_colon.is_none() => entry_colon = Some(index),
             b',' if stack.len() == 1 => {
                 set_flow_openapi_target(source, entry_start, entry_colon, index, &mut target)?;
-                entry_start = index + 1;
+                entry_start = index.saturating_add(1);
                 entry_colon = None;
             }
             b'#' => return Err(()),
             _ => {}
         }
-        index += 1;
+        index = index.saturating_add(1);
     }
 
     Err(())
@@ -1011,7 +1051,7 @@ fn set_flow_openapi_target(
     let Some(colon) = entry_colon else {
         return Ok(());
     };
-    let key = source[entry_start..colon].trim();
+    let key = source.get(entry_start..colon).ok_or(())?.trim();
     if key == "'version'" || key == "\"version\"" {
         return Err(());
     }
@@ -1021,39 +1061,38 @@ fn set_flow_openapi_target(
     if target.is_some() {
         return Err(());
     }
-    *target = Some(yaml_scalar_range(source, colon + 1, entry_end, false)?);
+    *target = Some(yaml_scalar_range(
+        source,
+        colon.saturating_add(1),
+        entry_end,
+        false,
+    )?);
     Ok(())
 }
 
 fn yaml_indent(line: &str) -> Result<usize, ()> {
-    let mut indent = 0;
-    for byte in line.bytes() {
-        match byte {
-            b' ' => indent += 1,
-            b'\t' => return Err(()),
-            _ => break,
-        }
+    let indent = line.bytes().take_while(|&byte| byte == b' ').count();
+    if line.as_bytes().get(indent) == Some(&b'\t') {
+        return Err(());
     }
     Ok(indent)
 }
 
+/// Returns the offset just past the colon of a `key:` line.
 fn yaml_key_value_start(line: &str, key: &str) -> Option<usize> {
-    let rest = line.strip_prefix(key)?;
-    let spaces = rest.len() - rest.trim_start_matches([' ', '\t']).len();
-    if rest.as_bytes().get(spaces) != Some(&b':') {
-        return None;
-    }
-    Some(key.len() + spaces + 1)
+    let value = line
+        .strip_prefix(key)?
+        .trim_start_matches([' ', '\t'])
+        .strip_prefix(':')?;
+    Some(line.len().saturating_sub(value.len()))
 }
 
 fn is_quoted_yaml_key(line: &str, key: &str) -> bool {
-    (*b"'\"").into_iter().any(|quote| {
-        line.as_bytes().first() == Some(&quote)
-            && line.get(1..).is_some_and(|rest| {
-                rest.strip_prefix(key)
-                    .and_then(|rest| rest.strip_prefix(quote as char))
-                    .is_some_and(|rest| rest.trim_start_matches([' ', '\t']).starts_with(':'))
-            })
+    ['\'', '"'].into_iter().any(|quote| {
+        line.strip_prefix(quote)
+            .and_then(|rest| rest.strip_prefix(key))
+            .and_then(|rest| rest.strip_prefix(quote))
+            .is_some_and(|rest| rest.trim_start_matches([' ', '\t']).starts_with(':'))
     })
 }
 
@@ -1063,56 +1102,57 @@ fn yaml_scalar_range(
     mut end: usize,
     allow_comment: bool,
 ) -> Result<Range<usize>, ()> {
-    while start < end && matches!(source.as_bytes()[start], b' ' | b'\t') {
-        start += 1;
+    let bytes = source.as_bytes();
+    let blank = |index: usize| matches!(bytes.get(index), Some(b' ' | b'\t'));
+    while start < end && blank(start) {
+        start = start.saturating_add(1);
     }
-    while end > start && matches!(source.as_bytes()[end - 1], b' ' | b'\t') {
-        end -= 1;
+    while end > start && blank(end.saturating_sub(1)) {
+        end = end.saturating_sub(1);
     }
     if start == end {
         return Err(());
     }
 
-    match source.as_bytes()[start] {
+    match *bytes.get(start).ok_or(())? {
         quote @ (b'\'' | b'\"') => {
-            let mut index = start + 1;
+            let mut index = start.saturating_add(1);
             while index < end {
-                let byte = source.as_bytes()[index];
+                let byte = *bytes.get(index).ok_or(())?;
                 if quote == b'\"' && byte == b'\\' {
-                    index += 2;
+                    index = index.saturating_add(2);
                     continue;
                 }
                 if byte == quote {
-                    if quote == b'\'' && source.as_bytes().get(index + 1) == Some(&b'\'') {
-                        index += 2;
+                    if quote == b'\'' && bytes.get(index.saturating_add(1)) == Some(&b'\'') {
+                        index = index.saturating_add(2);
                         continue;
                     }
-                    let suffix = source[index + 1..end].trim();
+                    let suffix = source.get(index.saturating_add(1)..end).ok_or(())?.trim();
                     if suffix.is_empty() || (allow_comment && suffix.starts_with('#')) {
-                        return Ok(start + 1..index);
+                        return Ok(start.saturating_add(1)..index);
                     }
                     return Err(());
                 }
-                index += 1;
+                index = index.saturating_add(1);
             }
             Err(())
         }
         b'*' | b'&' | b'!' | b'|' | b'>' | b'{' | b'[' => Err(()),
         _ => {
             if allow_comment {
-                let bytes = source.as_bytes();
                 let mut index = start;
                 while index < end {
-                    if bytes[index] == b'#'
-                        && (index == start || matches!(bytes[index - 1], b' ' | b'\t'))
+                    if bytes.get(index) == Some(&b'#')
+                        && (index == start || blank(index.saturating_sub(1)))
                     {
                         end = index;
                         break;
                     }
-                    index += 1;
+                    index = index.saturating_add(1);
                 }
-                while end > start && matches!(bytes[end - 1], b' ' | b'\t') {
-                    end -= 1;
+                while end > start && blank(end.saturating_sub(1)) {
+                    end = end.saturating_sub(1);
                 }
             }
             if start == end {
@@ -1125,7 +1165,7 @@ fn yaml_scalar_range(
 }
 
 fn bump_package_json(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {
-    let re = Regex::new(r#"(?m)^(\s*)"version":\s*"[^"]*"(,?)$"#).unwrap();
+    let re = regex(r#"(?m)^(\s*)"version":\s*"[^"]*"(,?)$"#)?;
     regex_replace_file(
         file,
         &re,
@@ -1140,14 +1180,13 @@ fn bump_gradle_build(
     new_version: &str,
     write: bool,
 ) -> AppResult<bool> {
-    let re = Regex::new(&format!(
+    let re = regex(&format!(
         r#"(?m)^([ \t]*version[ \t]*=[ \t]*)(["']){}(["'])([^\r\n]*)$"#,
         regex::escape(old_version)
-    ))
-    .unwrap();
+    ))?;
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let replacement = format!(r#"${{1}}${{2}}{new_version}${{3}}${{4}}"#);
+    let replacement = format!(r"${{1}}${{2}}{new_version}${{3}}${{4}}");
     match re.replace_all(&source, replacement.as_str()) {
         Cow::Borrowed(_) => Ok(false),
         Cow::Owned(replaced) if replaced == source => Ok(false),
@@ -1167,18 +1206,14 @@ fn bump_gradle_properties(
     new_version: &str,
     write: bool,
 ) -> AppResult<bool> {
-    let re = Regex::new(&format!(
-        r#"(?m)^([ \t]*version[ \t]*=[ \t]*){}([ \t]*)$"#,
+    let re = regex(&format!(
+        r"(?m)^([ \t]*version[ \t]*=[ \t]*){}([ \t]*)$",
         regex::escape(old_version)
-    ))
-    .unwrap();
-    regex_replace_file(file, &re, &format!(r#"${{1}}{new_version}${{2}}"#), write)
+    ))?;
+    regex_replace_file(file, &re, &format!(r"${{1}}{new_version}${{2}}"), write)
 }
 
 fn bump_package_lock_json(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {
-    let source = fs::read_to_string(file)
-        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-
     // package-lock.json has two version fields to update:
     // 1. The top-level "version" (appears before "packages")
     // 2. The "version" inside packages[""] (the root package entry)
@@ -1193,8 +1228,11 @@ fn bump_package_lock_json(file: &Path, new_version: &str, write: bool) -> AppRes
         Done,
     }
 
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+
     let mut state = State::Root;
-    let mut root_brace_depth: u32 = 0;
+    let mut root_brace_depth = 0_usize;
     let mut changed = false;
     let mut output = Vec::new();
 
@@ -1212,14 +1250,14 @@ fn bump_package_lock_json(file: &Path, new_version: &str, write: bool) -> AppRes
             State::InPackages => {
                 if trimmed == "\"\":" || trimmed == "\"\": {" {
                     state = State::InRootPkg;
-                    root_brace_depth = if trimmed.ends_with('{') { 1 } else { 0 };
+                    root_brace_depth = usize::from(trimmed.ends_with('{'));
                 }
                 false
             }
             State::InRootPkg => {
-                root_brace_depth += trimmed.chars().filter(|&c| c == '{').count() as u32;
                 root_brace_depth = root_brace_depth
-                    .saturating_sub(trimmed.chars().filter(|&c| c == '}').count() as u32);
+                    .saturating_add(trimmed.matches('{').count())
+                    .saturating_sub(trimmed.matches('}').count());
                 if root_brace_depth == 0 {
                     state = State::Done;
                     false
@@ -1259,10 +1297,9 @@ fn bump_package_lock_json(file: &Path, new_version: &str, write: bool) -> AppRes
 }
 
 fn bump_cmake_lists(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {
-    let re = Regex::new(
+    let re = regex(
         r#"(?is)(\bproject\s*\([^)]*?\bVERSION[ \t\r\n]+)("?)([0-9]+(?:\.[0-9]+){0,3})("?)([^0-9.])"#,
-    )
-    .unwrap();
+    )?;
     regex_replace_file(
         file,
         &re,
@@ -1279,11 +1316,10 @@ fn bump_nix_version(
 ) -> AppResult<bool> {
     // Matches `version = "0.1.0";` with flexible whitespace, preserving
     // the prefix (`version = "`) and suffix (`";`) formatting.
-    let re = Regex::new(&format!(
+    let re = regex(&format!(
         r#"(\bversion\s*=\s*"){}("\s*;?)"#,
         regex::escape(old_version)
-    ))
-    .unwrap();
+    ))?;
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
     let replacement = format!(r"${{1}}{new_version}${{2}}");
@@ -1303,21 +1339,13 @@ fn bump_nix_version(
 fn bump_toml_path(file: &Path, path: &[&str], new_version: &str, write: bool) -> AppResult<bool> {
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let mut doc: toml_edit::DocumentMut = match source.parse() {
-        Ok(doc) => doc,
-        Err(_) => {
-            if path.len() == 2 {
-                return replace_toml_section_key_line(
-                    file,
-                    &source,
-                    path[0],
-                    path[1],
-                    new_version,
-                    write,
-                );
-            }
-            return Ok(false);
+    let mut doc: toml_edit::DocumentMut = if let Ok(doc) = source.parse() {
+        doc
+    } else {
+        if let [section, key] = path {
+            return replace_toml_section_key_line(file, &source, section, key, new_version, write);
         }
+        return Ok(false);
     };
 
     // `Item::get_mut` inserts missing keys, so walk with table lookups that
@@ -1355,12 +1383,11 @@ fn replace_toml_section_key_line(
     new_version: &str,
     write: bool,
 ) -> AppResult<bool> {
-    let re = Regex::new(&format!(
+    let re = regex(&format!(
         r#"(?m)(^\[{}\][^\[]*?){} = "[^"]*""#,
         regex::escape(section),
         regex::escape(key)
-    ))
-    .unwrap();
+    ))?;
     let replacement = format!(r#"${{1}}{key} = "{new_version}""#);
     match re.replace(source, replacement.as_str()) {
         Cow::Borrowed(_) => Ok(false),

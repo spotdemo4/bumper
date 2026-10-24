@@ -1,3 +1,8 @@
+// clippy.toml allows panics in `#[test]` functions, but not in the helpers
+// shared by these integration tests, which should fail the test just the same.
+// Test scenarios read top to bottom, so long ones aren't split up.
+#![allow(clippy::expect_used, clippy::too_many_lines)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -461,12 +466,12 @@ fn readme_case_updates_version_references() {
     fs::create_dir_all(&dir).expect("create readme fixture directory");
     fs::write(
         dir.join("README.md"),
-        r#"# Fixture
+        r"# Fixture
 
 Latest tag: v0.0.1
 
 Docker image: ghcr.io/example/fixture:0.0.1
-"#,
+",
     )
     .expect("write README.md");
 
@@ -488,7 +493,7 @@ fn action_yaml_updates_literal_version_references() {
     fs::create_dir_all(&dir).expect("create action fixture directory");
     fs::write(
         dir.join("action.yaml"),
-        r#"name: Fixture 0.0.1
+        r"name: Fixture 0.0.1
 
 metadata:
   image: docker://ghcr.io/example/metadata:0.0.1
@@ -499,7 +504,7 @@ runs:
   env:
     FIXTURE_IMAGE: docker://ghcr.io/example/fixture:0.0.1
     FIXTURE_VERSION: 0.0.1
-"#,
+",
     )
     .expect("write action.yaml");
 
@@ -553,12 +558,12 @@ fn action_yaml_literal_replacement_can_update_non_image_values() {
     fs::create_dir_all(&dir).expect("create action fixture directory");
     fs::write(
         dir.join("action.yaml"),
-        r#"runs:
+        r"runs:
   using: docker
   image: Dockerfile
   env:
     FIXTURE_VERSION: 0.0.1
-"#,
+",
     )
     .expect("write action.yaml");
 
@@ -575,7 +580,7 @@ fn action_yaml_literal_replacement_can_update_non_image_values() {
 fn openapi_yaml_updates_only_info_version() {
     let dir = temp_case_dir("openapi");
     let path = dir.join("openapi.yaml");
-    let original = r#"openapi: 3.1.0
+    let original = r"openapi: 3.1.0
 version: 1.2.3
 info:
   title: Fixture API
@@ -587,7 +592,7 @@ components:
     Example:
       example: 1.2.3
 # documentation for 1.2.3
-"#;
+";
     let expected = original.replacen("9.9.9 # release version", "1.2.4 # release version", 1);
     fs::write(&path, original).expect("write openapi.yaml");
 

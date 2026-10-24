@@ -128,7 +128,7 @@ pub struct PlanInput<'a> {
     pub fixed_version: bool,
 }
 
-pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
+pub fn build_release_plan(mut input: PlanInput<'_>) -> AppResult<ReleasePlan> {
     let package_paths = input.packages.keys().cloned().collect::<Vec<_>>();
     let mut deepest_first = package_paths.clone();
     deepest_first.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
@@ -139,56 +139,9 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         })
         .collect::<BTreeMap<_, _>>();
     let mut states = BTreeMap::new();
-
-    for (path, package) in input.packages {
-        let base = resolve_release_base(input.repo, &package, input.known_packages)?;
-        let child_paths = input
-            .known_packages
-            .keys()
-            .filter(|child| *child != &path && is_package_ancestor(&path, child))
-            .cloned()
-            .collect::<Vec<_>>();
-        let direct = get_impact_for_package(
-            input.repo,
-            base.commit,
-            &path,
-            &child_paths,
-            &ImpactConfig {
-                major_types: &input.config.major_types,
-                minor_types: &input.config.minor_types,
-                patch_types: &input.config.patch_types,
-                skip_scopes: &input.config.skip_scopes,
-                ignored_directories: input.ignored_directories,
-                impact_paths: input
-                    .package_impact_paths
-                    .get(&path)
-                    .map_or(&[], Vec::as_slice),
-            },
-        )?;
-        let (direct, overridden) = override_impact(direct, input.config.bump_type);
-        let forced = input
-            .forced_packages
-            .contains(&path)
-            .then_some(input.config.force_bump_type);
-        let names = package_files(&package.root, input.tracked_paths)
-            .into_iter()
-            .filter_map(|file| package_name_for_file(&file))
-            .collect();
-        states.insert(
-            path,
-            PackageState {
-                package,
-                names,
-                base,
-                shared_version: None,
-                reasons: ReleaseReasons {
-                    direct,
-                    overridden,
-                    forced,
-                    ..ReleaseReasons::default()
-                },
-            },
-        );
+    for (path, package) in std::mem::take(&mut input.packages) {
+        let state = package_state(&input, &path, package)?;
+        states.insert(path, state);
     }
 
     if input.fixed_version {
@@ -196,72 +149,7 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
     } else {
         propagate_descendants(&mut states, &deepest_first, &parents);
     }
-    let mut dependency_files = BTreeMap::new();
-
-    loop {
-        let named_bumps = named_package_bumps(&states)?;
-        if named_bumps.is_empty() {
-            break;
-        }
-        let version_bumps = version_bumps(&named_bumps);
-        let active_before = active_package_count(&states);
-        let mut round_files = BTreeMap::<PathBuf, DependencyFilePlan>::new();
-
-        for file in input.tracked_files {
-            let update = match preview_dependency_update(file, &version_bumps) {
-                Ok(update) => update,
-                Err(error) => {
-                    eprintln!("warning: {error}");
-                    continue;
-                }
-            };
-            let DependencyUpdate::Changed(names) = update else {
-                continue;
-            };
-            let owner = resolve_known_package_owner(input.repo_root, file, input.known_packages)?;
-            let manifest = file
-                .strip_prefix(input.repo_root)
-                .map_err(|_| {
-                    format!(
-                        "file '{}' is outside repository root '{}'",
-                        file.display(),
-                        input.repo_root.display()
-                    )
-                })?
-                .to_path_buf();
-            let owner_state = states
-                .get_mut(&owner.path)
-                .expect("dependency owner is a planned package");
-            for name in names {
-                let Some(producer) = named_bumps.get(&name) else {
-                    continue;
-                };
-                if producer.package_path == owner.path {
-                    continue;
-                }
-                let cause = owner_state
-                    .reasons
-                    .dependencies
-                    .entry(producer.package_path.clone())
-                    .or_default();
-                cause.names.insert(name.clone());
-                cause.manifests.insert(manifest.clone());
-                round_files
-                    .entry(manifest.clone())
-                    .or_default()
-                    .dependencies
-                    .entry(producer.package_path.clone())
-                    .or_default()
-                    .insert(name);
-            }
-        }
-
-        dependency_files = round_files;
-        propagate_descendants(&mut states, &deepest_first, &parents);
-        if active_package_count(&states) == active_before {
-            break;
-        }
-    }
+    let dependency_files = propagate_dependencies(&input, &mut states, &deepest_first, &parents)?;
 
     if input.fixed_version {
         // Every package already releases at the shared version, so propagation adds no information.
@@ -292,6 +180,135 @@ pub fn build_release_plan(input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         dependency_files,
         current_versions,
     })
+}
+
+fn package_state(input: &PlanInput<'_>, path: &Path, package: Package) -> AppResult<PackageState> {
+    let base = resolve_release_base(input.repo, &package, input.known_packages)?;
+    let child_paths = input
+        .known_packages
+        .keys()
+        .filter(|child| *child != path && is_package_ancestor(path, child))
+        .cloned()
+        .collect::<Vec<_>>();
+    let direct = get_impact_for_package(
+        input.repo,
+        base.commit,
+        path,
+        &child_paths,
+        &ImpactConfig {
+            major_types: &input.config.major_types,
+            minor_types: &input.config.minor_types,
+            patch_types: &input.config.patch_types,
+            skip_scopes: &input.config.skip_scopes,
+            ignored_directories: input.ignored_directories,
+            impact_paths: input
+                .package_impact_paths
+                .get(path)
+                .map_or(&[], Vec::as_slice),
+        },
+    )?;
+    let (direct, overridden) = override_impact(direct, input.config.bump_type);
+    let forced = input
+        .forced_packages
+        .contains(path)
+        .then_some(input.config.force_bump_type);
+    let names = package_files(&package.root, input.tracked_paths)
+        .into_iter()
+        .filter_map(|file| package_name_for_file(&file))
+        .collect();
+    Ok(PackageState {
+        package,
+        names,
+        base,
+        shared_version: None,
+        reasons: ReleaseReasons {
+            direct,
+            overridden,
+            forced,
+            ..ReleaseReasons::default()
+        },
+    })
+}
+
+/// Releases packages whose dependencies on other bumped packages change, until no
+/// more packages release. Returns the dependency files the final round updates.
+fn propagate_dependencies(
+    input: &PlanInput<'_>,
+    states: &mut BTreeMap<PathBuf, PackageState>,
+    deepest_first: &[PathBuf],
+    parents: &BTreeMap<PathBuf, PathBuf>,
+) -> AppResult<BTreeMap<PathBuf, DependencyFilePlan>> {
+    let mut dependency_files = BTreeMap::new();
+
+    loop {
+        let named_bumps = named_package_bumps(states)?;
+        if named_bumps.is_empty() {
+            break;
+        }
+        let version_bumps = version_bumps(&named_bumps);
+        let active_before = active_package_count(states);
+        let mut round_files = BTreeMap::<PathBuf, DependencyFilePlan>::new();
+
+        for file in input.tracked_files {
+            let update = match preview_dependency_update(file, &version_bumps) {
+                Ok(update) => update,
+                Err(error) => {
+                    eprintln!("warning: {error}");
+                    continue;
+                }
+            };
+            let DependencyUpdate::Changed(names) = update else {
+                continue;
+            };
+            let owner = resolve_known_package_owner(input.repo_root, file, input.known_packages)?;
+            let manifest = file
+                .strip_prefix(input.repo_root)
+                .map_err(|_| {
+                    format!(
+                        "file '{}' is outside repository root '{}'",
+                        file.display(),
+                        input.repo_root.display()
+                    )
+                })?
+                .to_path_buf();
+            let owner_state = states.get_mut(&owner.path).ok_or_else(|| {
+                format!(
+                    "dependency owner {} is not a planned package",
+                    package_label(&owner.path)
+                )
+            })?;
+            for name in names {
+                let Some(producer) = named_bumps.get(&name) else {
+                    continue;
+                };
+                if producer.package_path == owner.path {
+                    continue;
+                }
+                let cause = owner_state
+                    .reasons
+                    .dependencies
+                    .entry(producer.package_path.clone())
+                    .or_default();
+                cause.names.insert(name.clone());
+                cause.manifests.insert(manifest.clone());
+                round_files
+                    .entry(manifest.clone())
+                    .or_default()
+                    .dependencies
+                    .entry(producer.package_path.clone())
+                    .or_default()
+                    .insert(name);
+            }
+        }
+
+        dependency_files = round_files;
+        propagate_descendants(states, deepest_first, parents);
+        if active_package_count(states) == active_before {
+            break;
+        }
+    }
+
+    Ok(dependency_files)
 }
 
 /// Applies `--bump-type` to a commit-derived impact, returning it with the impact it replaced.
@@ -325,14 +342,16 @@ fn apply_fixed_version(states: &mut BTreeMap<PathBuf, PackageState>) -> AppResul
         .filter(|(_, state)| own_impact(state) == Some(impact))
         .map(|(path, _)| path.clone())
         .collect::<BTreeSet<_>>();
-    let shared_version = states
+    let Some(shared_version) = states
         .values()
         .map(|state| parse_version(&state.base.version).map(|version| (version, state)))
         .collect::<AppResult<Vec<_>>>()?
         .into_iter()
         .max_by_key(|(version, _)| *version)
         .map(|(_, state)| state.base.version.clone())
-        .expect("a package with an impact has a version");
+    else {
+        return Ok(());
+    };
 
     for state in states.values_mut() {
         state.shared_version = Some(shared_version.clone());
@@ -598,10 +617,9 @@ fn resolve_current_version(
     }
 
     let package_paths = known_packages.keys().cloned().collect::<Vec<_>>();
-    if let Some(parent_path) = nearest_parent(&package.path, &package_paths) {
-        let parent = known_packages
-            .get(parent_path)
-            .expect("nearest parent came from known packages");
+    if let Some(parent_path) = nearest_parent(&package.path, &package_paths)
+        && let Some(parent) = known_packages.get(parent_path)
+    {
         return resolve_current_version(repo, parent, known_packages);
     }
 
@@ -664,10 +682,13 @@ pub fn commit_message<'a>(releases: impl Iterator<Item = &'a Release>) -> String
         return release_message(releases.into_iter());
     }
 
-    let root = releases
+    // a nested release always releases the root package too
+    let Some(root) = releases
         .iter()
         .find(|release| release.package.path.as_os_str().is_empty())
-        .expect("multiple releases include the root package");
+    else {
+        return release_message(releases.into_iter());
+    };
     let trailers = releases
         .iter()
         .filter(|release| !release.package.path.as_os_str().is_empty())

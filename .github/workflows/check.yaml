@@ -15,7 +15,12 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, ubuntu-26.04-arm, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     permissions:
       id-token: write
     steps:

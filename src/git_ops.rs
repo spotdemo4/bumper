@@ -52,7 +52,7 @@ pub fn latest_tag_or_none(
 
     let mut release_tags: HashMap<Oid, Vec<(String, Version)>> = HashMap::new();
 
-    for maybe_name in tags.iter() {
+    for maybe_name in &tags {
         let Ok(Some(name)) = maybe_name else {
             continue;
         };
@@ -103,11 +103,9 @@ pub fn latest_tag_or_none(
 
     for oid in walk {
         let oid = oid.map_err(|e| format!("failed to walk commit history: {e}"))?;
-        if let Some(tags) = release_tags.get(&oid) {
-            let (name, _) = tags
-                .iter()
-                .max_by_key(|(_, version)| *version)
-                .expect("release tag list should not be empty");
+        if let Some(tags) = release_tags.get(&oid)
+            && let Some((name, _)) = tags.iter().max_by_key(|(_, version)| *version)
+        {
             return Ok(Some((name.clone(), oid)));
         }
     }
@@ -192,10 +190,10 @@ pub fn get_impact_for_package(
 
         let typ = prefix.split('(').next().unwrap_or(prefix).trim();
         let mut scope = "none";
-        if let Some(start) = prefix.find('(')
-            && let Some(end) = prefix[start + 1..].find(')')
+        if let Some((_, rest)) = prefix.split_once('(')
+            && let Some((inner, _)) = rest.split_once(')')
         {
-            scope = &prefix[start + 1..start + 1 + end];
+            scope = inner;
         }
 
         if config
@@ -354,10 +352,7 @@ fn has_symlink_component(repo_root: &Path, relative: &Path) -> bool {
     let mut path = repo_root.to_path_buf();
     for component in relative.components() {
         path.push(component.as_os_str());
-        if fs::symlink_metadata(&path)
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
-        {
+        if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
             return true;
         }
     }
@@ -458,7 +453,7 @@ fn make_remote_callbacks(repo: &Repository) -> git2::RemoteCallbacks<'static> {
         let user = username.unwrap_or("git");
         if allowed.contains(git2::CredentialType::SSH_KEY) {
             let n = ssh_attempts.get();
-            ssh_attempts.set(n + 1);
+            ssh_attempts.set(n.saturating_add(1));
             if n == 0 {
                 return git2::Cred::ssh_key_from_agent(user);
             }
@@ -624,8 +619,10 @@ fn http_extra_header_matches(name: &str, url: &str) -> bool {
         return false;
     }
 
-    let prefix = &name["http.".len()..name.len() - ".extraheader".len()];
-    http_url_matches_config_prefix(url, prefix)
+    // lowercasing keeps byte offsets, and `http.extraheader` itself returned above
+    let end = name.len().saturating_sub(".extraheader".len());
+    name.get("http.".len()..end)
+        .is_some_and(|prefix| http_url_matches_config_prefix(url, prefix))
 }
 
 fn http_url_matches_config_prefix(url: &str, prefix: &str) -> bool {
@@ -697,7 +694,7 @@ fn fetch_from_remote(repo_path: &Path, name: &str) -> AppResult<()> {
     opts.remote_callbacks(make_remote_callbacks(&repo));
     opts.download_tags(git2::AutotagOption::All);
     remote
-        .fetch(&[] as &[&str], Some(&mut opts), None)
+        .fetch::<&str>(&[], Some(&mut opts), None)
         .map_err(|e| format!("failed to fetch from '{name}': {e}"))
 }
 
@@ -706,7 +703,7 @@ pub fn git_push(repo: &Repository, branch: &str, tags: &[String]) -> AppResult<(
         .find_remote("origin")
         .map_err(|e| format!("failed to find remote 'origin': {e}"))?;
     let branch_ref = format!("refs/heads/{branch}:refs/heads/{branch}");
-    let mut refspecs = Vec::with_capacity(tags.len() + 1);
+    let mut refspecs = Vec::with_capacity(tags.len().saturating_add(1));
     refspecs.push(branch_ref);
     refspecs.extend(
         tags.iter()
@@ -786,6 +783,25 @@ mod tests {
         let mut index = repo.index().expect("open git index");
         index.add_path(Path::new(name)).expect("add index path");
         index.write().expect("write git index");
+        drop(index);
+        commit_index(repo, message)
+    }
+
+    fn move_file_and_commit(
+        repo: &Repository,
+        dir: &Path,
+        from: &str,
+        to: &str,
+        message: &str,
+    ) -> Oid {
+        if let Some(parent) = dir.join(to).parent() {
+            std::fs::create_dir_all(parent).expect("create test file parent");
+        }
+        std::fs::rename(dir.join(from), dir.join(to)).expect("move test file");
+        let mut index = repo.index().expect("open git index");
+        index.remove_path(Path::new(from)).expect("remove old path");
+        index.add_path(Path::new(to)).expect("add new path");
+        index.write().expect("write move to index");
         drop(index);
         commit_index(repo, message)
     }
@@ -1045,6 +1061,19 @@ mod tests {
             "chore: initialize moved source",
         );
 
+        let touches_native = |oid: Oid, context: &str| {
+            let commit = repo.find_commit(oid).expect("find commit");
+            commit_touches_package(
+                &repo,
+                &commit,
+                Path::new("packages/app"),
+                &[],
+                &[PathBuf::from("native")],
+                &[],
+            )
+            .expect(context)
+        };
+
         std::fs::remove_file(dir.join("native/deleted.rs")).expect("delete impacted file");
         let mut index = repo.index().expect("open git index");
         index
@@ -1053,79 +1082,25 @@ mod tests {
         index.write().expect("write deletion to index");
         drop(index);
         let deleted = commit_index(&repo, "feat: delete native source");
-        let deleted = repo.find_commit(deleted).expect("find deletion commit");
-        assert!(
-            commit_touches_package(
-                &repo,
-                &deleted,
-                Path::new("packages/app"),
-                &[],
-                &[PathBuf::from("native")],
-                &[],
-            )
-            .expect("check deletion impact")
-        );
-        drop(deleted);
+        assert!(touches_native(deleted, "check deletion impact"));
 
-        std::fs::create_dir_all(dir.join("native")).expect("create native directory");
-        std::fs::rename(
-            dir.join("outside/moved-in.rs"),
-            dir.join("native/moved-in.rs"),
-        )
-        .expect("move file into impact path");
-        let mut index = repo.index().expect("open git index");
-        index
-            .remove_path(Path::new("outside/moved-in.rs"))
-            .expect("remove old moved-in path");
-        index
-            .add_path(Path::new("native/moved-in.rs"))
-            .expect("add new moved-in path");
-        index.write().expect("write move into index");
-        drop(index);
-        let moved_in = commit_index(&repo, "feat: move source into native tree");
-        let moved_in = repo.find_commit(moved_in).expect("find move-in commit");
-        assert!(
-            commit_touches_package(
-                &repo,
-                &moved_in,
-                Path::new("packages/app"),
-                &[],
-                &[PathBuf::from("native")],
-                &[],
-            )
-            .expect("check move-in impact")
+        let moved_in = move_file_and_commit(
+            &repo,
+            &dir,
+            "outside/moved-in.rs",
+            "native/moved-in.rs",
+            "feat: move source into native tree",
         );
-        drop(moved_in);
+        assert!(touches_native(moved_in, "check move-in impact"));
 
-        std::fs::create_dir_all(dir.join("outside")).expect("create outside directory");
-        std::fs::rename(
-            dir.join("native/moved-out.rs"),
-            dir.join("outside/moved-out.rs"),
-        )
-        .expect("move file out of impact path");
-        let mut index = repo.index().expect("open git index");
-        index
-            .remove_path(Path::new("native/moved-out.rs"))
-            .expect("remove old moved-out path");
-        index
-            .add_path(Path::new("outside/moved-out.rs"))
-            .expect("add new moved-out path");
-        index.write().expect("write move out to index");
-        drop(index);
-        let moved_out = commit_index(&repo, "feat: move source out of native tree");
-        let moved_out = repo.find_commit(moved_out).expect("find move-out commit");
-        assert!(
-            commit_touches_package(
-                &repo,
-                &moved_out,
-                Path::new("packages/app"),
-                &[],
-                &[PathBuf::from("native")],
-                &[],
-            )
-            .expect("check move-out impact")
+        let moved_out = move_file_and_commit(
+            &repo,
+            &dir,
+            "native/moved-out.rs",
+            "outside/moved-out.rs",
+            "feat: move source out of native tree",
         );
-        drop(moved_out);
+        assert!(touches_native(moved_out, "check move-out impact"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -71,8 +71,8 @@ pub fn package_version(directory: impl AsRef<Path>) -> Option<String> {
             "build.zig.zon" => zig_version(&path),
             "CMakeLists.txt" => cmake_version(&path),
             "build.gradle" | "build.gradle.kts" => gradle_version(&path),
-            "go.mod" => None,
-            _ => unreachable!("package marker list and version readers should match"),
+            // go.mod has no version, and `is_package_marker` accepts no other names
+            _ => None,
         };
         if version.as_deref().is_some_and(is_release_version) {
             return version;
@@ -108,6 +108,11 @@ pub fn is_package_marker(path: impl AsRef<Path>) -> bool {
 /// Packages are returned from nearest to outermost. The canonical repository
 /// root is always the final package, even when it has no package marker.
 /// Relative supplied paths are interpreted relative to `repo_root`.
+///
+/// # Errors
+///
+/// Fails when either path can't be canonicalized, when `repo_root` isn't a
+/// directory, or when `supplied_path` is outside of it.
 pub fn resolve_package_hierarchy(
     repo_root: impl AsRef<Path>,
     supplied_path: impl AsRef<Path>,
@@ -135,24 +140,27 @@ pub fn resolve_package_hierarchy(
         ));
     }
 
+    let outside_repository = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "supplied path is outside the repository root",
+        )
+    };
     let mut directory = if supplied_path.is_dir() {
-        supplied_path
+        supplied_path.as_path()
     } else {
-        supplied_path
-            .parent()
-            .expect("a canonical file path has a parent")
-            .to_path_buf()
+        supplied_path.parent().ok_or_else(outside_repository)?
     };
     let mut packages = Vec::new();
 
     loop {
-        if directory == repo_root || is_versioned_package(&directory) {
+        if directory == repo_root || is_versioned_package(directory) {
             packages.push(Package {
                 path: directory
                     .strip_prefix(&repo_root)
-                    .expect("directory was checked to be inside repository")
+                    .map_err(|_| outside_repository())?
                     .to_path_buf(),
-                root: directory.clone(),
+                root: directory.to_path_buf(),
             });
         }
 
@@ -160,10 +168,7 @@ pub fn resolve_package_hierarchy(
             break;
         }
 
-        directory = directory
-            .parent()
-            .expect("a descendant of the repository root has a parent")
-            .to_path_buf();
+        directory = directory.parent().ok_or_else(outside_repository)?;
     }
 
     Ok(packages)
@@ -337,35 +342,32 @@ fn cmake_version(path: &Path) -> Option<String> {
         .map(|line| line.split('#').next().unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n");
+    // ASCII lowercasing keeps byte offsets, so matches index into the source too
     let lowercase = source.to_ascii_lowercase();
-    let mut search_from = 0;
 
-    while let Some(offset) = lowercase[search_from..].find("project") {
-        let start = search_from + offset;
-        let before_is_identifier = lowercase[..start]
+    for (start, keyword) in lowercase.match_indices("project") {
+        let (Some(before), Some(after)) = (
+            source.get(..start),
+            source
+                .get(start..)
+                .and_then(|rest| rest.get(keyword.len()..)),
+        ) else {
+            continue;
+        };
+        let before_is_identifier = before
             .chars()
             .next_back()
             .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_');
-        let mut open = start + "project".len();
-        while lowercase
-            .as_bytes()
-            .get(open)
-            .is_some_and(u8::is_ascii_whitespace)
-        {
-            open += 1;
-        }
 
         if !before_is_identifier
-            && lowercase.as_bytes().get(open) == Some(&b'(')
-            && let Some(close_offset) = lowercase[open + 1..].find(')')
+            && let Some(arguments) = after
+                .trim_start_matches(|character: char| character.is_ascii_whitespace())
+                .strip_prefix('(')
+            && let Some((body, _)) = arguments.split_once(')')
+            && let Some(version) = cmake_project_body_version(body)
         {
-            let body = &source[open + 1..open + 1 + close_offset];
-            if let Some(version) = cmake_project_body_version(body) {
-                return Some(version.to_string());
-            }
+            return Some(version.to_string());
         }
-
-        search_from = start + "project".len();
     }
 
     None
@@ -378,15 +380,18 @@ fn cmake_project_body_version(body: &str) -> Option<&str> {
     }
 
     tokens.windows(2).find_map(|pair| {
-        (pair[0].eq_ignore_ascii_case("VERSION")
+        let [keyword, version] = pair else {
+            return None;
+        };
+        (keyword.eq_ignore_ascii_case("VERSION")
             && matches!(
-                pair[1]
+                version
                     .split('.')
                     .map(str::parse::<u64>)
                     .collect::<Result<Vec<_>, _>>(),
                 Ok(parts) if (3..=4).contains(&parts.len())
             ))
-        .then_some(pair[1])
+        .then_some(*version)
     })
 }
 
@@ -431,7 +436,7 @@ fn is_go_mod(path: &Path) -> bool {
 
     let mut found_module = false;
     let mut module_block = false;
-    let mut block_paths = 0;
+    let mut block_paths = 0_usize;
 
     for line in source.lines() {
         let line = strip_go_line_comment(line).trim();
@@ -450,7 +455,7 @@ fn is_go_mod(path: &Path) -> bool {
             if !is_single_go_value(line) {
                 return false;
             }
-            block_paths += 1;
+            block_paths = block_paths.saturating_add(1);
             if block_paths > 1 {
                 return false;
             }
@@ -499,7 +504,7 @@ fn strip_go_line_comment(line: &str) -> &str {
         } else if matches!(character, '"' | '`') {
             quote = Some(character);
         } else if character == '/' && characters.peek().is_some_and(|(_, next)| *next == '/') {
-            return &line[..index];
+            return line.get(..index).unwrap_or(line);
         }
     }
 
@@ -525,7 +530,11 @@ fn is_single_go_value(value: &str) -> bool {
         } else if first == '"' && character == '\\' {
             escaped = true;
         } else if character == first {
-            return index > 1 && value[index + character.len_utf8()..].trim().is_empty();
+            return index > 1
+                && value
+                    .get(index..)
+                    .and_then(|rest| rest.strip_prefix(character))
+                    .is_some_and(|rest| rest.trim().is_empty());
         }
     }
     false

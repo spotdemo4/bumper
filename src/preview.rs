@@ -51,7 +51,7 @@ pub struct PreviewInput<'a> {
     pub tracked_paths: &'a HashSet<PathBuf>,
 }
 
-pub fn collect_bump_preview(input: PreviewInput<'_>) -> AppResult<BumpPreview> {
+pub fn collect_bump_preview(input: &PreviewInput<'_>) -> AppResult<BumpPreview> {
     let mut preview = BumpPreview::default();
 
     for release in input.plan.releases.values() {
@@ -187,8 +187,7 @@ pub fn render_bump_preview(plan: &ReleasePlan, preview: &BumpPreview, color: boo
         .releases
         .keys()
         .cloned()
-        .enumerate()
-        .map(|(index, path)| (path, PACKAGE_COLORS[index % PACKAGE_COLORS.len()]))
+        .zip(PACKAGE_COLORS.iter().copied().cycle())
         .collect::<BTreeMap<_, _>>();
     let mut root = PreviewNode::default();
     for path in plan.releases.keys() {
@@ -244,29 +243,29 @@ impl PreviewRenderer<'_> {
             .get(path)
             .map(release_reason_labels)
             .unwrap_or_default();
-        let total = reasons.len() + node.children.len();
+        // entries left to render, the last one gets the closing connector
+        let mut remaining = reasons.len().saturating_add(node.children.len());
         let package_color = nearest_package_color(path, &self.package_colors);
 
-        for (index, reason) in reasons.iter().enumerate() {
-            let last = index + 1 == total;
+        for reason in &reasons {
+            remaining = remaining.saturating_sub(1);
+            let last = remaining == 0;
             let connector = if last { "`-- " } else { "|-- " };
             let _ = write!(output, "{prefix}{connector}");
             write_node_name(output, reason, package_color, self.color);
             output.push('\n');
         }
 
-        for (child_index, (name, child)) in node.children.iter().enumerate() {
-            let index = reasons.len() + child_index;
-            let last = index + 1 == total;
+        for (name, child) in &node.children {
+            remaining = remaining.saturating_sub(1);
+            let last = remaining == 0;
             let connector = if last { "`-- " } else { "|-- " };
             let child_path = path.join(name);
             let child_color = nearest_package_color(&child_path, &self.package_colors);
-            let file = child.file.then(|| {
-                self.preview
-                    .files
-                    .get(&child_path)
-                    .expect("preview tree file came from preview files")
-            });
+            let file = child
+                .file
+                .then(|| self.preview.files.get(&child_path))
+                .flatten();
             let label = node_label(&name.to_string_lossy(), &child_path, file, self.plan);
             let _ = write!(output, "{prefix}{connector}");
             write_node_name(output, &label, child_color, self.color);
@@ -308,11 +307,10 @@ fn file_change_labels(file: &PreviewFile, plan: &ReleasePlan) -> Vec<String> {
     }
     for dependency in file.dependencies.values() {
         for name in &dependency.names {
-            let bump = &plan
-                .named_bumps
-                .get(name)
-                .expect("preview dependency name came from named bumps")
-                .version;
+            // dependency names come from the named bumps
+            let Some(bump) = plan.named_bumps.get(name).map(|named| &named.version) else {
+                continue;
+            };
             changes.push(format!(
                 "{name} {} -> {}",
                 bump.old_version, bump.new_version
@@ -426,59 +424,72 @@ mod tests {
         }
     }
 
+    fn releases<const N: usize>(releases: [Release; N]) -> BTreeMap<PathBuf, Release> {
+        releases
+            .map(|release| (release.package.path.clone(), release))
+            .into()
+    }
+
+    fn version_bump(old_version: &str, new_version: &str) -> VersionBump {
+        VersionBump {
+            old_version: old_version.to_string(),
+            new_version: new_version.to_string(),
+        }
+    }
+
+    fn preview_file(
+        old_version: &str,
+        new_version: &str,
+        dependencies: BTreeMap<PathBuf, DependencyFileChange>,
+    ) -> PreviewFile {
+        PreviewFile {
+            version: Some(version_bump(old_version, new_version)),
+            dependencies,
+        }
+    }
+
     #[test]
     fn release_plan_tree_renders_propagation_and_file_changes() {
-        let root_path = PathBuf::new();
-        let app_path = PathBuf::from("packages/app");
         let library_path = PathBuf::from("packages/library");
         let plan = ReleasePlan {
-            releases: BTreeMap::from([
-                (
-                    root_path.clone(),
-                    release(
-                        "",
-                        "1.0.0",
-                        "1.0.1",
-                        Impact::Patch,
-                        ReleaseReasons {
-                            descendants: BTreeSet::from([library_path.clone()]),
-                            ..ReleaseReasons::default()
-                        },
-                    ),
+            releases: releases([
+                release(
+                    "",
+                    "1.0.0",
+                    "1.0.1",
+                    Impact::Patch,
+                    ReleaseReasons {
+                        descendants: BTreeSet::from([library_path.clone()]),
+                        ..ReleaseReasons::default()
+                    },
                 ),
-                (
-                    app_path.clone(),
-                    release(
-                        "packages/app",
-                        "3.0.0",
-                        "3.0.1",
-                        Impact::Patch,
-                        ReleaseReasons {
-                            dependencies: BTreeMap::from([(
-                                library_path.clone(),
-                                DependencyCause {
-                                    names: BTreeSet::from(["library".to_string()]),
-                                    manifests: BTreeSet::from([PathBuf::from(
-                                        "packages/app/package.json",
-                                    )]),
-                                },
-                            )]),
-                            ..ReleaseReasons::default()
-                        },
-                    ),
+                release(
+                    "packages/app",
+                    "3.0.0",
+                    "3.0.1",
+                    Impact::Patch,
+                    ReleaseReasons {
+                        dependencies: BTreeMap::from([(
+                            library_path.clone(),
+                            DependencyCause {
+                                names: BTreeSet::from(["library".to_string()]),
+                                manifests: BTreeSet::from([PathBuf::from(
+                                    "packages/app/package.json",
+                                )]),
+                            },
+                        )]),
+                        ..ReleaseReasons::default()
+                    },
                 ),
-                (
-                    library_path.clone(),
-                    release(
-                        "packages/library",
-                        "2.0.0",
-                        "2.0.1",
-                        Impact::Patch,
-                        ReleaseReasons {
-                            direct: Some(Impact::Patch),
-                            ..ReleaseReasons::default()
-                        },
-                    ),
+                release(
+                    "packages/library",
+                    "2.0.0",
+                    "2.0.1",
+                    Impact::Patch,
+                    ReleaseReasons {
+                        direct: Some(Impact::Patch),
+                        ..ReleaseReasons::default()
+                    },
                 ),
             ]),
             skipped_packages: BTreeSet::new(),
@@ -486,10 +497,7 @@ mod tests {
                 "library".to_string(),
                 NamedPackageBump {
                     package_path: library_path.clone(),
-                    version: VersionBump {
-                        old_version: "2.0.0".to_string(),
-                        new_version: "2.0.1".to_string(),
-                    },
+                    version: version_bump("2.0.0", "2.0.1"),
                 },
             )]),
             dependency_files: BTreeMap::new(),
@@ -499,38 +507,24 @@ mod tests {
             files: BTreeMap::from([
                 (
                     PathBuf::from("package.json"),
-                    PreviewFile {
-                        version: Some(VersionBump {
-                            old_version: "1.0.0".to_string(),
-                            new_version: "1.0.1".to_string(),
-                        }),
-                        dependencies: BTreeMap::new(),
-                    },
+                    preview_file("1.0.0", "1.0.1", BTreeMap::new()),
                 ),
                 (
                     PathBuf::from("packages/app/package.json"),
-                    PreviewFile {
-                        version: Some(VersionBump {
-                            old_version: "3.0.0".to_string(),
-                            new_version: "3.0.1".to_string(),
-                        }),
-                        dependencies: BTreeMap::from([(
+                    preview_file(
+                        "3.0.0",
+                        "3.0.1",
+                        BTreeMap::from([(
                             library_path.clone(),
                             DependencyFileChange {
                                 names: BTreeSet::from(["library".to_string()]),
                             },
                         )]),
-                    },
+                    ),
                 ),
                 (
                     PathBuf::from("packages/library/package.json"),
-                    PreviewFile {
-                        version: Some(VersionBump {
-                            old_version: "2.0.0".to_string(),
-                            new_version: "2.0.1".to_string(),
-                        }),
-                        dependencies: BTreeMap::new(),
-                    },
+                    preview_file("2.0.0", "2.0.1", BTreeMap::new()),
                 ),
             ]),
         };
@@ -577,18 +571,18 @@ mod tests {
             current_versions: BTreeMap::new(),
         };
 
-        let plain = render_bump_preview(&plan, &BumpPreview::default(), false);
+        let uncolored = render_bump_preview(&plan, &BumpPreview::default(), false);
         let colored = render_bump_preview(&plan, &BumpPreview::default(), true);
 
-        assert!(plain.contains("service (2.3.4 -> 2.3.5, patch)"));
-        assert!(plain.contains("direct patch"));
-        assert!(plain.contains("forced minor"));
+        assert!(uncolored.contains("service (2.3.4 -> 2.3.5, patch)"));
+        assert!(uncolored.contains("direct patch"));
+        assert!(uncolored.contains("forced minor"));
         assert_eq!(
             colored
                 .replace("\x1b[33m", "")
                 .replace("\x1b[36m", "")
                 .replace("\x1b[0m", ""),
-            plain
+            uncolored
         );
     }
 }

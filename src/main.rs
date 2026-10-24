@@ -104,9 +104,8 @@ fn normalize_ignored_directories(
     Ok(normalized)
 }
 
-fn run() -> AppResult<()> {
-    let mut config = load_config()?;
-    let repo = Repository::discover(".")
+fn open_repository() -> AppResult<Repository> {
+    Repository::discover(".")
         .or_else(|e| {
             // In Docker with bind-mounted repos the directory may be owned by a different
             // user. Retry with owner validation disabled only when that is the actual cause.
@@ -117,7 +116,241 @@ fn run() -> AppResult<()> {
                 Err(e)
             }
         })
-        .map_err(|e| format!("not a git repository: {e}"))?;
+        .map_err(|e| format!("not a git repository: {e}"))
+}
+
+/// The packages and bump targets reached from the selected paths.
+struct Selection {
+    packages: BTreeMap<PathBuf, Package>,
+    selected_packages: HashSet<PathBuf>,
+    targets: Vec<Target>,
+}
+
+fn select_targets(
+    repo_root: &Path,
+    paths: &[PathBuf],
+    ignored_directories: &[PathBuf],
+    known_packages: &BTreeMap<PathBuf, Package>,
+) -> AppResult<Selection> {
+    let mut packages = BTreeMap::<PathBuf, Package>::new();
+    let mut selected_packages = HashSet::<PathBuf>::new();
+    let mut target_paths = HashSet::<PathBuf>::new();
+    let mut targets = Vec::new();
+    for path in paths {
+        let absolute = if path.is_absolute() {
+            path.clone()
+        } else {
+            repo_root.join(path)
+        };
+
+        if !absolute.exists() {
+            eprintln!(
+                "warning: file or directory not found: {}",
+                absolute.display()
+            );
+            continue;
+        }
+
+        let absolute = fs::canonicalize(&absolute)
+            .map_err(|e| format!("failed to resolve '{}': {e}", absolute.display()))?;
+        let relative = absolute.strip_prefix(repo_root).map_err(|_| {
+            format!(
+                "path '{}' is outside repository root '{}'",
+                absolute.display(),
+                repo_root.display()
+            )
+        })?;
+        if git_ops::is_ignored_path(relative, ignored_directories) {
+            eprintln!("warning: ignoring selected path: {}", absolute.display());
+            continue;
+        }
+        if !target_paths.insert(absolute.clone()) {
+            continue;
+        }
+
+        let hierarchy = resolve_known_package_hierarchy(repo_root, &absolute, known_packages)?;
+        let selected = hierarchy
+            .first()
+            .ok_or_else(|| format!("no package contains '{}'", absolute.display()))?
+            .path
+            .clone();
+        selected_packages.insert(selected.clone());
+        targets.push(Target {
+            path: absolute,
+            package_path: selected,
+        });
+        for package in hierarchy {
+            packages.entry(package.path.clone()).or_insert(package);
+        }
+    }
+
+    if targets.is_empty() {
+        return Err("no valid files or directories were selected".to_string());
+    }
+
+    Ok(Selection {
+        packages,
+        selected_packages,
+        targets,
+    })
+}
+
+/// Asks which packages to force, starting from `forced_packages`. `None` when aborted.
+fn prompt_forced_packages(
+    config: &Config,
+    packages: &BTreeMap<PathBuf, Package>,
+    unforced: &ReleasePlan,
+    forced_packages: &HashSet<PathBuf>,
+) -> AppResult<Option<HashSet<PathBuf>>> {
+    let (choices, defaults) = package_choices(packages, unforced, forced_packages);
+    let message = format!(
+        "Select packages to force a {} bump:",
+        config.force_bump_type.as_str()
+    );
+    match MultiSelect::new(&message, choices)
+        .with_default(&defaults)
+        .with_formatter(&|chosen| {
+            if chosen.is_empty() {
+                return "none".to_string();
+            }
+            chosen
+                .iter()
+                .map(|choice| package_label(&choice.value.path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .prompt()
+    {
+        Ok(chosen) => Ok(Some(chosen.into_iter().map(|choice| choice.path).collect())),
+        Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => Ok(None),
+        Err(e) => Err(format!("failed to select packages: {e}")),
+    }
+}
+
+/// Asks whether packages sharing a version should release with a fixed version, when the
+/// answer would change the plan. Returns the fixed version plan when accepted.
+fn prompt_fixed_version(
+    config: &Config,
+    plan: &ReleasePlan,
+    fixed_plan: impl FnOnce() -> AppResult<ReleasePlan>,
+) -> AppResult<Option<ReleasePlan>> {
+    let Some(version) = plan.shared_current_version() else {
+        return Ok(None);
+    };
+    let fixed_plan = fixed_plan()?;
+    // The forced selection can still change with --interactive, so the answer may matter later.
+    if !config.interactive && release_versions(plan) == release_versions(&fixed_plan) {
+        return Ok(None);
+    }
+    let question = format!(
+        "All {} packages are at version {version}. Release them with a fixed version (--fixed-version)?",
+        plan.current_versions.len()
+    );
+    if confirm(&question, &mut io::stdin().lock(), &mut io::stderr())? {
+        Ok(Some(fixed_plan))
+    } else {
+        Ok(None)
+    }
+}
+
+fn print_bump_preview(input: &PreviewInput) -> AppResult<()> {
+    let preview = collect_bump_preview(input)?;
+    let no_color = env::var_os("NO_COLOR");
+    let term = env::var_os("TERM");
+    let color = preview_colors_enabled(
+        io::stdout().is_terminal(),
+        no_color.as_deref(),
+        term.as_deref(),
+    );
+    print!("{}", render_bump_preview(input.plan, &preview, color));
+    io::stdout()
+        .flush()
+        .map_err(|e| format!("failed to write preview: {e}"))
+}
+
+fn bump_releases(
+    repo: &Repository,
+    input: &PreviewInput,
+    ignored_directories: &[PathBuf],
+) -> AppResult<()> {
+    for release in input.plan.releases.values() {
+        bump_release_targets(
+            repo,
+            input.repo_root,
+            release,
+            input.targets,
+            input.known_packages,
+            ignored_directories,
+        )?;
+        bump_package_files(repo, input.repo_root, release, input.tracked_paths)?;
+    }
+    Ok(())
+}
+
+fn propagate_dependency_updates(
+    repo: &Repository,
+    repo_root: &Path,
+    plan: &ReleasePlan,
+) -> AppResult<()> {
+    let version_bumps = plan.version_bumps();
+    if version_bumps.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "propagating version bumps for {} package(s) to package.json, package-lock.json, Cargo.toml and Cargo.lock dependencies...",
+        version_bumps.len()
+    );
+    for relative in plan.dependency_files.keys() {
+        let file = repo_root.join(relative);
+        match apply_dependency_update(&file, &version_bumps) {
+            Ok(DependencyUpdate::Changed(_)) => {
+                println!("updated dependencies in {}", file.display());
+                stage_path(repo, repo_root, &file)?;
+            }
+            Ok(DependencyUpdate::Unchanged | DependencyUpdate::Unhandled) => {}
+            Err(e) => eprintln!("warning: {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn commit_tag_and_push(repo: &Repository, config: &Config, plan: &ReleasePlan) -> AppResult<()> {
+    if !config.commit {
+        println!("skipping commit");
+    } else if staged_files(repo)?.is_empty() {
+        println!("no changes to commit");
+    } else {
+        let message = commit_message(plan.releases.values());
+        git_commit(repo, &message)?;
+    }
+
+    let tags = plan
+        .releases
+        .values()
+        .map(|release| release.tag.clone())
+        .collect::<Vec<_>>();
+    if config.tag {
+        let message = release_message(plan.releases.values());
+        for tag in &tags {
+            git_tag(repo, tag, &message)?;
+        }
+    } else {
+        println!("skipping tag");
+    }
+
+    if config.push {
+        let branch = current_branch(repo)?;
+        git_push(repo, &branch, if config.tag { &tags } else { &[] })?;
+    } else {
+        println!("skipping push");
+    }
+
+    Ok(())
+}
+
+fn run() -> AppResult<()> {
+    let mut config = load_config()?;
+    let repo = open_repository()?;
     let repo_root = fs::canonicalize(repo_root(&repo)?)
         .map_err(|e| format!("failed to resolve repository root: {e}"))?;
     let ignored_directories =
@@ -139,61 +372,16 @@ fn run() -> AppResult<()> {
         .paths
         .extend(known_packages.values().map(|package| package.root.clone()));
     let tracked_paths = tracked_files.iter().cloned().collect::<HashSet<_>>();
-    let mut packages = BTreeMap::<PathBuf, Package>::new();
-    let mut selected_packages = HashSet::<PathBuf>::new();
-    let mut target_paths = HashSet::<PathBuf>::new();
-    let mut targets = Vec::new();
-    for path in &config.paths {
-        let absolute = if path.is_absolute() {
-            path.clone()
-        } else {
-            repo_root.join(path)
-        };
-
-        if !absolute.exists() {
-            eprintln!(
-                "warning: file or directory not found: {}",
-                absolute.display()
-            );
-            continue;
-        }
-
-        let absolute = fs::canonicalize(&absolute)
-            .map_err(|e| format!("failed to resolve '{}': {e}", absolute.display()))?;
-        let relative = absolute.strip_prefix(&repo_root).map_err(|_| {
-            format!(
-                "path '{}' is outside repository root '{}'",
-                absolute.display(),
-                repo_root.display()
-            )
-        })?;
-        if git_ops::is_ignored_path(relative, &ignored_directories) {
-            eprintln!("warning: ignoring selected path: {}", absolute.display());
-            continue;
-        }
-        if !target_paths.insert(absolute.clone()) {
-            continue;
-        }
-
-        let hierarchy = resolve_known_package_hierarchy(&repo_root, &absolute, &known_packages)?;
-        let selected = hierarchy
-            .first()
-            .expect("package hierarchy always contains the repository root")
-            .path
-            .clone();
-        selected_packages.insert(selected.clone());
-        targets.push(Target {
-            path: absolute,
-            package_path: selected,
-        });
-        for package in hierarchy {
-            packages.entry(package.path.clone()).or_insert(package);
-        }
-    }
-
-    if targets.is_empty() {
-        return Err("no valid files or directories were selected".to_string());
-    }
+    let Selection {
+        packages,
+        selected_packages,
+        targets,
+    } = select_targets(
+        &repo_root,
+        &config.paths,
+        &ignored_directories,
+        &known_packages,
+    )?;
 
     let mut forced_packages =
         resolve_forced_packages(&repo_root, &config, &known_packages, &selected_packages)?;
@@ -223,152 +411,47 @@ fn run() -> AppResult<()> {
     let mut plan = plan_releases(&forced_packages, fixed_version)?;
     if config.fixed_version.is_none()
         && io::stdin().is_terminal()
-        && let Some(version) = plan.shared_current_version()
+        && let Some(fixed_plan) =
+            prompt_fixed_version(&config, &plan, || plan_releases(&forced_packages, true))?
     {
-        let fixed_plan = plan_releases(&forced_packages, true)?;
-        // The forced selection can still change with --interactive, so the answer may matter later.
-        if config.interactive || release_versions(&plan) != release_versions(&fixed_plan) {
-            let question = format!(
-                "All {} packages are at version {version}. Release them with a fixed version (--fixed-version)?",
-                plan.current_versions.len()
-            );
-            if confirm(&question, &mut io::stdin().lock(), &mut io::stderr())? {
-                fixed_version = true;
-                plan = fixed_plan;
-            }
-        }
+        fixed_version = true;
+        plan = fixed_plan;
     }
     if config.interactive {
         let unforced = plan_releases(&HashSet::new(), fixed_version)?;
-        let (choices, defaults) = package_choices(&packages, &unforced, &forced_packages);
-        let message = format!(
-            "Select packages to force a {} bump:",
-            config.force_bump_type.as_str()
-        );
-        match MultiSelect::new(&message, choices)
-            .with_default(&defaults)
-            .with_formatter(&|chosen| {
-                if chosen.is_empty() {
-                    return "none".to_string();
-                }
-                chosen
-                    .iter()
-                    .map(|choice| package_label(&choice.value.path))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .prompt()
-        {
-            Ok(chosen) => {
-                forced_packages = chosen.into_iter().map(|choice| choice.path).collect();
-            }
-            Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
-                println!("aborted");
-                return Ok(());
-            }
-            Err(e) => return Err(format!("failed to select packages: {e}")),
-        }
+        let Some(chosen) = prompt_forced_packages(&config, &packages, &unforced, &forced_packages)?
+        else {
+            println!("aborted");
+            return Ok(());
+        };
+        forced_packages = chosen;
         plan = plan_releases(&forced_packages, fixed_version)?;
     }
+    print_skipped_packages(&plan.skipped_packages);
     if plan.releases.is_empty() {
-        print_skipped_packages(&plan.skipped_packages);
         println!("no new impactful commits for the selected packages");
         return Ok(());
     }
 
-    print_skipped_packages(&plan.skipped_packages);
-
-    let preview = collect_bump_preview(PreviewInput {
+    let release_input = PreviewInput {
         repo_root: &repo_root,
         plan: &plan,
         targets: &targets,
         known_packages: &known_packages,
         tracked_files: &tracked_files,
         tracked_paths: &tracked_paths,
-    })?;
-    let no_color = env::var_os("NO_COLOR");
-    let term = env::var_os("TERM");
-    let color = preview_colors_enabled(
-        io::stdout().is_terminal(),
-        no_color.as_deref(),
-        term.as_deref(),
-    );
-    print!("{}", render_bump_preview(&plan, &preview, color));
-    io::stdout()
-        .flush()
-        .map_err(|e| format!("failed to write preview: {e}"))?;
+    };
+    print_bump_preview(&release_input)?;
 
     let stdin = io::stdin();
-    let interactive = stdin.is_terminal();
-    let mut input = stdin.lock();
-    let mut output = io::stderr();
-    if !confirm_bump(interactive, &mut input, &mut output)? {
+    if !confirm_bump(stdin.is_terminal(), &mut stdin.lock(), &mut io::stderr())? {
         println!("aborted");
         return Ok(());
     }
 
-    for release in plan.releases.values() {
-        bump_release_targets(
-            &repo,
-            &repo_root,
-            release,
-            &targets,
-            &known_packages,
-            &ignored_directories,
-        )?;
-        bump_package_files(&repo, &repo_root, release, &tracked_paths)?;
-    }
-
-    let version_bumps = plan.version_bumps();
-    if !version_bumps.is_empty() {
-        println!(
-            "propagating version bumps for {} package(s) to package.json, package-lock.json, Cargo.toml and Cargo.lock dependencies...",
-            version_bumps.len()
-        );
-        for relative in plan.dependency_files.keys() {
-            let file = repo_root.join(relative);
-            match apply_dependency_update(&file, &version_bumps) {
-                Ok(DependencyUpdate::Changed(_)) => {
-                    println!("updated dependencies in {}", file.display());
-                    stage_path(&repo, &repo_root, &file)?;
-                }
-                Ok(DependencyUpdate::Unchanged | DependencyUpdate::Unhandled) => {}
-                Err(e) => eprintln!("warning: {e}"),
-            }
-        }
-    }
-
-    if !config.commit {
-        println!("skipping commit");
-    } else if staged_files(&repo)?.is_empty() {
-        println!("no changes to commit");
-    } else {
-        let message = commit_message(plan.releases.values());
-        git_commit(&repo, &message)?;
-    }
-
-    let tags = plan
-        .releases
-        .values()
-        .map(|release| release.tag.clone())
-        .collect::<Vec<_>>();
-    if !config.tag {
-        println!("skipping tag");
-    } else {
-        let message = release_message(plan.releases.values());
-        for tag in &tags {
-            git_tag(&repo, tag, &message)?;
-        }
-    }
-
-    if !config.push {
-        println!("skipping push");
-    } else {
-        let branch = current_branch(&repo)?;
-        git_push(&repo, &branch, if config.tag { &tags } else { &[] })?;
-    }
-
-    Ok(())
+    bump_releases(&repo, &release_input, &ignored_directories)?;
+    propagate_dependency_updates(&repo, &repo_root, &plan)?;
+    commit_tag_and_push(&repo, &config, &plan)
 }
 
 /// Resolves `--force` and `--force-package` into the set of package paths to force.

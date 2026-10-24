@@ -32,30 +32,32 @@
         # nix develop [#...]
         devShells = {
           default = pkgs.mkShell {
-            RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
             shellHook = pkgs.shellhook.ref;
+            env.RUST_SRC_PATH = pkgs.rustPlatform.rustLibSrc;
             packages = with pkgs; [
               # rust
               rustc
               cargo
+              rust-analyzer
+              rustfmt
+              clippy
+              cargo-audit
 
               # deps
               openssl
               pkg-config
 
-              # lint
-              clippy
-              cargo-audit
-              nixd
-              nil
+              vscode-json-languageserver # json
+              yaml-language-server # yaml
+              tombi # toml
+              oxfmt # format
 
-              # format
-              rustfmt
+              # nix
+              nixd
               nixfmt
-              oxfmt
-              treefmt
 
               # util
+              treefmt
               bumper
               fix-hash
             ];
@@ -95,15 +97,9 @@
           };
         };
 
-        # nix run [#...]
-        apps = pkgs.mkApps {
-          dev = "cargo run";
-          test = "cargo test";
-        };
-
         # nix build [#...]
         packages = {
-          default = pkgs.rustPlatform.buildRustPackage (
+          default = pkgs.mkRustPackage (
             final: with pkgs.lib; {
               pname = "bumper";
               version = "0.33.0";
@@ -113,6 +109,7 @@
                 fileset = fileset.unions [
                   ./Cargo.lock
                   ./Cargo.toml
+                  ./clippy.toml
                   ./LICENSE
                   ./README.md
                   ./src
@@ -133,10 +130,27 @@
                 openssl
               ];
 
-              doCheck = true;
-
               checkPhase = ''
+                runHook preCheck
                 cargo test --offline
+                runHook postCheck
+              '';
+
+              # also check the dependencies for clippy, the lints run in the rust-lint flake check
+              cargoArtifactsArgs = {
+                nativeCheckInputs = with pkgs; [ clippy ];
+                checkPhase = ''
+                  runHook preCheck
+                  cargo test --offline
+                  cargo clippy --offline --all-targets
+                  runHook postCheck
+                '';
+              };
+
+              installCheckPhase = ''
+                runHook preInstallCheck
+                test "$("$out/bin/bumper" --version)" = "bumper ${final.version}"
+                runHook postInstallCheck
               '';
 
               meta = {
@@ -172,6 +186,20 @@
 
         # nix flake check
         checks = pkgs.mkChecks {
+          inherit (self.packages.${system}) default;
+
+          rust-lint = {
+            src = self.packages.${system}.default;
+            packages = with pkgs; [
+              rustfmt
+              clippy
+            ];
+            script = ''
+              cargo fmt --check
+              cargo clippy --offline --all-targets -- -D warnings
+            '';
+          };
+
           nix = {
             root = ./.;
             filter = file: file.hasExt "nix";
@@ -190,7 +218,7 @@
               action-validator
               zizmor
             ];
-            forEach = ''
+            script = ''
               action-validator "$file"
               zizmor --offline "$file"
             '';
@@ -200,14 +228,16 @@
             root = ./.forgejo/workflows;
             filter = file: file.hasExt "yaml";
             packages = with pkgs; [
+              forgejo-runner
               zizmor
             ];
-            forEach = ''
+            script = ''
+              forgejo-runner validate --workflow --path "$file"
               zizmor --offline "$file"
             '';
           };
 
-          renovate = {
+          renovate-fj = {
             root = ./.forgejo;
             files = ./.forgejo/renovate.json;
             packages = with pkgs; [
@@ -215,16 +245,6 @@
             ];
             script = ''
               renovate-config-validator renovate.json
-            '';
-          };
-
-          rust = {
-            src = self.packages.${system}.default;
-            packages = with pkgs; [
-              clippy
-            ];
-            script = ''
-              cargo clippy --offline --all-targets -- -D warnings
             '';
           };
 
