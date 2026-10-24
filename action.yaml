@@ -37,7 +37,7 @@ inputs:
     required: false
     default: "true"
   force:
-    description: force a bump for every discovered package
+    description: force a bump for every discovered package, except unversioned (untagged 0.0.0) packages
     required: false
   force_packages:
     description: repository-relative package directories to force a bump for

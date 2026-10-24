@@ -5,7 +5,7 @@ mod preview;
 mod release_plan;
 mod versioning;
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fmt;
@@ -27,8 +27,9 @@ use git_ops::{
 use model::{AppResult, Config};
 use preview::{PreviewInput, collect_bump_preview, preview_colors_enabled, render_bump_preview};
 use release_plan::{
-    PlanInput, Release, ReleasePlan, build_release_plan, commit_message, package_files,
-    package_label, release_message, resolve_known_package_hierarchy, resolve_known_package_owner,
+    PlanInput, Release, ReleasePlan, SkipReason, build_release_plan, commit_message,
+    is_unversioned_package, package_files, package_label, release_message,
+    resolve_known_package_hierarchy, resolve_known_package_owner,
 };
 
 #[derive(Debug)]
@@ -383,8 +384,14 @@ fn run() -> AppResult<()> {
         &known_packages,
     )?;
 
-    let mut forced_packages =
-        resolve_forced_packages(&repo_root, &config, &known_packages, &selected_packages)?;
+    let unversioned_packages = unversioned_packages(&repo, &known_packages)?;
+    let mut forced_packages = resolve_forced_packages(
+        &repo_root,
+        &config,
+        &known_packages,
+        &selected_packages,
+        &unversioned_packages,
+    )?;
 
     if config.interactive && (!io::stdin().is_terminal() || !io::stderr().is_terminal()) {
         return Err("--interactive requires a terminal".to_string());
@@ -454,15 +461,35 @@ fn run() -> AppResult<()> {
     commit_tag_and_push(&repo, &config, &plan)
 }
 
+/// The packages that only release when forced by name.
+fn unversioned_packages(
+    repo: &Repository,
+    known_packages: &BTreeMap<PathBuf, Package>,
+) -> AppResult<HashSet<PathBuf>> {
+    let mut unversioned = HashSet::new();
+    for package in known_packages.values() {
+        if is_unversioned_package(repo, package, known_packages)? {
+            unversioned.insert(package.path.clone());
+        }
+    }
+    Ok(unversioned)
+}
+
 /// Resolves `--force` and `--force-package` into the set of package paths to force.
+///
+/// `--force` leaves unversioned packages alone; only `--force-package` starts their releases.
 fn resolve_forced_packages(
     repo_root: &Path,
     config: &Config,
     known_packages: &BTreeMap<PathBuf, Package>,
     selected_packages: &HashSet<PathBuf>,
+    unversioned_packages: &HashSet<PathBuf>,
 ) -> AppResult<HashSet<PathBuf>> {
     let mut forced = if config.force {
-        selected_packages.clone()
+        selected_packages
+            .difference(unversioned_packages)
+            .cloned()
+            .collect()
     } else {
         HashSet::new()
     };
@@ -517,6 +544,9 @@ fn package_choices(
                     release.new_version,
                     release.impact.as_str()
                 ),
+                None if unforced.skipped_packages.get(path) == Some(&SkipReason::Unversioned) => {
+                    "unversioned".to_string()
+                }
                 None => "no changes".to_string(),
             };
             PackageChoice {
@@ -534,9 +564,14 @@ fn package_choices(
     (choices, defaults)
 }
 
-fn print_skipped_packages(skipped_packages: &BTreeSet<PathBuf>) {
-    for path in skipped_packages {
-        println!("{}: (skipped)", package_label(path));
+fn print_skipped_packages(skipped_packages: &BTreeMap<PathBuf, SkipReason>) {
+    for (path, reason) in skipped_packages {
+        match reason {
+            SkipReason::NoChanges => println!("{}: (skipped)", package_label(path)),
+            SkipReason::Unversioned => {
+                println!("{}: (skipped, unversioned 0.0.0)", package_label(path));
+            }
+        }
     }
 }
 
@@ -914,6 +949,7 @@ mod tests {
             &config_forcing(false, &[".", "packages/app/"]),
             &known,
             &selected,
+            &HashSet::new(),
         )
         .expect("resolve forced packages");
         assert_eq!(
@@ -921,16 +957,45 @@ mod tests {
             HashSet::from([PathBuf::new(), PathBuf::from("packages/app")])
         );
 
-        let all =
-            resolve_forced_packages(&repo_root, &config_forcing(true, &[]), &known, &selected)
-                .expect("resolve forced packages");
+        let all = resolve_forced_packages(
+            &repo_root,
+            &config_forcing(true, &[]),
+            &known,
+            &selected,
+            &HashSet::new(),
+        )
+        .expect("resolve forced packages");
         assert_eq!(all, selected);
+
+        let unversioned = HashSet::from([PathBuf::from("packages/lib")]);
+        let versioned = resolve_forced_packages(
+            &repo_root,
+            &config_forcing(true, &[]),
+            &known,
+            &selected,
+            &unversioned,
+        )
+        .expect("resolve forced packages");
+        assert_eq!(
+            versioned,
+            HashSet::from([PathBuf::new(), PathBuf::from("packages/app")])
+        );
+        let named = resolve_forced_packages(
+            &repo_root,
+            &config_forcing(true, &["packages/lib"]),
+            &known,
+            &selected,
+            &unversioned,
+        )
+        .expect("resolve forced packages");
+        assert_eq!(named, selected);
 
         let error = resolve_forced_packages(
             &repo_root,
             &config_forcing(false, &["packages"]),
             &known,
             &selected,
+            &HashSet::new(),
         )
         .expect_err("reject grouping directory");
         assert_eq!(
@@ -961,7 +1026,10 @@ mod tests {
         app.impact = crate::model::Impact::Minor;
         let unforced = ReleasePlan {
             releases: BTreeMap::from([(PathBuf::from("packages/app"), app)]),
-            skipped_packages: BTreeSet::new(),
+            skipped_packages: BTreeMap::from([
+                (PathBuf::new(), SkipReason::NoChanges),
+                (PathBuf::from("packages/lib"), SkipReason::Unversioned),
+            ]),
             named_bumps: BTreeMap::new(),
             dependency_files: BTreeMap::new(),
             current_versions: BTreeMap::new(),
@@ -978,7 +1046,7 @@ mod tests {
             vec![
                 "root (no changes)",
                 "packages/app (2.0.0 -> 2.1.0, minor)",
-                "packages/lib (no changes)",
+                "packages/lib (unversioned)",
             ]
         );
         assert_eq!(defaults, vec![2]);

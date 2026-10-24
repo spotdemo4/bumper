@@ -72,10 +72,18 @@ pub struct DependencyFilePlan {
     pub dependencies: BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
+/// Why a selected package does not release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkipReason {
+    NoChanges,
+    /// An untagged package at version 0.0.0, which only releases when forced by name.
+    Unversioned,
+}
+
 #[derive(Debug)]
 pub struct ReleasePlan {
     pub releases: BTreeMap<PathBuf, Release>,
-    pub skipped_packages: BTreeSet<PathBuf>,
+    pub skipped_packages: BTreeMap<PathBuf, SkipReason>,
     pub named_bumps: BTreeMap<String, NamedPackageBump>,
     pub dependency_files: BTreeMap<PathBuf, DependencyFilePlan>,
     pub current_versions: BTreeMap<PathBuf, String>,
@@ -102,7 +110,18 @@ struct ReleaseBase {
     last_tag: String,
     version: String,
     commit: Option<Oid>,
+    /// Whether the package has a tag of its own rather than a manifest or inherited version.
+    tagged: bool,
 }
+
+impl ReleaseBase {
+    fn is_unversioned(&self, path: &Path) -> bool {
+        !path.as_os_str().is_empty() && !self.tagged && self.version == UNVERSIONED
+    }
+}
+
+/// The version of a package that has not started releasing.
+const UNVERSIONED: &str = "0.0.0";
 
 struct PackageState {
     package: Package,
@@ -111,6 +130,18 @@ struct PackageState {
     /// The version bumped to produce the release, when it differs from `base.version`.
     shared_version: Option<String>,
     reasons: ReleaseReasons,
+    /// Never releases, though its reasons are still recorded for its dependency files.
+    unversioned: bool,
+}
+
+impl PackageState {
+    fn impact(&self) -> Option<Impact> {
+        if self.unversioned {
+            None
+        } else {
+            self.reasons.impact()
+        }
+    }
 }
 
 pub struct PlanInput<'a> {
@@ -138,9 +169,25 @@ pub fn build_release_plan(mut input: PlanInput<'_>) -> AppResult<ReleasePlan> {
             nearest_parent(path, &package_paths).map(|parent| (path.clone(), parent.clone()))
         })
         .collect::<BTreeMap<_, _>>();
+    let mut bases = BTreeMap::new();
+    for (path, package) in input.known_packages {
+        bases.insert(
+            path.clone(),
+            resolve_release_base(input.repo, package, input.known_packages)?,
+        );
+    }
+    // forcing a package by name starts its releases, so it claims its own commits again
+    let unversioned = bases
+        .iter()
+        .filter(|(path, base)| !input.forced_packages.contains(*path) && base.is_unversioned(path))
+        .map(|(path, _)| path.clone())
+        .collect::<HashSet<_>>();
     let mut states = BTreeMap::new();
     for (path, package) in std::mem::take(&mut input.packages) {
-        let state = package_state(&input, &path, package)?;
+        let base = bases
+            .remove(&path)
+            .ok_or_else(|| format!("{} is not a known package", package_label(&path)))?;
+        let state = package_state(&input, &path, package, base, &unversioned)?;
         states.insert(path, state);
     }
 
@@ -162,14 +209,20 @@ pub fn build_release_plan(mut input: PlanInput<'_>) -> AppResult<ReleasePlan> {
     let releases = materialize_releases(&states)?;
     let skipped_packages = states
         .iter()
-        .filter(|(path, state)| {
-            input.selected_packages.contains(*path) && state.reasons.impact().is_none()
+        .filter(|(path, state)| input.selected_packages.contains(*path) && state.impact().is_none())
+        .map(|(path, state)| {
+            let reason = if state.unversioned {
+                SkipReason::Unversioned
+            } else {
+                SkipReason::NoChanges
+            };
+            (path.clone(), reason)
         })
-        .map(|(path, _)| path.clone())
         .collect();
     let named_bumps = named_package_bumps(&states)?;
     let current_versions = states
         .iter()
+        .filter(|(_, state)| !state.unversioned)
         .map(|(path, state)| (path.clone(), state.base.version.clone()))
         .collect();
 
@@ -182,31 +235,43 @@ pub fn build_release_plan(mut input: PlanInput<'_>) -> AppResult<ReleasePlan> {
     })
 }
 
-fn package_state(input: &PlanInput<'_>, path: &Path, package: Package) -> AppResult<PackageState> {
-    let base = resolve_release_base(input.repo, &package, input.known_packages)?;
+/// Builds a package's release state. Unversioned packages never release, so their commits
+/// count for their nearest versioned ancestor instead.
+fn package_state(
+    input: &PlanInput<'_>,
+    path: &Path,
+    package: Package,
+    base: ReleaseBase,
+    unversioned: &HashSet<PathBuf>,
+) -> AppResult<PackageState> {
+    let is_unversioned = unversioned.contains(path);
     let child_paths = input
         .known_packages
         .keys()
-        .filter(|child| *child != path && is_package_ancestor(path, child))
+        .filter(|child| {
+            *child != path && is_package_ancestor(path, child) && !unversioned.contains(*child)
+        })
         .cloned()
         .collect::<Vec<_>>();
-    let direct = get_impact_for_package(
-        input.repo,
-        base.commit,
-        path,
-        &child_paths,
-        &ImpactConfig {
-            major_types: &input.config.major_types,
-            minor_types: &input.config.minor_types,
-            patch_types: &input.config.patch_types,
-            skip_scopes: &input.config.skip_scopes,
-            ignored_directories: input.ignored_directories,
-            impact_paths: input
-                .package_impact_paths
-                .get(path)
-                .map_or(&[], Vec::as_slice),
-        },
-    )?;
+    let impact_paths = owned_impact_paths(input, path, unversioned);
+    let direct = if is_unversioned {
+        None
+    } else {
+        get_impact_for_package(
+            input.repo,
+            base.commit,
+            path,
+            &child_paths,
+            &ImpactConfig {
+                major_types: &input.config.major_types,
+                minor_types: &input.config.minor_types,
+                patch_types: &input.config.patch_types,
+                skip_scopes: &input.config.skip_scopes,
+                ignored_directories: input.ignored_directories,
+                impact_paths: &impact_paths,
+            },
+        )?
+    };
     let (direct, overridden) = override_impact(direct, input.config.bump_type);
     let forced = input
         .forced_packages
@@ -227,7 +292,41 @@ fn package_state(input: &PlanInput<'_>, path: &Path, package: Package) -> AppRes
             forced,
             ..ReleaseReasons::default()
         },
+        unversioned: is_unversioned,
     })
+}
+
+/// The impact paths of `path` and of the unversioned packages whose commits it owns.
+fn owned_impact_paths(
+    input: &PlanInput<'_>,
+    path: &Path,
+    unversioned: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let versioned = input
+        .known_packages
+        .keys()
+        .filter(|package| !unversioned.contains(*package))
+        .cloned()
+        .collect::<Vec<_>>();
+    input
+        .package_impact_paths
+        .iter()
+        .filter(|(owner, _)| {
+            *owner == path
+                || (unversioned.contains(*owner)
+                    && nearest_parent(owner, &versioned).is_some_and(|parent| parent == path))
+        })
+        .flat_map(|(_, paths)| paths.iter().cloned())
+        .collect()
+}
+
+/// Whether `package` is untagged at version 0.0.0, so it only releases when forced by name.
+pub fn is_unversioned_package(
+    repo: &Repository,
+    package: &Package,
+    known_packages: &BTreeMap<PathBuf, Package>,
+) -> AppResult<bool> {
+    Ok(resolve_release_base(repo, package, known_packages)?.is_unversioned(&package.path))
 }
 
 /// Releases packages whose dependencies on other bumped packages change, until no
@@ -325,7 +424,7 @@ fn override_impact(
 fn active_package_count(states: &BTreeMap<PathBuf, PackageState>) -> usize {
     states
         .values()
-        .filter(|state| state.reasons.impact().is_some())
+        .filter(|state| state.impact().is_some())
         .count()
 }
 
@@ -333,7 +432,11 @@ fn active_package_count(states: &BTreeMap<PathBuf, PackageState>) -> usize {
 ///
 /// The shared version bumps the highest current version so no package ever moves backwards.
 fn apply_fixed_version(states: &mut BTreeMap<PathBuf, PackageState>) -> AppResult<()> {
-    let own_impact = |state: &PackageState| state.reasons.direct.max(state.reasons.forced);
+    let own_impact = |state: &PackageState| {
+        (!state.unversioned)
+            .then_some(state.reasons.direct.max(state.reasons.forced))
+            .flatten()
+    };
     let Some(impact) = states.values().filter_map(own_impact).max() else {
         return Ok(());
     };
@@ -344,6 +447,7 @@ fn apply_fixed_version(states: &mut BTreeMap<PathBuf, PackageState>) -> AppResul
         .collect::<BTreeSet<_>>();
     let Some(shared_version) = states
         .values()
+        .filter(|state| !state.unversioned)
         .map(|state| parse_version(&state.base.version).map(|version| (version, state)))
         .collect::<AppResult<Vec<_>>>()?
         .into_iter()
@@ -353,7 +457,7 @@ fn apply_fixed_version(states: &mut BTreeMap<PathBuf, PackageState>) -> AppResul
         return Ok(());
     };
 
-    for state in states.values_mut() {
+    for state in states.values_mut().filter(|state| !state.unversioned) {
         state.shared_version = Some(shared_version.clone());
         if own_impact(state) != Some(impact) {
             state.reasons.fixed = Some(FixedCause {
@@ -381,11 +485,7 @@ fn propagate_descendants(
     parents: &BTreeMap<PathBuf, PathBuf>,
 ) {
     for path in deepest_first {
-        if states
-            .get(path)
-            .and_then(|state| state.reasons.impact())
-            .is_none()
-        {
+        if states.get(path).and_then(PackageState::impact).is_none() {
             continue;
         }
         if let Some(parent) = parents.get(path)
@@ -402,7 +502,7 @@ fn materialize_releases(
     states
         .iter()
         .filter_map(|(path, state)| {
-            state.reasons.impact().map(|impact| {
+            state.impact().map(|impact| {
                 let new_version = planned_version(state, impact)?;
                 let tag = tag_name(path, &new_version)?;
                 Ok((
@@ -427,7 +527,7 @@ fn named_package_bumps(
 ) -> AppResult<BTreeMap<String, NamedPackageBump>> {
     let mut bumped = BTreeMap::new();
     for (path, state) in states {
-        let Some(impact) = state.reasons.impact() else {
+        let Some(impact) = state.impact() else {
             continue;
         };
         let new_version = planned_version(state, impact)?;
@@ -577,6 +677,7 @@ fn resolve_release_base(
             version: version_from_tag(&last_tag)?.to_string(),
             last_tag,
             commit: Some(commit),
+            tagged: true,
         });
     }
 
@@ -601,6 +702,7 @@ fn resolve_release_base(
         last_tag,
         version,
         commit,
+        tagged: false,
     })
 }
 
@@ -713,16 +815,18 @@ mod tests {
                 last_tag: String::new(),
                 version: "1.0.0".to_string(),
                 commit: None,
+                tagged: true,
             },
             shared_version: None,
             reasons,
+            unversioned: false,
         }
     }
 
     fn plan_with_versions(versions: &[(&str, &str)]) -> ReleasePlan {
         ReleasePlan {
             releases: BTreeMap::new(),
-            skipped_packages: BTreeSet::new(),
+            skipped_packages: BTreeMap::new(),
             named_bumps: BTreeMap::new(),
             dependency_files: BTreeMap::new(),
             current_versions: versions

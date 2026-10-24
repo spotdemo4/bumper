@@ -492,7 +492,7 @@ mod tests {
                     },
                 ),
             ]),
-            skipped_packages: BTreeSet::new(),
+            skipped_packages: BTreeMap::new(),
             named_bumps: BTreeMap::from([(
                 "library".to_string(),
                 NamedPackageBump {
@@ -565,7 +565,7 @@ mod tests {
                     },
                 ),
             )]),
-            skipped_packages: BTreeSet::new(),
+            skipped_packages: BTreeMap::new(),
             named_bumps: BTreeMap::new(),
             dependency_files: BTreeMap::new(),
             current_versions: BTreeMap::new(),

@@ -1493,3 +1493,221 @@ fn dependency_propagation_tree_shows_each_immediate_hop() {
     assert!(cli.contains("\"app\": \"3.0.1\""));
     assert!(repo.statuses(None).expect("read status").is_empty());
 }
+
+fn unversioned_fixture(name: &str) -> (TempDir, TempDir, Repository) {
+    let local = TempDir::new(&format!("{name}-local"));
+    let remote = TempDir::new(&format!("{name}-remote"));
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("packages/library")).expect("create library");
+    fs::create_dir_all(local.path().join("packages/web")).expect("create web");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("packages/library/package.json"),
+        "{\n  \"name\": \"library\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write library manifest");
+    fs::write(
+        local.path().join("packages/web/package.json"),
+        "{\n  \"name\": \"web\",\n  \"version\": \"0.0.0\",\n  \"dependencies\": {\"library\": \"1.0.0\"}\n}\n",
+    )
+    .expect("write web manifest");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/library/v1.0.0", baseline);
+    fs::write(local.path().join("packages/library/index.js"), "library\n")
+        .expect("write library source");
+    fs::write(local.path().join("packages/web/index.js"), "web\n").expect("write web source");
+    commit_all(&repo, "feat: add sources");
+    (local, remote, repo)
+}
+
+fn run_unversioned(local: &TempDir, args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .env_remove("FORCE")
+        .env_remove("FORCE_PACKAGES")
+        .env_remove("FIXED_VERSION")
+        .args(["--no-push"])
+        .args(args)
+        .output()
+        .expect("run bumper");
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn untagged_zero_version_package_is_skipped_but_keeps_dependencies_current() {
+    for (name, args) in [
+        ("unversioned-default", &[][..]),
+        ("unversioned-force", &["--force"][..]),
+        ("unversioned-fixed", &["--fixed-version"][..]),
+    ] {
+        let (local, _remote, repo) = unversioned_fixture(name);
+        let stdout = run_unversioned(&local, args);
+
+        assert!(
+            stdout.contains("packages/web: (skipped, unversioned 0.0.0)"),
+            "{name}: {stdout}"
+        );
+        assert!(
+            stdout.contains("library (1.0.0 -> 1.1.0, minor)"),
+            "{name}: {stdout}"
+        );
+        let web = fs::read_to_string(local.path().join("packages/web/package.json"))
+            .expect("read web manifest");
+        assert!(web.contains("\"version\": \"0.0.0\""), "{name}: {web}");
+        assert!(web.contains("\"library\": \"1.1.0\""), "{name}: {web}");
+        assert!(
+            repo.find_reference("refs/tags/packages/web/v0.0.1")
+                .is_err()
+                && repo
+                    .find_reference("refs/tags/packages/web/v1.1.0")
+                    .is_err(),
+            "{name}: web was tagged"
+        );
+        assert!(repo.statuses(None).expect("read status").is_empty());
+    }
+}
+
+#[test]
+fn force_package_starts_releasing_an_unversioned_package() {
+    let (local, _remote, repo) = unversioned_fixture("unversioned-force-package");
+    let stdout = run_unversioned(&local, &["--force-package", "packages/web"]);
+
+    assert!(!stdout.contains("packages/web: (skipped"), "{stdout}");
+    assert!(stdout.contains("web (0.0.0 -> 0.1.0, minor)"), "{stdout}");
+    repo.revparse_single("refs/tags/packages/web/v0.1.0")
+        .expect("find web tag");
+    let web = fs::read_to_string(local.path().join("packages/web/package.json"))
+        .expect("read web manifest");
+    assert!(web.contains("\"version\": \"0.1.0\""), "{web}");
+}
+
+#[test]
+fn tagged_zero_version_package_releases_normally() {
+    let (local, _remote, repo) = unversioned_fixture("unversioned-tagged");
+    let head = repo
+        .head()
+        .expect("read head")
+        .target()
+        .expect("head commit");
+    tag(&repo, "packages/web/v0.0.0", head);
+    fs::write(local.path().join("packages/web/index.js"), "web fix\n").expect("update web");
+    commit_all(&repo, "fix: repair web");
+    let stdout = run_unversioned(&local, &[]);
+
+    assert!(stdout.contains("web (0.0.0 -> 0.0.1, patch)"), "{stdout}");
+    repo.revparse_single("refs/tags/packages/web/v0.0.1")
+        .expect("find web tag");
+}
+
+#[test]
+fn unversioned_package_commits_apply_to_its_parent() {
+    let (local, _remote, repo) = unversioned_fixture("unversioned-parent");
+    let head = repo
+        .head()
+        .expect("read head")
+        .target()
+        .expect("head commit");
+    tag(&repo, "v1.0.1", head);
+    tag(&repo, "packages/library/v1.1.0", head);
+    fs::create_dir_all(local.path().join("packages/web/nested")).expect("create nested package");
+    fs::write(
+        local.path().join("packages/web/nested/package.json"),
+        "{\n  \"name\": \"nested\",\n  \"version\": \"3.0.0\"\n}\n",
+    )
+    .expect("write nested manifest");
+    let nested = commit_all(&repo, "chore: add nested package");
+    tag(&repo, "packages/web/nested/v3.0.0", nested);
+    fs::write(local.path().join("packages/web/index.js"), "web feature\n").expect("update web");
+    commit_all(&repo, "feat: add web feature");
+    let stdout = run_unversioned(&local, &[]);
+
+    assert!(stdout.contains(". (1.0.1 -> 1.1.0, minor)"), "{stdout}");
+    assert!(stdout.contains("direct minor"), "{stdout}");
+    assert!(
+        stdout.contains("packages/web: (skipped, unversioned 0.0.0)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("packages/library: (skipped)"), "{stdout}");
+    assert!(
+        stdout.contains("packages/web/nested: (skipped)"),
+        "{stdout}"
+    );
+    repo.revparse_single("refs/tags/v1.1.0")
+        .expect("find root tag");
+    assert!(
+        repo.find_reference("refs/tags/packages/web/v0.1.0")
+            .is_err()
+    );
+
+    // once forced, the package claims its own commits and its parent only gets a patch
+    let (local, _remote, repo) = unversioned_fixture("unversioned-parent-forced");
+    let head = repo
+        .head()
+        .expect("read head")
+        .target()
+        .expect("head commit");
+    tag(&repo, "v1.0.1", head);
+    tag(&repo, "packages/library/v1.1.0", head);
+    fs::write(local.path().join("packages/web/index.js"), "web feature\n").expect("update web");
+    commit_all(&repo, "feat: add web feature");
+    let stdout = run_unversioned(&local, &["--force-package", "packages/web"]);
+
+    assert!(stdout.contains(". (1.0.1 -> 1.0.2, patch)"), "{stdout}");
+    assert!(stdout.contains("web (0.0.0 -> 0.1.0, minor)"), "{stdout}");
+}
+
+#[test]
+fn unversioned_package_impact_paths_apply_to_its_parent() {
+    let local = TempDir::new("unversioned-impact-local");
+    let remote = TempDir::new("unversioned-impact-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("packages/group/web")).expect("create web");
+    fs::create_dir_all(local.path().join("native")).expect("create native");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("packages/group/package.json"),
+        "{\n  \"name\": \"group\",\n  \"version\": \"2.0.0\"\n}\n",
+    )
+    .expect("write group manifest");
+    fs::write(
+        local.path().join("packages/group/web/package.json"),
+        "{\n  \"name\": \"web\",\n  \"version\": \"0.0.0\",\n  \"bumper\": {\"impactPaths\": [\"../../../native\"]}\n}\n",
+    )
+    .expect("write web manifest");
+    fs::write(local.path().join("native/lib.c"), "int x;\n").expect("write native source");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "packages/group/v2.0.0", baseline);
+    fs::write(local.path().join("native/lib.c"), "int y;\n").expect("update native source");
+    commit_all(&repo, "feat: extend native library");
+    let stdout = run_unversioned(&local, &[]);
+
+    assert!(stdout.contains("group (2.0.0 -> 2.1.0, minor)"), "{stdout}");
+    assert!(
+        stdout.contains("packages/group/web: (skipped, unversioned 0.0.0)"),
+        "{stdout}"
+    );
+    repo.revparse_single("refs/tags/packages/group/v2.1.0")
+        .expect("find group tag");
+}
