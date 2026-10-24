@@ -1,3 +1,8 @@
+// clippy.toml allows panics in `#[test]` functions, but not in the helpers
+// shared by these integration tests, which should fail the test just the same.
+// Test scenarios read top to bottom, so long ones aren't split up.
+#![allow(clippy::expect_used, clippy::too_many_lines)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -246,17 +251,16 @@ fn nested_force_fixture(name: &str) -> (TempDir, TempDir) {
 
 #[test]
 fn force_package_bumps_only_the_selected_package_and_its_ancestors() {
-    for (name, configure) in [
-        (
-            "force-package-cli",
-            (|command: &mut Command| {
-                command.args(["--force-package", "packages/app"]);
-            }) as fn(&mut Command),
-        ),
-        ("force-package-env", |command: &mut Command| {
+    type Configure = fn(&mut Command);
+    let cases: [(&str, Configure); 2] = [
+        ("force-package-cli", |command| {
+            command.args(["--force-package", "packages/app"]);
+        }),
+        ("force-package-env", |command| {
             command.env("FORCE_PACKAGES", "packages/app");
         }),
-    ] {
+    ];
+    for (name, configure) in cases {
         let (local, _remote) = nested_force_fixture(name);
         let mut command = Command::new(env!("CARGO_BIN_EXE_bumper"));
         command

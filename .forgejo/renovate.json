@@ -19,6 +19,18 @@
     "automerge": true,
     "schedule": ["* * * * 0"] // sunday
   },
+  "customManagers": [
+    {
+      // track the rustc in nixpkgs-unstable, which builds this project
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Cargo\\.toml$/"],
+      "matchStrings": ["rust-version\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+      "depNameTemplate": "rust",
+      "packageNameTemplate": "nix_unstable/rustc",
+      "datasourceTemplate": "repology",
+      "versioningTemplate": "semver"
+    }
+  ],
   "packageRules": [
     {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
@@ -34,6 +46,11 @@
     },
     {
       "matchManagers": ["cargo"],
+      "addLabels": ["rust"]
+    },
+    {
+      "matchManagers": ["custom.regex"],
+      "matchDepNames": ["rust"],
       "addLabels": ["rust"]
     }
   ]

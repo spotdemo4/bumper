@@ -12,6 +12,24 @@ license-file = "LICENSE"
 name = "bumper"
 path = "src/main.rs"
 
+[lints.clippy]
+# erm, actually
+pedantic = { level = "warn", priority = -1 }
+# deny panics
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+arithmetic_side_effects = "warn"
+unreachable = "warn"
+unimplemented = "warn"
+unchecked_time_subtraction = "warn"
+todo = "warn"
+string_slice = "warn"
+panic_in_result_fn = "warn"
+panic = "warn"
+exit = "warn"
+as_conversions = "warn"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 git2 = { version = "0.21.0", features = ["https", "ssh"] }

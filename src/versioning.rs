@@ -9,18 +9,22 @@ pub struct Version {
 
 pub fn next_version(current: &str, impact: Impact) -> AppResult<String> {
     let mut version = parse_version(current)?;
+    let increment = |part: u64| {
+        part.checked_add(1)
+            .ok_or_else(|| format!("version '{current}' is too large to bump"))
+    };
 
     match impact {
         Impact::Major => {
-            version.major += 1;
+            version.major = increment(version.major)?;
             version.minor = 0;
             version.patch = 0;
         }
         Impact::Minor => {
-            version.minor += 1;
+            version.minor = increment(version.minor)?;
             version.patch = 0;
         }
-        Impact::Patch => version.patch += 1,
+        Impact::Patch => version.patch = increment(version.patch)?,
     }
 
     Ok(version.to_string())

@@ -4,6 +4,8 @@ use std::str::FromStr;
 
 pub type AppResult<T> = Result<T, String>;
 
+// independent on/off settings from the command line flags
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct Config {
     pub paths: Vec<PathBuf>,

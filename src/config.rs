@@ -6,6 +6,8 @@ use clap::Parser;
 
 use crate::model::{AppResult, Config, Impact};
 
+// doc comments are the help text, and paired flags are bools
+#[allow(clippy::doc_markdown, clippy::struct_excessive_bools)]
 #[derive(Debug, Parser)]
 #[command(
     name = "bumper",
