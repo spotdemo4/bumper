@@ -102,7 +102,7 @@
           default = pkgs.mkRustPackage (
             final: with pkgs.lib; {
               pname = "bumper";
-              version = "0.33.0";
+              version = "0.34.0";
 
               src = fileset.toSource {
                 root = ./.;
