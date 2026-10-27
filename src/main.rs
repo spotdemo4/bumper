@@ -1304,7 +1304,7 @@ mod tests {
         let mut output = Vec::new();
 
         assert!(confirm_bump(false, &mut input, &mut output).expect("confirm bump"));
-        assert!(output.is_empty());
+        assert_eq!(output, b"");
         assert_eq!(input, b"n\n");
     }
 }
