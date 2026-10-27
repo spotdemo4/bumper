@@ -344,7 +344,7 @@ fn go_module_without_a_file_version_bumps_its_existing_package_tag() {
     repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
         .expect("add remote");
     fs::create_dir_all(local.path().join("packages/service")).expect("create Go module");
-    let go_mod = "module example.com/service\n\ngo 1.24\n";
+    let go_mod = "module example.com/service/v2\n\ngo 1.24\n";
     fs::write(local.path().join("packages/service/go.mod"), go_mod).expect("write go.mod");
     fs::write(
         local.path().join("packages/service/main.go"),
@@ -473,7 +473,7 @@ fn untagged_versionless_package_uses_nearest_parent_version() {
         "{\n  \"name\": \"parent\",\n  \"version\": \"2.3.4\"\n}\n",
     )
     .expect("write parent manifest");
-    let go_mod = "module example.com/service\n\ngo 1.24\n";
+    let go_mod = "module example.com/service/v2\n\ngo 1.24\n";
     fs::write(local.path().join("packages/parent/service/go.mod"), go_mod).expect("write go.mod");
     fs::write(
         local.path().join("packages/parent/service/main.go"),
@@ -1710,4 +1710,209 @@ fn unversioned_package_impact_paths_apply_to_its_parent() {
     );
     repo.revparse_single("refs/tags/packages/group/v2.1.0")
         .expect("find group tag");
+}
+
+fn files_fixture(name: &str, files: &[(&str, &str)]) -> (TempDir, TempDir, Repository) {
+    let local = TempDir::new(&format!("{name}-local"));
+    let remote = TempDir::new(&format!("{name}-remote"));
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    for (path, content) in files {
+        let path = local.path().join(path);
+        fs::create_dir_all(path.parent().expect("file parent")).expect("create file parent");
+        fs::write(path, content).expect("write fixture file");
+    }
+    (local, remote, repo)
+}
+
+fn run_bumper(local: &TempDir) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .env_remove("BUMP_TYPE")
+        .env_remove("FIXED_VERSION")
+        .args(["--no-push"])
+        .output()
+        .expect("run bumper")
+}
+
+#[test]
+fn go_major_release_moves_the_module_path_and_its_local_dependents() {
+    let lib_import = "package main\n\nimport \"example.com/lib\"\n\nfunc main() { _ = lib.Name }\n";
+    let (local, _remote, repo) = files_fixture(
+        "go-major-release",
+        &[
+            ("go.mod", "module example.com/lib\n\ngo 1.24\n"),
+            ("go.work", "go 1.24\n\nuse (\n\t.\n\t./app\n)\n"),
+            ("lib.go", "package lib\n\nconst Name = \"lib\"\n"),
+            (
+                "internal/text/text.go",
+                "package text\n\nconst Value = \"text\"\n",
+            ),
+            (
+                "cmd/lib/main.go",
+                concat!(
+                    "package main\n\n",
+                    "import (\n",
+                    "\t\"fmt\"\n\n",
+                    "\t\"example.com/lib\"\n",
+                    "\t\"example.com/lib/internal/text\"\n",
+                    ")\n\n",
+                    "func main() { fmt.Println(lib.Name, text.Value, \"example.com/lib\") }\n",
+                ),
+            ),
+            (
+                "testdata/fixture.go",
+                "package fixture\n\nimport \"example.com/lib\"\n",
+            ),
+            (
+                "tools/go.mod",
+                concat!(
+                    "module example.com/lib/tools\n\n",
+                    "go 1.24\n\n",
+                    "require example.com/lib v1.2.3\n\n",
+                    "replace example.com/lib => ../\n",
+                ),
+            ),
+            ("tools/main.go", lib_import),
+            (
+                "app/go.mod",
+                "module example.com/app\n\ngo 1.24\n\nrequire example.com/lib v1.2.3\n",
+            ),
+            ("app/main.go", lib_import),
+            (
+                "remote/go.mod",
+                "module example.com/remote\n\ngo 1.24\n\nrequire example.com/lib v1.0.0\n",
+            ),
+            ("remote/main.go", lib_import),
+        ],
+    );
+    let baseline = commit_all(&repo, "chore: initialize Go modules");
+    for name in ["v1.2.3", "tools/v0.4.0", "app/v1.1.0", "remote/v0.1.0"] {
+        tag(&repo, name, baseline);
+    }
+    fs::write(
+        local.path().join("lib.go"),
+        "package lib\n\nconst Name = \"library\"\n",
+    )
+    .expect("update library");
+    commit_all(&repo, "feat!: rename the library");
+
+    let output = run_bumper(&local);
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(". (1.2.3 -> 2.0.0, major)"), "{stdout}");
+    assert!(
+        stdout.contains("go.mod (example.com/lib -> example.com/lib/v2)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("tools (0.4.0 -> 0.4.1, patch)"), "{stdout}");
+    assert!(
+        stdout.contains("propagated from dependency root (example.com/lib via tools/go.mod)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("app (1.1.0 -> 1.1.1, patch)"), "{stdout}");
+    assert!(!stdout.contains("remote ("), "{stdout}");
+    for name in ["v2.0.0", "tools/v0.4.1", "app/v1.1.1"] {
+        repo.revparse_single(&format!("refs/tags/{name}"))
+            .expect("find release tag");
+    }
+    assert!(repo.revparse_single("refs/tags/remote/v0.1.1").is_err());
+
+    let read = |path: &str| fs::read_to_string(local.path().join(path)).expect("read Go file");
+    let v2_import = lib_import.replace("example.com/lib", "example.com/lib/v2");
+    assert_eq!(read("go.mod"), "module example.com/lib/v2\n\ngo 1.24\n");
+    assert_eq!(
+        read("cmd/lib/main.go"),
+        concat!(
+            "package main\n\n",
+            "import (\n",
+            "\t\"fmt\"\n\n",
+            "\t\"example.com/lib/v2\"\n",
+            "\t\"example.com/lib/v2/internal/text\"\n",
+            ")\n\n",
+            "func main() { fmt.Println(lib.Name, text.Value, \"example.com/lib\") }\n",
+        )
+    );
+    assert_eq!(
+        read("testdata/fixture.go"),
+        "package fixture\n\nimport \"example.com/lib\"\n"
+    );
+    assert_eq!(
+        read("tools/go.mod"),
+        concat!(
+            "module example.com/lib/tools\n\n",
+            "go 1.24\n\n",
+            "require example.com/lib/v2 v2.0.0\n\n",
+            "replace example.com/lib/v2 => ../\n",
+        )
+    );
+    assert_eq!(read("tools/main.go"), v2_import);
+    assert_eq!(
+        read("app/go.mod"),
+        "module example.com/app\n\ngo 1.24\n\nrequire example.com/lib/v2 v2.0.0\n"
+    );
+    assert_eq!(read("app/main.go"), v2_import);
+    assert_eq!(
+        read("remote/go.mod"),
+        "module example.com/remote\n\ngo 1.24\n\nrequire example.com/lib v1.0.0\n"
+    );
+    assert_eq!(read("remote/main.go"), lib_import);
+    assert!(repo.statuses(None).expect("read status").is_empty());
+}
+
+#[test]
+fn go_major_subdirectory_releases_under_its_parent_tag_prefix() {
+    let (local, _remote, repo) = files_fixture(
+        "go-major-subdirectory",
+        &[
+            ("go.mod", "module example.com/lib\n\ngo 1.24\n"),
+            ("lib.go", "package lib\n"),
+            ("v2/go.mod", "module example.com/lib/v2\n\ngo 1.24\n"),
+            ("v2/lib.go", "package lib\n"),
+        ],
+    );
+    let baseline = commit_all(&repo, "chore: initialize Go modules");
+    tag(&repo, "v1.4.0", baseline);
+    tag(&repo, "v2.1.0", baseline);
+    fs::write(local.path().join("v2/lib.go"), "package lib // fixed\n").expect("fix v2");
+    commit_all(&repo, "fix: repair v2");
+
+    let output = run_bumper(&local);
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(". (1.4.0 -> 1.4.1, patch)"), "{stdout}");
+    assert!(stdout.contains("v2 (2.1.0 -> 2.1.1, patch)"), "{stdout}");
+    for name in ["v1.4.1", "v2.1.1"] {
+        repo.revparse_single(&format!("refs/tags/{name}"))
+            .expect("find release tag");
+    }
+    assert!(repo.revparse_single("refs/tags/v2/v2.1.1").is_err());
+    assert_eq!(
+        fs::read_to_string(local.path().join("v2/go.mod")).expect("read go.mod"),
+        "module example.com/lib/v2\n\ngo 1.24\n"
+    );
+
+    fs::write(local.path().join("v2/lib.go"), "package lib // broken\n").expect("break v2");
+    commit_all(&repo, "feat!: break v2");
+
+    let output = run_bumper(&local);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("v2: Go module 'example.com/lib/v2' is in a major version subdirectory, so it can't release 3.0.0; copy it to a v3 directory instead"), "{stderr}");
+    assert!(repo.revparse_single("refs/tags/v3.0.0").is_err());
 }

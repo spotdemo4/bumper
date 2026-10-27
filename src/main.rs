@@ -15,6 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use bumper::bump::{DependencyUpdate, TypedChange, apply_dependency_update, apply_typed_change};
+use bumper::go::rewrite_file;
 use bumper::package::{Package, is_package_marker};
 use git2::Repository;
 use inquire::{InquireError, MultiSelect};
@@ -238,7 +239,11 @@ fn prompt_fixed_version(
     let Some(version) = plan.shared_current_version() else {
         return Ok(None);
     };
-    let fixed_plan = fixed_plan()?;
+    // a fixed version the repository can't release, such as a major version that a Go module
+    // path can't move to, isn't worth offering
+    let Ok(fixed_plan) = fixed_plan() else {
+        return Ok(None);
+    };
     // The forced selection can still change with --interactive, so the answer may matter later.
     if !config.interactive && release_versions(plan) == release_versions(&fixed_plan) {
         return Ok(None);
@@ -309,6 +314,34 @@ fn propagate_dependency_updates(
                 stage_path(repo, repo_root, &file)?;
             }
             Ok(DependencyUpdate::Unchanged | DependencyUpdate::Unhandled) => {}
+            Err(e) => eprintln!("warning: {e}"),
+        }
+    }
+    Ok(())
+}
+
+fn rewrite_go_module_paths(
+    repo: &Repository,
+    repo_root: &Path,
+    plan: &ReleasePlan,
+) -> AppResult<()> {
+    if plan.go_files.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "moving Go module paths to new major versions in {} file(s)...",
+        plan.go_files.len()
+    );
+    for (relative, planned) in &plan.go_files {
+        let file = repo_root.join(relative);
+        match rewrite_file(&file, &planned.renames, &plan.go_module_paths) {
+            Ok(Some(rewrite)) => {
+                fs::write(&file, rewrite.content)
+                    .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+                println!("updated Go module paths in {}", file.display());
+                stage_path(repo, repo_root, &file)?;
+            }
+            Ok(None) => {}
             Err(e) => eprintln!("warning: {e}"),
         }
     }
@@ -456,9 +489,20 @@ fn run() -> AppResult<()> {
         return Ok(());
     }
 
-    bump_releases(&repo, &release_input, &ignored_directories)?;
-    propagate_dependency_updates(&repo, &repo_root, &plan)?;
-    commit_tag_and_push(&repo, &config, &plan)
+    apply_release_plan(&repo, &config, &release_input, &ignored_directories)
+}
+
+/// Writes every planned file change, then commits, tags and pushes the releases.
+fn apply_release_plan(
+    repo: &Repository,
+    config: &Config,
+    input: &PreviewInput,
+    ignored_directories: &[PathBuf],
+) -> AppResult<()> {
+    bump_releases(repo, input, ignored_directories)?;
+    propagate_dependency_updates(repo, input.repo_root, input.plan)?;
+    rewrite_go_module_paths(repo, input.repo_root, input.plan)?;
+    commit_tag_and_push(repo, config, input.plan)
 }
 
 /// The packages that only release when forced by name.
@@ -1032,6 +1076,8 @@ mod tests {
             ]),
             named_bumps: BTreeMap::new(),
             dependency_files: BTreeMap::new(),
+            go_files: BTreeMap::new(),
+            go_module_paths: Vec::new(),
             current_versions: BTreeMap::new(),
         };
 

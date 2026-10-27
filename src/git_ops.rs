@@ -1,5 +1,5 @@
 use git2::{Oid, Repository, StatusOptions};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -41,9 +41,31 @@ pub fn current_branch(repo: &Repository) -> AppResult<String> {
     Ok(shorthand.to_string())
 }
 
+/// The major versions a tag stream contains.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum MajorFilter {
+    #[default]
+    Any,
+    /// A Go major version subdirectory, which shares its parent directory's tag prefix.
+    Only(u64),
+    /// The parent directory of Go major version subdirectories, whose majors are theirs.
+    Except(BTreeSet<u64>),
+}
+
+impl MajorFilter {
+    pub fn accepts(&self, major: u64) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Only(only) => *only == major,
+            Self::Except(excluded) => !excluded.contains(&major),
+        }
+    }
+}
+
 pub fn latest_tag_or_none(
     repo: &Repository,
     package_path: &Path,
+    majors: &MajorFilter,
 ) -> AppResult<Option<(String, Oid)>> {
     let tags = repo
         .tag_names(None)
@@ -74,6 +96,9 @@ pub fn latest_tag_or_none(
         let Ok(version) = parse_version(version_name) else {
             continue;
         };
+        if !majors.accepts(version.major()) {
+            continue;
+        }
 
         let object = repo
             .revparse_single(&format!("refs/tags/{name}"))
@@ -822,7 +847,7 @@ mod tests {
         lightweight_tag(&repo, "deploy-2026-06-02", second);
         let _third = commit_file(&repo, &dir, "README.md", "three", "feat: feature");
 
-        let (name, oid) = latest_tag_or_none(&repo, Path::new(""))
+        let (name, oid) = latest_tag_or_none(&repo, Path::new(""), &MajorFilter::Any)
             .expect("read tags")
             .expect("find latest tag");
 
@@ -841,10 +866,10 @@ mod tests {
         lightweight_tag(&repo, "packages/api/v9.0.0", scoped_commit);
         commit_file(&repo, &dir, "README.md", "three", "fix: follow-up");
 
-        let root = latest_tag_or_none(&repo, Path::new(""))
+        let root = latest_tag_or_none(&repo, Path::new(""), &MajorFilter::Any)
             .expect("read root tags")
             .expect("find root tag");
-        let scoped = latest_tag_or_none(&repo, Path::new("packages/api"))
+        let scoped = latest_tag_or_none(&repo, Path::new("packages/api"), &MajorFilter::Any)
             .expect("read scoped tags")
             .expect("find scoped tag");
 
@@ -860,7 +885,7 @@ mod tests {
         let commit = commit_file(&repo, &dir, "README.md", "one", "chore: init");
         lightweight_tag(&repo, "packages/services/api/V2.3.4", commit);
 
-        let tag = latest_tag_or_none(&repo, Path::new("packages/services/api"))
+        let tag = latest_tag_or_none(&repo, Path::new("packages/services/api"), &MajorFilter::Any)
             .expect("read multi-level scoped tags")
             .expect("find multi-level scoped tag");
 
@@ -886,11 +911,11 @@ mod tests {
             lightweight_tag(&repo, tag, other_commit);
         }
 
-        let tag = latest_tag_or_none(&repo, Path::new("packages/api"))
+        let tag = latest_tag_or_none(&repo, Path::new("packages/api"), &MajorFilter::Any)
             .expect("read scoped tags")
             .expect("find scoped tag");
-        let missing =
-            latest_tag_or_none(&repo, Path::new("packages/missing")).expect("read missing stream");
+        let missing = latest_tag_or_none(&repo, Path::new("packages/missing"), &MajorFilter::Any)
+            .expect("read missing stream");
 
         assert_eq!(tag, ("packages/api/v1.0.0".to_string(), matching_commit));
         assert_eq!(missing, None);
@@ -908,11 +933,37 @@ mod tests {
         lightweight_tag(&repo, "crates/widget/V2.0.0", nearer);
         commit_file(&repo, &dir, "README.md", "three", "fix: widget");
 
-        let tag = latest_tag_or_none(&repo, Path::new("crates/widget"))
+        let tag = latest_tag_or_none(&repo, Path::new("crates/widget"), &MajorFilter::Any)
             .expect("read scoped tags")
             .expect("find scoped tag");
 
         assert_eq!(tag, ("crates/widget/V2.0.0".to_string(), nearer));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn latest_tag_splits_a_prefix_shared_with_go_major_subdirectories() {
+        let dir = temp_path("major-filtered-tags");
+        let repo = Repository::init(&dir).expect("init repo");
+        let older = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        lightweight_tag(&repo, "v1.4.0", older);
+        let nearer = commit_file(&repo, &dir, "v2/README.md", "two", "feat: v2");
+        lightweight_tag(&repo, "v2.0.0", nearer);
+
+        let parent = latest_tag_or_none(
+            &repo,
+            Path::new(""),
+            &MajorFilter::Except(BTreeSet::from([2])),
+        )
+        .expect("read parent tags");
+        let subdirectory = latest_tag_or_none(&repo, Path::new(""), &MajorFilter::Only(2))
+            .expect("read subdirectory tags");
+        let missing = latest_tag_or_none(&repo, Path::new(""), &MajorFilter::Only(3))
+            .expect("read missing major");
+
+        assert_eq!(parent, Some(("v1.4.0".to_string(), older)));
+        assert_eq!(subdirectory, Some(("v2.0.0".to_string(), nearer)));
+        assert_eq!(missing, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -927,7 +978,7 @@ mod tests {
         repo.reset(&baseline, git2::ResetType::Hard, None)
             .expect("reset to baseline");
 
-        let error = latest_tag_or_none(&repo, Path::new("packages/api"))
+        let error = latest_tag_or_none(&repo, Path::new("packages/api"), &MajorFilter::Any)
             .expect_err("unreachable stream should fail");
 
         assert!(error.contains("package stream 'packages/api'"));

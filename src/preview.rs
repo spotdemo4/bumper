@@ -5,12 +5,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use bumper::bump::{TypedChange, VersionBump, preview_typed_change};
+use bumper::go::ModuleRename;
 use bumper::package::Package;
 
 use crate::Target;
 use crate::model::AppResult;
 use crate::release_plan::{
-    Release, ReleasePlan, package_files, package_label, resolve_known_package_owner,
+    Release, ReleasePlan, package_files, package_label, repository_relative,
+    resolve_known_package_owner,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -18,10 +20,11 @@ pub struct BumpPreview {
     pub files: BTreeMap<PathBuf, PreviewFile>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PreviewFile {
     pub version: Option<VersionBump>,
     pub dependencies: BTreeMap<PathBuf, DependencyFileChange>,
+    pub go_renames: Vec<ModuleRename>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,13 +97,7 @@ pub fn collect_bump_preview(input: &PreviewInput<'_>) -> AppResult<BumpPreview> 
     }
 
     for (file, planned) in &input.plan.dependency_files {
-        let entry = preview
-            .files
-            .entry(file.clone())
-            .or_insert_with(|| PreviewFile {
-                version: None,
-                dependencies: BTreeMap::new(),
-            });
+        let entry = preview.files.entry(file.clone()).or_default();
         for (producer, names) in &planned.dependencies {
             entry.dependencies.insert(
                 producer.clone(),
@@ -109,6 +106,15 @@ pub fn collect_bump_preview(input: &PreviewInput<'_>) -> AppResult<BumpPreview> 
                 },
             );
         }
+    }
+
+    for (file, planned) in &input.plan.go_files {
+        preview
+            .files
+            .entry(file.clone())
+            .or_default()
+            .go_renames
+            .clone_from(&planned.renames);
     }
 
     Ok(preview)
@@ -138,30 +144,11 @@ fn add_version_file(
     release: &Release,
 ) -> AppResult<()> {
     let relative = repository_relative(repo_root, file)?;
-    let entry = preview
-        .files
-        .entry(relative)
-        .or_insert_with(|| PreviewFile {
-            version: None,
-            dependencies: BTreeMap::new(),
-        });
-    entry.version = Some(VersionBump {
+    preview.files.entry(relative).or_default().version = Some(VersionBump {
         old_version: release.old_version.clone(),
         new_version: release.new_version.clone(),
     });
     Ok(())
-}
-
-fn repository_relative(repo_root: &Path, file: &Path) -> AppResult<PathBuf> {
-    file.strip_prefix(repo_root)
-        .map(Path::to_path_buf)
-        .map_err(|_| {
-            format!(
-                "file '{}' is outside repository root '{}'",
-                file.display(),
-                repo_root.display()
-            )
-        })
 }
 
 pub fn preview_colors_enabled(
@@ -317,6 +304,11 @@ fn file_change_labels(file: &PreviewFile, plan: &ReleasePlan) -> Vec<String> {
             ));
         }
     }
+    changes.extend(
+        file.go_renames
+            .iter()
+            .map(|rename| format!("{} -> {}", rename.old_path, rename.new_path)),
+    );
     changes
 }
 
@@ -445,6 +437,7 @@ mod tests {
         PreviewFile {
             version: Some(version_bump(old_version, new_version)),
             dependencies,
+            go_renames: Vec::new(),
         }
     }
 
@@ -501,6 +494,8 @@ mod tests {
                 },
             )]),
             dependency_files: BTreeMap::new(),
+            go_files: BTreeMap::new(),
+            go_module_paths: Vec::new(),
             current_versions: BTreeMap::new(),
         };
         let preview = BumpPreview {
@@ -568,6 +563,8 @@ mod tests {
             skipped_packages: BTreeMap::new(),
             named_bumps: BTreeMap::new(),
             dependency_files: BTreeMap::new(),
+            go_files: BTreeMap::new(),
+            go_module_paths: Vec::new(),
             current_versions: BTreeMap::new(),
         };
 

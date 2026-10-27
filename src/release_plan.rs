@@ -1,13 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use bumper::bump::{
     DependencyUpdate, VersionBump, package_name_for_file, preview_dependency_update,
 };
+use bumper::go::{
+    ModuleRename, PathMajor, local_replacements, read_module_path, required_module_path,
+    rewrite_file, split_path_major, workspace_uses,
+};
 use bumper::package::{Package, is_package_marker, package_version};
 use git2::{Oid, Repository};
 
-use crate::git_ops::{ImpactConfig, get_impact_for_package, latest_tag_or_none};
+use crate::git_ops::{ImpactConfig, MajorFilter, get_impact_for_package, latest_tag_or_none};
 use crate::model::{AppResult, Config, Impact};
 use crate::versioning::{next_version, parse_version};
 
@@ -72,6 +78,12 @@ pub struct DependencyFilePlan {
     pub dependencies: BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
+/// A go.mod or .go file whose references to Go modules move to new major version paths.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GoFilePlan {
+    pub renames: Vec<ModuleRename>,
+}
+
 /// Why a selected package does not release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
@@ -86,6 +98,9 @@ pub struct ReleasePlan {
     pub skipped_packages: BTreeMap<PathBuf, SkipReason>,
     pub named_bumps: BTreeMap<String, NamedPackageBump>,
     pub dependency_files: BTreeMap<PathBuf, DependencyFilePlan>,
+    pub go_files: BTreeMap<PathBuf, GoFilePlan>,
+    /// The module path of every Go module in the repository.
+    pub go_module_paths: Vec<String>,
     pub current_versions: BTreeMap<PathBuf, String>,
 }
 
@@ -112,6 +127,15 @@ struct ReleaseBase {
     commit: Option<Oid>,
     /// Whether the package has a tag of its own rather than a manifest or inherited version.
     tagged: bool,
+    stream: TagStream,
+}
+
+/// The tags a package releases under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TagStream {
+    /// The tag prefix, which is the parent directory for a Go major version subdirectory.
+    scope: PathBuf,
+    majors: MajorFilter,
 }
 
 impl ReleaseBase {
@@ -196,7 +220,11 @@ pub fn build_release_plan(mut input: PlanInput<'_>) -> AppResult<ReleasePlan> {
     } else {
         propagate_descendants(&mut states, &deepest_first, &parents);
     }
-    let dependency_files = propagate_dependencies(&input, &mut states, &deepest_first, &parents)?;
+    let go = go_repository(&input);
+    let Propagation {
+        dependency_files,
+        go_files,
+    } = propagate_dependencies(&input, &go, &mut states, &deepest_first, &parents)?;
 
     if input.fixed_version {
         // Every package already releases at the shared version, so propagation adds no information.
@@ -231,6 +259,8 @@ pub fn build_release_plan(mut input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         skipped_packages,
         named_bumps,
         dependency_files,
+        go_files,
+        go_module_paths: go.module_paths(),
         current_versions,
     })
 }
@@ -329,23 +359,33 @@ pub fn is_unversioned_package(
     Ok(resolve_release_base(repo, package, known_packages)?.is_unversioned(&package.path))
 }
 
+/// The files the final round of dependency propagation updates.
+struct Propagation {
+    dependency_files: BTreeMap<PathBuf, DependencyFilePlan>,
+    go_files: BTreeMap<PathBuf, GoFilePlan>,
+}
+
 /// Releases packages whose dependencies on other bumped packages change, until no
-/// more packages release. Returns the dependency files the final round updates.
+/// more packages release.
 fn propagate_dependencies(
     input: &PlanInput<'_>,
+    go: &GoRepository,
     states: &mut BTreeMap<PathBuf, PackageState>,
     deepest_first: &[PathBuf],
     parents: &BTreeMap<PathBuf, PathBuf>,
-) -> AppResult<BTreeMap<PathBuf, DependencyFilePlan>> {
-    let mut dependency_files = BTreeMap::new();
+) -> AppResult<Propagation> {
+    let mut propagation = Propagation {
+        dependency_files: BTreeMap::new(),
+        go_files: BTreeMap::new(),
+    };
 
     loop {
-        let named_bumps = named_package_bumps(states)?;
-        if named_bumps.is_empty() {
+        let active_before = active_package_count(states);
+        if active_before == 0 {
             break;
         }
+        let named_bumps = named_package_bumps(states)?;
         let version_bumps = version_bumps(&named_bumps);
-        let active_before = active_package_count(states);
         let mut round_files = BTreeMap::<PathBuf, DependencyFilePlan>::new();
 
         for file in input.tracked_files {
@@ -360,16 +400,7 @@ fn propagate_dependencies(
                 continue;
             };
             let owner = resolve_known_package_owner(input.repo_root, file, input.known_packages)?;
-            let manifest = file
-                .strip_prefix(input.repo_root)
-                .map_err(|_| {
-                    format!(
-                        "file '{}' is outside repository root '{}'",
-                        file.display(),
-                        input.repo_root.display()
-                    )
-                })?
-                .to_path_buf();
+            let manifest = repository_relative(input.repo_root, file)?;
             let owner_state = states.get_mut(&owner.path).ok_or_else(|| {
                 format!(
                     "dependency owner {} is not a planned package",
@@ -400,14 +431,245 @@ fn propagate_dependencies(
             }
         }
 
-        dependency_files = round_files;
+        propagation.dependency_files = round_files;
+        propagation.go_files = plan_go_rewrites(go, input.repo_root, states)?;
         propagate_descendants(states, deepest_first, parents);
         if active_package_count(states) == active_before {
             break;
         }
     }
 
-    Ok(dependency_files)
+    Ok(propagation)
+}
+
+/// A Go module in the repository.
+struct GoModule {
+    package_path: PathBuf,
+    root: PathBuf,
+    module_path: String,
+    /// The tracked go.mod and .go files that build the module.
+    files: Vec<PathBuf>,
+    /// The module paths its go.mod replaces with the directory of that module.
+    local_replacements: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct GoRepository {
+    modules: Vec<GoModule>,
+    /// The module directories `use`d by the repository's go.work.
+    workspace: HashSet<PathBuf>,
+}
+
+impl GoRepository {
+    fn module_paths(&self) -> Vec<String> {
+        self.modules
+            .iter()
+            .map(|module| module.module_path.clone())
+            .collect()
+    }
+
+    /// Whether `consumer` builds against the repository's copy of `producer` rather than a
+    /// published version.
+    fn resolves_locally(&self, consumer: &GoModule, producer: &GoModule) -> bool {
+        consumer.local_replacements.contains(&producer.module_path)
+            || (self.workspace.contains(&consumer.root) && self.workspace.contains(&producer.root))
+    }
+}
+
+fn go_repository(input: &PlanInput<'_>) -> GoRepository {
+    let mut modules = input
+        .known_packages
+        .values()
+        .filter_map(|package| {
+            let go_mod = package.root.join("go.mod");
+            if !input.tracked_paths.contains(&go_mod) {
+                return None;
+            }
+            Some(GoModule {
+                package_path: package.path.clone(),
+                root: package.root.clone(),
+                module_path: read_module_path(&go_mod)?,
+                files: Vec::new(),
+                local_replacements: BTreeSet::new(),
+            })
+        })
+        .collect::<Vec<_>>();
+    if modules.is_empty() {
+        return GoRepository::default();
+    }
+
+    for file in input.tracked_files {
+        if file.extension() != Some(OsStr::new("go"))
+            && file.file_name() != Some(OsStr::new("go.mod"))
+        {
+            continue;
+        }
+        let Some(owner) = modules
+            .iter_mut()
+            .filter(|module| file.starts_with(&module.root))
+            .max_by_key(|module| module.root.components().count())
+        else {
+            continue;
+        };
+        // the go command ignores these directories and files
+        let built = file.strip_prefix(&owner.root).is_ok_and(|relative| {
+            relative.components().all(|component| {
+                let name = component.as_os_str().to_string_lossy();
+                name != "testdata" && !name.starts_with('_') && !name.starts_with('.')
+            })
+        });
+        if built {
+            owner.files.push(file.clone());
+        }
+    }
+
+    let roots = modules
+        .iter()
+        .map(|module| (module.root.clone(), module.module_path.clone()))
+        .collect::<Vec<_>>();
+    for module in &mut modules {
+        let Ok(source) = fs::read_to_string(module.root.join("go.mod")) else {
+            continue;
+        };
+        for (path, directory) in local_replacements(&source) {
+            let Ok(target) = fs::canonicalize(module.root.join(directory)) else {
+                continue;
+            };
+            if roots
+                .iter()
+                .any(|(root, module_path)| *root == target && *module_path == path)
+            {
+                module.local_replacements.insert(path);
+            }
+        }
+    }
+
+    let go_work = input.repo_root.join("go.work");
+    let workspace = if input.tracked_paths.contains(&go_work) {
+        fs::read_to_string(&go_work)
+            .map(|source| workspace_uses(&source))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|directory| fs::canonicalize(input.repo_root.join(directory)).ok())
+            .collect()
+    } else {
+        HashSet::new()
+    };
+
+    GoRepository { modules, workspace }
+}
+
+/// Moves each releasing Go module whose new major version its module path doesn't allow to
+/// the path of that major, with the modules that build against its local copy. Those modules
+/// release as its dependents.
+fn plan_go_rewrites(
+    go: &GoRepository,
+    repo_root: &Path,
+    states: &mut BTreeMap<PathBuf, PackageState>,
+) -> AppResult<BTreeMap<PathBuf, GoFilePlan>> {
+    let mut renames = BTreeMap::new();
+    for module in &go.modules {
+        let Some(state) = states.get(&module.package_path) else {
+            continue;
+        };
+        let Some(impact) = state.impact() else {
+            continue;
+        };
+        let version = planned_version(state, impact)?;
+        let major_subdirectory = matches!(state.base.stream.majors, MajorFilter::Only(_));
+        let new_path = required_module_path(&module.module_path, &version, major_subdirectory)
+            .map_err(|e| format!("{}: {e}", package_label(&module.package_path)))?;
+        if let Some(new_path) = new_path {
+            renames.insert(
+                module.package_path.clone(),
+                ModuleRename {
+                    old_path: module.module_path.clone(),
+                    new_path,
+                    version,
+                },
+            );
+        }
+    }
+    if renames.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let module_paths = go.module_paths();
+    let mut files = BTreeMap::new();
+    for consumer in &go.modules {
+        let applicable = renames
+            .iter()
+            .filter(|(producer, _)| {
+                **producer == consumer.package_path
+                    || go.modules.iter().any(|module| {
+                        module.package_path == **producer && go.resolves_locally(consumer, module)
+                    })
+            })
+            .collect::<Vec<_>>();
+        if applicable.is_empty() {
+            continue;
+        }
+        let consumer_renames = applicable
+            .iter()
+            .map(|(_, rename)| (*rename).clone())
+            .collect::<Vec<_>>();
+
+        let mut changed = Vec::new();
+        for file in &consumer.files {
+            let rewrite = match rewrite_file(file, &consumer_renames, &module_paths) {
+                Ok(Some(rewrite)) => rewrite,
+                Ok(None) => continue,
+                Err(error) => {
+                    eprintln!("warning: {error}");
+                    continue;
+                }
+            };
+            let relative = repository_relative(repo_root, file)?;
+            let renames = consumer_renames
+                .iter()
+                .filter(|rename| rewrite.changed.contains(&rename.old_path))
+                .cloned()
+                .collect();
+            files.insert(relative.clone(), GoFilePlan { renames });
+            changed.push((relative, rewrite.changed));
+        }
+
+        for (producer, rename) in applicable {
+            if *producer == consumer.package_path {
+                continue;
+            }
+            let touched = changed
+                .iter()
+                .filter(|(_, paths)| paths.contains(&rename.old_path))
+                .map(|(file, _)| file)
+                .collect::<Vec<_>>();
+            if touched.is_empty() {
+                continue;
+            }
+            // the go.mod explains the release best, so imports are only listed without one
+            let go_mods = touched
+                .iter()
+                .copied()
+                .filter(|file| file.file_name() == Some(OsStr::new("go.mod")))
+                .collect::<Vec<_>>();
+            let manifests = if go_mods.is_empty() { touched } else { go_mods };
+            let state = states.get_mut(&consumer.package_path).ok_or_else(|| {
+                format!(
+                    "Go module {} is not a planned package",
+                    package_label(&consumer.package_path)
+                )
+            })?;
+            let cause = state
+                .reasons
+                .dependencies
+                .entry(producer.clone())
+                .or_default();
+            cause.names.insert(rename.old_path.clone());
+            cause.manifests.extend(manifests.into_iter().cloned());
+        }
+    }
+
+    Ok(files)
 }
 
 /// Applies `--bump-type` to a commit-derived impact, returning it with the impact it replaced.
@@ -504,7 +766,23 @@ fn materialize_releases(
         .filter_map(|(path, state)| {
             state.impact().map(|impact| {
                 let new_version = planned_version(state, impact)?;
-                let tag = tag_name(path, &new_version)?;
+                let major = parse_version(&new_version)?.major();
+                match &state.base.stream.majors {
+                    MajorFilter::Only(only) if *only != major => {
+                        return Err(format!(
+                            "{} is a Go major version subdirectory for v{only}, so it can't release {new_version}",
+                            package_label(path)
+                        ));
+                    }
+                    MajorFilter::Except(excluded) if excluded.contains(&major) => {
+                        return Err(format!(
+                            "{} can't release {new_version}: its v{major} tags belong to the Go module in its v{major} directory",
+                            package_label(path)
+                        ));
+                    }
+                    _ => {}
+                }
+                let tag = tag_name(&state.base.stream.scope, &new_version)?;
                 Ok((
                     path.clone(),
                     Release {
@@ -667,22 +945,67 @@ pub fn nearest_parent<'a>(path: &Path, package_paths: &'a [PathBuf]) -> Option<&
         .max_by_key(|candidate| candidate.components().count())
 }
 
+/// The tag stream of `package`. Go tags a module in a major version subdirectory such as `v2`
+/// with its parent directory's prefix, so the two share that prefix by major version.
+fn tag_stream(package: &Package, known_packages: &BTreeMap<PathBuf, Package>) -> TagStream {
+    if let Some(major) = go_major_subdirectory(package) {
+        return TagStream {
+            scope: package
+                .path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+            majors: MajorFilter::Only(major),
+        };
+    }
+
+    let claimed = known_packages
+        .values()
+        .filter(|other| other.path.parent() == Some(package.path.as_path()))
+        .filter_map(go_major_subdirectory)
+        .collect::<BTreeSet<_>>();
+    TagStream {
+        scope: package.path.clone(),
+        majors: if claimed.is_empty() {
+            MajorFilter::Any
+        } else {
+            MajorFilter::Except(claimed)
+        },
+    }
+}
+
+/// The major version of a Go module in a major version subdirectory, whose directory name
+/// matches the major version suffix of its module path.
+fn go_major_subdirectory(package: &Package) -> Option<u64> {
+    let directory = package.path.file_name()?.to_str()?;
+    if !directory.starts_with('v') {
+        return None;
+    }
+    let module_path = read_module_path(&package.root.join("go.mod"))?;
+    match split_path_major(&module_path) {
+        Ok((_, PathMajor::Suffixed(major))) if directory == format!("v{major}") => Some(major),
+        _ => None,
+    }
+}
+
 fn resolve_release_base(
     repo: &Repository,
     package: &Package,
     known_packages: &BTreeMap<PathBuf, Package>,
 ) -> AppResult<ReleaseBase> {
-    if let Some((last_tag, commit)) = latest_tag_or_none(repo, &package.path)? {
+    let stream = tag_stream(package, known_packages);
+    if let Some((last_tag, commit)) = latest_tag_or_none(repo, &stream.scope, &stream.majors)? {
         return Ok(ReleaseBase {
             version: version_from_tag(&last_tag)?.to_string(),
             last_tag,
             commit: Some(commit),
             tagged: true,
+            stream,
         });
     }
 
     let version = resolve_current_version(repo, package, known_packages)?;
-    let last_tag = tag_name(&package.path, &version)?;
+    let last_tag = tag_name(&stream.scope, &version)?;
     let mut ancestors = known_packages
         .values()
         .filter(|ancestor| {
@@ -692,7 +1015,10 @@ fn resolve_release_base(
     ancestors.sort_by_key(|ancestor| std::cmp::Reverse(ancestor.path.components().count()));
     let mut commit = None;
     for ancestor in ancestors {
-        if let Some((_, ancestor_commit)) = latest_tag_or_none(repo, &ancestor.path)? {
+        let ancestor_stream = tag_stream(ancestor, known_packages);
+        if let Some((_, ancestor_commit)) =
+            latest_tag_or_none(repo, &ancestor_stream.scope, &ancestor_stream.majors)?
+        {
             commit = Some(ancestor_commit);
             break;
         }
@@ -703,6 +1029,7 @@ fn resolve_release_base(
         version,
         commit,
         tagged: false,
+        stream,
     })
 }
 
@@ -711,7 +1038,8 @@ fn resolve_current_version(
     package: &Package,
     known_packages: &BTreeMap<PathBuf, Package>,
 ) -> AppResult<String> {
-    if let Some((tag, _)) = latest_tag_or_none(repo, &package.path)? {
+    let stream = tag_stream(package, known_packages);
+    if let Some((tag, _)) = latest_tag_or_none(repo, &stream.scope, &stream.majors)? {
         return Ok(version_from_tag(&tag)?.to_string());
     }
     if let Some(version) = package_version(&package.root) {
@@ -742,6 +1070,18 @@ fn version_from_tag(tag: &str) -> AppResult<&str> {
     } else {
         Ok(version)
     }
+}
+
+pub fn repository_relative(repo_root: &Path, file: &Path) -> AppResult<PathBuf> {
+    file.strip_prefix(repo_root)
+        .map(Path::to_path_buf)
+        .map_err(|_| {
+            format!(
+                "file '{}' is outside repository root '{}'",
+                file.display(),
+                repo_root.display()
+            )
+        })
 }
 
 pub fn tag_name(package_path: &Path, version: &str) -> AppResult<String> {
@@ -816,6 +1156,10 @@ mod tests {
                 version: "1.0.0".to_string(),
                 commit: None,
                 tagged: true,
+                stream: TagStream {
+                    scope: PathBuf::from(path),
+                    majors: MajorFilter::Any,
+                },
             },
             shared_version: None,
             reasons,
@@ -829,6 +1173,8 @@ mod tests {
             skipped_packages: BTreeMap::new(),
             named_bumps: BTreeMap::new(),
             dependency_files: BTreeMap::new(),
+            go_files: BTreeMap::new(),
+            go_module_paths: Vec::new(),
             current_versions: versions
                 .iter()
                 .map(|(path, version)| (PathBuf::from(path), version.to_string()))

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use serde_json::Value as JsonValue;
 use toml_edit::{DocumentMut, Table};
 
+use crate::go::read_module_path;
+
 /// A package directory within a repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Package {
@@ -430,114 +432,7 @@ fn gradle_version(path: &Path) -> Option<String> {
 }
 
 fn is_go_mod(path: &Path) -> bool {
-    let Some(source) = read(path) else {
-        return false;
-    };
-
-    let mut found_module = false;
-    let mut module_block = false;
-    let mut block_paths = 0_usize;
-
-    for line in source.lines() {
-        let line = strip_go_line_comment(line).trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if module_block {
-            if line == ")" {
-                if block_paths != 1 {
-                    return false;
-                }
-                module_block = false;
-                continue;
-            }
-            if !is_single_go_value(line) {
-                return false;
-            }
-            block_paths = block_paths.saturating_add(1);
-            if block_paths > 1 {
-                return false;
-            }
-            continue;
-        }
-
-        let Some(module) = line.strip_prefix("module") else {
-            continue;
-        };
-        if !module.is_empty()
-            && !module.starts_with(char::is_whitespace)
-            && !module.starts_with('(')
-        {
-            continue;
-        }
-        if found_module {
-            return false;
-        }
-
-        found_module = true;
-        let module = module.trim();
-        if module == "(" {
-            module_block = true;
-        } else if !is_single_go_value(module) {
-            return false;
-        }
-    }
-
-    found_module && !module_block
-}
-
-fn strip_go_line_comment(line: &str) -> &str {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut characters = line.char_indices().peekable();
-
-    while let Some((index, character)) = characters.next() {
-        if let Some(delimiter) = quote {
-            if delimiter == '"' && escaped {
-                escaped = false;
-            } else if delimiter == '"' && character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-        } else if matches!(character, '"' | '`') {
-            quote = Some(character);
-        } else if character == '/' && characters.peek().is_some_and(|(_, next)| *next == '/') {
-            return line.get(..index).unwrap_or(line);
-        }
-    }
-
-    line
-}
-
-fn is_single_go_value(value: &str) -> bool {
-    let value = value.trim();
-    let Some(first) = value.chars().next() else {
-        return false;
-    };
-    if !matches!(first, '"' | '`') {
-        return !value.chars().any(char::is_whitespace)
-            && !value
-                .chars()
-                .any(|character| matches!(character, '(' | ')'));
-    }
-
-    let mut escaped = false;
-    for (index, character) in value.char_indices().skip(1) {
-        if first == '"' && escaped {
-            escaped = false;
-        } else if first == '"' && character == '\\' {
-            escaped = true;
-        } else if character == first {
-            return index > 1
-                && value
-                    .get(index..)
-                    .and_then(|rest| rest.strip_prefix(character))
-                    .is_some_and(|rest| rest.trim().is_empty());
-        }
-    }
-    false
+    read_module_path(path).is_some()
 }
 
 #[cfg(test)]

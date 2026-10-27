@@ -43,7 +43,7 @@ Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES`
 
 ### Package tags
 
-Each supplied file or directory is an additional bump target belonging to its nearest containing package. A package is a directory with a valid `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, `build.gradle.kts`, or `go.mod`. Go modules use their package tag as the version because `go.mod` has no project version to update. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
+Each supplied file or directory is an additional bump target belonging to its nearest containing package. A package is a directory with a valid `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, `build.gradle.kts`, or `go.mod`. Go modules use their package tag as the version because `go.mod` has no project version to update; see [Go modules](#go-modules) for their major versions. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
 
 Bumper always checks every discovered package for a release. Supplying paths adds files or directories to the normal package-root scans; explicit files also support literal version replacement when their format has no dedicated writer. Dependency updates can release packages that reference another bumped package.
 
@@ -80,6 +80,32 @@ packages/consumer/plugins/cache/v0.5.0
 For example, `bumper packages/consumer/README.md` adds the README to the normal repository-wide bump and assigns it to `packages/consumer`; it does not create a README-specific tag. If the consumer releases, each real package containing it also releases. Descendant propagation is a patch unless the containing package has its own minor or major conventional commit. Shared ancestors release only once.
 
 When a package stream has no tag yet, bumper uses the version in its package manifest. Versionless package formats such as Go modules inherit the version of their nearest package ancestor. The nearest ancestor tag is used as the release-history boundary; if no ancestor has a tag, bumper considers the package's full git history. Existing root repositories continue to use their current `vX.Y.Z` tags.
+
+### Go modules
+
+Go puts the major version of a module at v2 or above into its module path (`example.com/lib/v2`), and ignores tags whose major version doesn't match the path. When a Go module releases at a major version its path doesn't allow, such as `example.com/lib` going from `1.4.0` to `2.0.0`, bumper moves the module to the new path:
+
+- its `go.mod` `module` directive becomes `example.com/lib/v2`
+- import declarations of its packages (`example.com/lib`, `example.com/lib/internal/text`) move to the new path in its `.go` files, except in `testdata` and in directories the go command ignores
+- other Go modules in the repository that build against the local copy, through a `replace` directive pointing at its directory or the repository's `go.work`, get the same import changes, and their `require` and `replace` directives move to the new path at the new version (`example.com/lib/v2 v2.0.0`)
+
+Those dependent modules release with a patch, and the release plan lists every rewritten file:
+
+```text
+Release plan:
+. (1.4.0 -> 2.0.0, major)
+|-- direct major
+|-- propagated from child tools
+|-- go.mod (example.com/lib -> example.com/lib/v2)
+`-- tools (0.4.0 -> 0.4.1, patch)
+    |-- propagated from dependency root (example.com/lib via tools/go.mod)
+    |-- go.mod (example.com/lib -> example.com/lib/v2)
+    `-- main.go (example.com/lib -> example.com/lib/v2)
+```
+
+Modules that require a published version keep using it, since v1 and v2 are different modules to Go. A dependent that requires the new version without a `replace` or `go.work` can't download it until the tag is pushed, so run `go mod tidy` there afterwards. The same applies whenever a release moves a module path, including a nested Go module that inherits a v2 or higher version from its ancestor, or one released with `--fixed-version`.
+
+A module in a major version subdirectory, such as `v2/go.mod` with `module example.com/lib/v2`, is tagged with its parent directory's prefix (`v2.1.0` rather than `v2/v2.1.0`), as Go expects. The parent package then ignores tags of that major version. Such a module can't move to a new major version, so a breaking change fails with an error asking you to copy it to a `v3` directory. Releases also fail when a module path names a newer major version than the release (`example.com/lib/v3` releasing `2.1.0`), or when a `gopkg.in/name.vN` path doesn't match the release.
 
 ### Unversioned packages
 

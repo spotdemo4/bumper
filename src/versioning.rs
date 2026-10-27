@@ -52,6 +52,12 @@ fn parse_part(current: &str, part: Option<&str>) -> AppResult<u64> {
         .map_err(|_| format!("invalid version '{current}'"))
 }
 
+impl Version {
+    pub fn major(self) -> u64 {
+        self.major
+    }
+}
+
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
