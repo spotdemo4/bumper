@@ -37,6 +37,7 @@
             packages = with pkgs; [
               # rust
               rustc
+              gcc # linker
               cargo
               rust-analyzer
               rustfmt
@@ -130,6 +131,7 @@
                 openssl
               ];
 
+              doCheck = true;
               checkPhase = ''
                 runHook preCheck
                 cargo test --offline
@@ -139,6 +141,7 @@
               # also check the dependencies for clippy, the lints run in the rust-lint flake check
               cargoArtifactsArgs = {
                 nativeCheckInputs = with pkgs; [ clippy ];
+                doCheck = true;
                 checkPhase = ''
                   runHook preCheck
                   cargo test --offline
@@ -147,6 +150,7 @@
                 '';
               };
 
+              doInstallCheck = true;
               installCheckPhase = ''
                 runHook preInstallCheck
                 test "$("$out/bin/bumper" --version)" = "bumper ${final.version}"
@@ -159,8 +163,10 @@
                 license = licenses.mit;
                 platforms = platforms.all;
                 homepage = "https://trev.zip/llc/bumper";
-                changelog = "https://trev.zip/llc/bumper/releases";
-                downloadPage = "https://trev.zip/llc/bumper/releases/tag/v${final.version}";
+                downloadPage = "https://trev.zip/llc/bumper/releases";
+                changelog = "https://trev.zip/llc/bumper/releases/tag/v${final.version}";
+                sourceProvenance = [ sourceTypes.fromSource ];
+                maintainers = [ maintainers.spotdemo4 ];
               };
             }
           );
@@ -239,18 +245,24 @@
 
           renovate-fj = {
             root = ./.forgejo;
-            files = ./.forgejo/renovate.json;
+            files = ./.forgejo/renovate.jsonc;
             packages = with pkgs; [
               renovate
             ];
             script = ''
-              renovate-config-validator renovate.json
+              renovate-config-validator renovate.jsonc
             '';
           };
 
           config = {
             root = ./.;
-            filter = file: file.hasExt "json" || file.hasExt "yaml" || file.hasExt "toml" || file.hasExt "md";
+            filter =
+              file:
+              file.hasExt "json"
+              || file.hasExt "jsonc"
+              || file.hasExt "yaml"
+              || file.hasExt "toml"
+              || file.hasExt "md";
             packages = with pkgs; [
               oxfmt
             ];

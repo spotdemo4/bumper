@@ -41,6 +41,11 @@
       "addLabels": ["nix"]
     },
     {
+      "matchManagers": ["nix"],
+      "matchUpdateTypes": ["digest"],
+      "enabled": false
+    },
+    {
       "matchManagers": ["github-actions"],
       "addLabels": ["actions"]
     },

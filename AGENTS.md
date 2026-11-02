@@ -14,5 +14,6 @@
 ## Template Update Requirements
 
 - If `.template.json` exists, this project was created from the template at `url`, and `commit` is the latest template commit whose changes have been applied.
-- To update from the template, port each commit in `<commit>..main` of the template to this project, adapting names, URLs and paths. Skip dependency updates (`chore(deps)`) that this project's Renovate already handles, and changes to `init.sh`, `template.schema.json` and the `templates` flake output, which are not part of this project.
+- To update from the template, port each commit in `<commit>..main` of the template to this project, adapting names, URLs and paths. Skip dependency updates (`chore(deps)`) that this project's Renovate already handles, and changes to `init.sh`, `init.test.sh`, `template.schema.json`, the `templates` flake output and the `init` check, which are not part of this project.
+- If `library` is `true`, this project is a library. Skip changes that only apply to applications, such as to the program, its container image, release artifacts and installation instructions.
 - Set `commit` to the template commit that was synced to in the same commit that applies its changes.
