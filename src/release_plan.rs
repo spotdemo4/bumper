@@ -7,7 +7,7 @@ use bumper::bump::{
     DependencyUpdate, VersionBump, package_name_for_file, preview_dependency_update,
 };
 use bumper::go::{
-    ModuleRename, PathMajor, local_replacements, read_module_path, required_module_path,
+    ModuleUpdate, PathMajor, local_replacements, read_module_path, required_module_path,
     rewrite_file, split_path_major, workspace_uses,
 };
 use bumper::package::{Package, is_package_marker, package_version};
@@ -78,10 +78,10 @@ pub struct DependencyFilePlan {
     pub dependencies: BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
-/// A go.mod or .go file whose references to Go modules move to new major version paths.
+/// A go.mod or .go file whose references to releasing Go modules change.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GoFilePlan {
-    pub renames: Vec<ModuleRename>,
+    pub updates: Vec<ModuleUpdate>,
 }
 
 /// Why a selected package does not release.
@@ -559,15 +559,15 @@ fn go_repository(input: &PlanInput<'_>) -> GoRepository {
     GoRepository { modules, workspace }
 }
 
-/// Moves each releasing Go module whose new major version its module path doesn't allow to
-/// the path of that major, with the modules that build against its local copy. Those modules
-/// release as its dependents.
+/// Updates the modules that build against the local copy of each releasing Go module to
+/// require its new version. A module whose new major version its module path doesn't allow
+/// also moves to the path of that major, with those modules. They release as its dependents.
 fn plan_go_rewrites(
     go: &GoRepository,
     repo_root: &Path,
     states: &mut BTreeMap<PathBuf, PackageState>,
 ) -> AppResult<BTreeMap<PathBuf, GoFilePlan>> {
-    let mut renames = BTreeMap::new();
+    let mut updates = BTreeMap::new();
     for module in &go.modules {
         let Some(state) = states.get(&module.package_path) else {
             continue;
@@ -579,25 +579,24 @@ fn plan_go_rewrites(
         let major_subdirectory = matches!(state.base.stream.majors, MajorFilter::Only(_));
         let new_path = required_module_path(&module.module_path, &version, major_subdirectory)
             .map_err(|e| format!("{}: {e}", package_label(&module.package_path)))?;
-        if let Some(new_path) = new_path {
-            renames.insert(
-                module.package_path.clone(),
-                ModuleRename {
-                    old_path: module.module_path.clone(),
-                    new_path,
-                    version,
-                },
-            );
-        }
+        updates.insert(
+            module.package_path.clone(),
+            ModuleUpdate {
+                old_path: module.module_path.clone(),
+                new_path: new_path.unwrap_or_else(|| module.module_path.clone()),
+                old_version: state.base.version.clone(),
+                version,
+            },
+        );
     }
-    if renames.is_empty() {
+    if updates.is_empty() {
         return Ok(BTreeMap::new());
     }
 
     let module_paths = go.module_paths();
     let mut files = BTreeMap::new();
     for consumer in &go.modules {
-        let applicable = renames
+        let applicable = updates
             .iter()
             .filter(|(producer, _)| {
                 **producer == consumer.package_path
@@ -609,14 +608,14 @@ fn plan_go_rewrites(
         if applicable.is_empty() {
             continue;
         }
-        let consumer_renames = applicable
+        let consumer_updates = applicable
             .iter()
-            .map(|(_, rename)| (*rename).clone())
+            .map(|(_, update)| (*update).clone())
             .collect::<Vec<_>>();
 
         let mut changed = Vec::new();
         for file in &consumer.files {
-            let rewrite = match rewrite_file(file, &consumer_renames, &module_paths) {
+            let rewrite = match rewrite_file(file, &consumer_updates, &module_paths) {
                 Ok(Some(rewrite)) => rewrite,
                 Ok(None) => continue,
                 Err(error) => {
@@ -625,22 +624,22 @@ fn plan_go_rewrites(
                 }
             };
             let relative = repository_relative(repo_root, file)?;
-            let renames = consumer_renames
+            let updates = consumer_updates
                 .iter()
-                .filter(|rename| rewrite.changed.contains(&rename.old_path))
+                .filter(|update| rewrite.changed.contains(&update.old_path))
                 .cloned()
                 .collect();
-            files.insert(relative.clone(), GoFilePlan { renames });
+            files.insert(relative.clone(), GoFilePlan { updates });
             changed.push((relative, rewrite.changed));
         }
 
-        for (producer, rename) in applicable {
+        for (producer, update) in applicable {
             if *producer == consumer.package_path {
                 continue;
             }
             let touched = changed
                 .iter()
-                .filter(|(_, paths)| paths.contains(&rename.old_path))
+                .filter(|(_, paths)| paths.contains(&update.old_path))
                 .map(|(file, _)| file)
                 .collect::<Vec<_>>();
             if touched.is_empty() {
@@ -664,7 +663,7 @@ fn plan_go_rewrites(
                 .dependencies
                 .entry(producer.clone())
                 .or_default();
-            cause.names.insert(rename.old_path.clone());
+            cause.names.insert(update.old_path.clone());
             cause.manifests.extend(manifests.into_iter().cloned());
         }
     }

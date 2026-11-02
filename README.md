@@ -83,6 +83,20 @@ When a package stream has no tag yet, bumper uses the version in its package man
 
 ### Go modules
 
+When a Go module releases, other Go modules in the repository that build against its local copy, through a `replace` directive pointing at its directory or the repository's `go.work`, require the new version (`require example.com/lib v1.4.0`), and so does a versioned `replace` of it. Those dependent modules release with a patch, so their published `go.mod` never requires an older version than the one they were built against:
+
+```text
+Release plan:
+. (1.3.2 -> 1.4.0, minor)
+|-- direct minor
+|-- propagated from child otel
+`-- otel (1.3.2 -> 1.3.3, patch)
+    |-- propagated from dependency root (example.com/lib via otel/go.mod)
+    `-- go.mod (example.com/lib 1.3.2 -> 1.4.0)
+```
+
+The `require` names the new version before its tag exists. Go never downloads a module replaced with a local directory, so the dependent still builds and its `go.sum` stays the same. Modules that require a published version without a `replace` or `go.work` keep it.
+
 Go puts the major version of a module at v2 or above into its module path (`example.com/lib/v2`), and ignores tags whose major version doesn't match the path. When a Go module releases at a major version its path doesn't allow, such as `example.com/lib` going from `1.4.0` to `2.0.0`, bumper moves the module to the new path:
 
 - its `go.mod` `module` directive becomes `example.com/lib/v2`

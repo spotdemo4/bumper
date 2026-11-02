@@ -320,25 +320,21 @@ fn propagate_dependency_updates(
     Ok(())
 }
 
-fn rewrite_go_module_paths(
-    repo: &Repository,
-    repo_root: &Path,
-    plan: &ReleasePlan,
-) -> AppResult<()> {
+fn rewrite_go_modules(repo: &Repository, repo_root: &Path, plan: &ReleasePlan) -> AppResult<()> {
     if plan.go_files.is_empty() {
         return Ok(());
     }
     println!(
-        "moving Go module paths to new major versions in {} file(s)...",
+        "updating Go module paths and versions in {} file(s)...",
         plan.go_files.len()
     );
     for (relative, planned) in &plan.go_files {
         let file = repo_root.join(relative);
-        match rewrite_file(&file, &planned.renames, &plan.go_module_paths) {
+        match rewrite_file(&file, &planned.updates, &plan.go_module_paths) {
             Ok(Some(rewrite)) => {
                 fs::write(&file, rewrite.content)
                     .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
-                println!("updated Go module paths in {}", file.display());
+                println!("updated Go modules in {}", file.display());
                 stage_path(repo, repo_root, &file)?;
             }
             Ok(None) => {}
@@ -501,7 +497,7 @@ fn apply_release_plan(
 ) -> AppResult<()> {
     bump_releases(repo, input, ignored_directories)?;
     propagate_dependency_updates(repo, input.repo_root, input.plan)?;
-    rewrite_go_module_paths(repo, input.repo_root, input.plan)?;
+    rewrite_go_modules(repo, input.repo_root, input.plan)?;
     commit_tag_and_push(repo, config, input.plan)
 }
 

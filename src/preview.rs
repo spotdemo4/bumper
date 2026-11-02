@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use bumper::bump::{TypedChange, VersionBump, preview_typed_change};
-use bumper::go::ModuleRename;
+use bumper::go::ModuleUpdate;
 use bumper::package::Package;
 
 use crate::Target;
@@ -24,7 +24,7 @@ pub struct BumpPreview {
 pub struct PreviewFile {
     pub version: Option<VersionBump>,
     pub dependencies: BTreeMap<PathBuf, DependencyFileChange>,
-    pub go_renames: Vec<ModuleRename>,
+    pub go_updates: Vec<ModuleUpdate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,8 +113,8 @@ pub fn collect_bump_preview(input: &PreviewInput<'_>) -> AppResult<BumpPreview> 
             .files
             .entry(file.clone())
             .or_default()
-            .go_renames
-            .clone_from(&planned.renames);
+            .go_updates
+            .clone_from(&planned.updates);
     }
 
     Ok(preview)
@@ -304,11 +304,16 @@ fn file_change_labels(file: &PreviewFile, plan: &ReleasePlan) -> Vec<String> {
             ));
         }
     }
-    changes.extend(
-        file.go_renames
-            .iter()
-            .map(|rename| format!("{} -> {}", rename.old_path, rename.new_path)),
-    );
+    changes.extend(file.go_updates.iter().map(|update| {
+        if update.moves() {
+            format!("{} -> {}", update.old_path, update.new_path)
+        } else {
+            format!(
+                "{} {} -> {}",
+                update.old_path, update.old_version, update.version
+            )
+        }
+    }));
     changes
 }
 
@@ -437,7 +442,7 @@ mod tests {
         PreviewFile {
             version: Some(version_bump(old_version, new_version)),
             dependencies,
-            go_renames: Vec::new(),
+            go_updates: Vec::new(),
         }
     }
 

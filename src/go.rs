@@ -12,13 +12,25 @@ use std::str::CharIndices;
 
 type AppResult<T> = Result<T, String>;
 
-/// Moves a Go module to the module path of a new major version.
+/// A Go module release, which moves the module to the module path of a new major version
+/// when its current path doesn't allow it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ModuleRename {
+pub struct ModuleUpdate {
     pub old_path: String,
+    /// The module path after the release, which is `old_path` unless the module moves.
     pub new_path: String,
+    /// The version the module released before, without a `v` prefix.
+    pub old_version: String,
     /// The version the module releases, without a `v` prefix.
     pub version: String,
+}
+
+impl ModuleUpdate {
+    /// Whether the module moves to a new module path.
+    #[must_use]
+    pub fn moves(&self) -> bool {
+        self.old_path != self.new_path
+    }
 }
 
 /// The major versions a Go module path allows.
@@ -178,30 +190,36 @@ pub fn local_replacements(source: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Rewrites the module paths `renames` moves in a go.mod or .go `file`. `module_paths` are the
-/// paths of every module in the repository, so imports of nested modules stay unchanged.
+/// Rewrites the references to the modules `updates` release in a go.mod or .go `file`.
+/// `module_paths` are the paths of every module in the repository, so imports of nested
+/// modules stay unchanged.
 ///
 /// # Errors
 ///
 /// Fails when the file can't be read.
 pub fn rewrite_file(
     file: &Path,
-    renames: &[ModuleRename],
+    updates: &[ModuleUpdate],
     module_paths: &[String],
 ) -> AppResult<Option<Rewrite>> {
+    let go_mod = file.file_name() == Some(OsStr::new("go.mod"));
+    // imports only change when a module moves
+    if !go_mod && !updates.iter().any(ModuleUpdate::moves) {
+        return Ok(None);
+    }
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    Ok(if file.file_name() == Some(OsStr::new("go.mod")) {
-        rewrite_go_mod(&source, renames)
+    Ok(if go_mod {
+        rewrite_go_mod(&source, updates)
     } else {
-        rewrite_imports(&source, renames, module_paths)
+        rewrite_imports(&source, updates, module_paths)
     })
 }
 
 /// Moves the `module`, `require` and `replace` directives of go.mod `source` to the new module
 /// paths, requiring the new versions.
 #[must_use]
-pub fn rewrite_go_mod(source: &str, renames: &[ModuleRename]) -> Option<Rewrite> {
+pub fn rewrite_go_mod(source: &str, updates: &[ModuleUpdate]) -> Option<Rewrite> {
     let mut edits = Vec::new();
     let mut changed = BTreeSet::new();
 
@@ -209,30 +227,35 @@ pub fn rewrite_go_mod(source: &str, renames: &[ModuleRename]) -> Option<Rewrite>
         let Some(path) = directive.args.first() else {
             continue;
         };
-        let Some(rename) = path
+        let Some(update) = path
             .value()
-            .and_then(|value| renames.iter().find(|rename| rename.old_path == value))
+            .and_then(|value| updates.iter().find(|update| update.old_path == value))
         else {
             continue;
         };
-        let version = format!("v{}", rename.version);
+        let version = format!("v{}", update.version);
+        let mut directive_edits = vec![(path.range.clone(), path.replacement(&update.new_path))];
         match directive.verb {
             "module" => {}
             "require" => {
                 let Some(required) = directive.args.get(1) else {
                     continue;
                 };
-                edits.push((required.range.clone(), version));
+                directive_edits.push((required.range.clone(), version));
             }
             "replace" => {
                 if let Some(replaced) = directive.args.get(1).filter(|token| !token.is("=>")) {
-                    edits.push((replaced.range.clone(), version));
+                    directive_edits.push((replaced.range.clone(), version));
                 }
             }
             _ => continue,
         }
-        edits.push((path.range.clone(), path.replacement(&rename.new_path)));
-        changed.insert(rename.old_path.clone());
+        directive_edits
+            .retain(|(range, replacement)| source.get(range.clone()) != Some(replacement.as_str()));
+        if !directive_edits.is_empty() {
+            edits.extend(directive_edits);
+            changed.insert(update.old_path.clone());
+        }
     }
 
     apply_edits(source, edits, changed)
@@ -242,7 +265,7 @@ pub fn rewrite_go_mod(source: &str, renames: &[ModuleRename]) -> Option<Rewrite>
 #[must_use]
 pub fn rewrite_imports(
     source: &str,
-    renames: &[ModuleRename],
+    updates: &[ModuleUpdate],
     module_paths: &[String],
 ) -> Option<Rewrite> {
     let mut edits = Vec::new();
@@ -252,23 +275,24 @@ pub fn rewrite_imports(
         // the most specific module provides the package, so nested modules keep their paths
         let owner = module_paths
             .iter()
-            .chain(renames.iter().map(|rename| &rename.old_path))
+            .chain(updates.iter().map(|update| &update.old_path))
             .filter(|module| is_within_module(&import.value, module))
             .max_by_key(|module| module.len());
-        let Some(rename) =
-            owner.and_then(|owner| renames.iter().find(|rename| rename.old_path == *owner))
+        let Some(update) = owner
+            .and_then(|owner| updates.iter().find(|update| update.old_path == *owner))
+            .filter(|update| update.moves())
         else {
             continue;
         };
-        let Some(package) = import.value.strip_prefix(rename.old_path.as_str()) else {
+        let Some(package) = import.value.strip_prefix(update.old_path.as_str()) else {
             continue;
         };
         let quote = import.quote;
         edits.push((
             import.range,
-            format!("{quote}{}{package}{quote}", rename.new_path),
+            format!("{quote}{}{package}{quote}", update.new_path),
         ));
-        changed.insert(rename.old_path.clone());
+        changed.insert(update.old_path.clone());
     }
 
     apply_edits(source, edits, changed)
@@ -608,10 +632,11 @@ fn import_spec(token: GoToken<'_>, lexer: &mut GoLexer<'_>, paths: &mut Vec<Impo
 mod tests {
     use super::*;
 
-    fn rename(old_path: &str, new_path: &str, version: &str) -> ModuleRename {
-        ModuleRename {
+    fn update(old_path: &str, new_path: &str, version: &str) -> ModuleUpdate {
+        ModuleUpdate {
             old_path: old_path.to_string(),
             new_path: new_path.to_string(),
+            old_version: "1.0.0".to_string(),
             version: version.to_string(),
         }
     }
@@ -721,12 +746,12 @@ mod tests {
             "replace example.com/other v1.0.0 => ../other\n",
             "exclude example.com/lib v1.3.0\n",
         );
-        let renames = [
-            rename("example.com/lib", "example.com/lib/v2", "2.0.0"),
-            rename("example.com/other", "example.com/other/v3", "3.0.0"),
+        let updates = [
+            update("example.com/lib", "example.com/lib/v2", "2.0.0"),
+            update("example.com/other", "example.com/other/v3", "3.0.0"),
         ];
 
-        let rewrite = rewrite_go_mod(source, &renames).expect("rewrite go.mod");
+        let rewrite = rewrite_go_mod(source, &updates).expect("rewrite go.mod");
 
         assert_eq!(
             rewrite.content,
@@ -757,14 +782,62 @@ mod tests {
 
         let own = rewrite_go_mod(
             "module example.com/lib\n\ngo 1.24\n",
-            &[rename("example.com/lib", "example.com/lib/v2", "2.0.0")],
+            &[update("example.com/lib", "example.com/lib/v2", "2.0.0")],
         )
         .expect("rewrite own module");
         assert_eq!(own.content, "module example.com/lib/v2\n\ngo 1.24\n");
         assert_eq!(
-            rewrite_go_mod("module example.com/app\n", &renames),
+            rewrite_go_mod("module example.com/app\n", &updates),
             None,
             "unrelated modules stay unchanged"
+        );
+    }
+
+    #[test]
+    fn go_mod_rewrite_requires_new_versions_of_modules_that_keep_their_path() {
+        let source = concat!(
+            "module example.com/app\n",
+            "\n",
+            "require (\n",
+            "\texample.com/lib v1.3.2\n",
+            "\texample.com/other v1.0.0\n",
+            ")\n",
+            "\n",
+            "replace example.com/lib => ../lib\n",
+            "replace example.com/other v1.0.0 => ../other\n",
+        );
+        let updates = [
+            update("example.com/lib", "example.com/lib", "1.4.0"),
+            update("example.com/other", "example.com/other", "1.0.0"),
+        ];
+
+        let rewrite = rewrite_go_mod(source, &updates).expect("rewrite go.mod");
+
+        assert_eq!(
+            rewrite.content,
+            source.replace("example.com/lib v1.3.2", "example.com/lib v1.4.0")
+        );
+        assert_eq!(
+            rewrite.changed,
+            BTreeSet::from(["example.com/lib".to_string()]),
+            "modules already at the new version are unchanged"
+        );
+        assert_eq!(
+            rewrite_go_mod(
+                "module example.com/lib\n\ngo 1.24\n",
+                &[update("example.com/lib", "example.com/lib", "1.4.0")],
+            ),
+            None,
+            "the module directive keeps its path"
+        );
+        assert_eq!(
+            rewrite_imports(
+                "package app\n\nimport \"example.com/lib\"\n",
+                &updates,
+                &["example.com/lib".to_string()]
+            ),
+            None,
+            "imports keep their paths"
         );
     }
 
@@ -793,13 +866,13 @@ mod tests {
             "\n",
             "func main() { fmt.Println(path, lib.Name, lib2.Name) }\n",
         );
-        let renames = [rename("example.com/lib", "example.com/lib/v2", "2.0.0")];
+        let updates = [update("example.com/lib", "example.com/lib/v2", "2.0.0")];
         let modules = [
             "example.com/lib".to_string(),
             "example.com/lib/tools".to_string(),
         ];
 
-        let rewrite = rewrite_imports(source, &renames, &modules).expect("rewrite imports");
+        let rewrite = rewrite_imports(source, &updates, &modules).expect("rewrite imports");
 
         assert_eq!(
             rewrite.content,
@@ -821,12 +894,12 @@ mod tests {
 
     #[test]
     fn import_rewrite_skips_files_without_matching_imports() {
-        let renames = [rename("example.com/lib", "example.com/lib/v2", "2.0.0")];
+        let updates = [update("example.com/lib", "example.com/lib/v2", "2.0.0")];
 
         assert_eq!(
             rewrite_imports(
                 "package app\n\nimport \"fmt\"\n",
-                &renames,
+                &updates,
                 &["example.com/lib".to_string()]
             ),
             None
@@ -834,7 +907,7 @@ mod tests {
         assert_eq!(
             rewrite_imports(
                 "package app\n\nimport (\n\t\"example.com/lib\"\n",
-                &renames,
+                &updates,
                 &["example.com/lib".to_string()]
             ),
             None,

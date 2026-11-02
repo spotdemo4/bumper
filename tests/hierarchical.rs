@@ -1869,6 +1869,100 @@ fn go_major_release_moves_the_module_path_and_its_local_dependents() {
 }
 
 #[test]
+fn go_release_updates_the_requires_of_its_local_dependents() {
+    let lib_import = "package main\n\nimport \"example.com/lib\"\n\nfunc main() { _ = lib.Name }\n";
+    let (local, _remote, repo) = files_fixture(
+        "go-minor-release",
+        &[
+            ("go.mod", "module example.com/lib\n\ngo 1.24\n"),
+            ("go.work", "go 1.24\n\nuse (\n\t.\n\t./app\n)\n"),
+            ("lib.go", "package lib\n\nconst Name = \"lib\"\n"),
+            (
+                "otel/go.mod",
+                concat!(
+                    "module example.com/lib/otel\n\n",
+                    "go 1.24\n\n",
+                    "require example.com/lib v1.3.2\n\n",
+                    "replace example.com/lib v1.3.2 => ../\n",
+                ),
+            ),
+            ("otel/main.go", lib_import),
+            (
+                "app/go.mod",
+                "module example.com/app\n\ngo 1.24\n\nrequire example.com/lib v1.3.2\n",
+            ),
+            ("app/main.go", lib_import),
+            (
+                "remote/go.mod",
+                "module example.com/remote\n\ngo 1.24\n\nrequire example.com/lib v1.0.0\n",
+            ),
+            ("remote/main.go", lib_import),
+        ],
+    );
+    let baseline = commit_all(&repo, "chore: initialize Go modules");
+    for name in ["v1.3.2", "otel/v1.3.2", "app/v0.2.0", "remote/v0.1.0"] {
+        tag(&repo, name, baseline);
+    }
+    fs::write(
+        local.path().join("lib.go"),
+        "package lib\n\nconst Name = \"lib\"\n\nconst Version = \"1.4.0\"\n",
+    )
+    .expect("update library");
+    commit_all(&repo, "feat: add the library version");
+
+    let output = run_bumper(&local);
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(". (1.3.2 -> 1.4.0, minor)"), "{stdout}");
+    assert!(stdout.contains("otel (1.3.2 -> 1.3.3, patch)"), "{stdout}");
+    assert!(
+        stdout.contains("propagated from dependency root (example.com/lib via otel/go.mod)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("go.mod (example.com/lib 1.3.2 -> 1.4.0)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("app (0.2.0 -> 0.2.1, patch)"), "{stdout}");
+    assert!(!stdout.contains("remote ("), "{stdout}");
+    for name in ["v1.4.0", "otel/v1.3.3", "app/v0.2.1"] {
+        repo.revparse_single(&format!("refs/tags/{name}"))
+            .expect("find release tag");
+    }
+    assert!(repo.revparse_single("refs/tags/remote/v0.1.1").is_err());
+
+    let read = |path: &str| fs::read_to_string(local.path().join(path)).expect("read Go file");
+    assert_eq!(read("go.mod"), "module example.com/lib\n\ngo 1.24\n");
+    assert_eq!(
+        read("otel/go.mod"),
+        concat!(
+            "module example.com/lib/otel\n\n",
+            "go 1.24\n\n",
+            "require example.com/lib v1.4.0\n\n",
+            "replace example.com/lib v1.4.0 => ../\n",
+        )
+    );
+    assert_eq!(
+        read("app/go.mod"),
+        "module example.com/app\n\ngo 1.24\n\nrequire example.com/lib v1.4.0\n"
+    );
+    assert_eq!(
+        read("remote/go.mod"),
+        "module example.com/remote\n\ngo 1.24\n\nrequire example.com/lib v1.0.0\n"
+    );
+    for module in ["otel", "app", "remote"] {
+        assert_eq!(read(&format!("{module}/main.go")), lib_import);
+    }
+    assert!(repo.statuses(None).expect("read status").is_empty());
+}
+
+#[test]
 fn go_major_subdirectory_releases_under_its_parent_tag_prefix() {
     let (local, _remote, repo) = files_fixture(
         "go-major-subdirectory",
