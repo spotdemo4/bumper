@@ -53,7 +53,7 @@ impl PathMajor {
     }
 }
 
-/// A rewritten go.mod or .go file.
+/// A rewritten go.mod, .go, .proto or buf template file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rewrite {
     pub content: String,
@@ -190,9 +190,28 @@ pub fn local_replacements(source: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Rewrites the references to the modules `updates` release in a go.mod or .go `file`.
-/// `module_paths` are the paths of every module in the repository, so imports of nested
-/// modules stay unchanged.
+/// Whether `file` is a buf generation template, such as `buf.gen.yaml` or `buf.gen.go.yaml`.
+#[must_use]
+pub fn is_buf_template(file: &Path) -> bool {
+    let Some(name) = file.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    name.starts_with("buf.")
+        && name.split('.').any(|part| part == "gen")
+        && file
+            .extension()
+            .is_some_and(|extension| extension == "yaml" || extension == "yml")
+}
+
+/// Whether `file` is a protobuf source file.
+#[must_use]
+pub fn is_proto(file: &Path) -> bool {
+    file.extension() == Some(OsStr::new("proto"))
+}
+
+/// Rewrites the references to the modules `updates` release in a go.mod, .go, .proto or buf
+/// template `file`. `module_paths` are the paths of every module in the repository, so
+/// references to nested modules stay unchanged.
 ///
 /// # Errors
 ///
@@ -203,7 +222,7 @@ pub fn rewrite_file(
     module_paths: &[String],
 ) -> AppResult<Option<Rewrite>> {
     let go_mod = file.file_name() == Some(OsStr::new("go.mod"));
-    // imports only change when a module moves
+    // only go.mod requires versions, other references only change when a module moves
     if !go_mod && !updates.iter().any(ModuleUpdate::moves) {
         return Ok(None);
     }
@@ -211,6 +230,10 @@ pub fn rewrite_file(
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
     Ok(if go_mod {
         rewrite_go_mod(&source, updates)
+    } else if is_buf_template(file) {
+        rewrite_buf_template(&source, updates, module_paths)
+    } else if is_proto(file) {
+        rewrite_proto(&source, updates, module_paths)
     } else {
         rewrite_imports(&source, updates, module_paths)
     })
@@ -272,30 +295,90 @@ pub fn rewrite_imports(
     let mut changed = BTreeSet::new();
 
     for import in import_paths(source) {
-        // the most specific module provides the package, so nested modules keep their paths
-        let owner = module_paths
-            .iter()
-            .chain(updates.iter().map(|update| &update.old_path))
-            .filter(|module| is_within_module(&import.value, module))
-            .max_by_key(|module| module.len());
-        let Some(update) = owner
-            .and_then(|owner| updates.iter().find(|update| update.old_path == *owner))
-            .filter(|update| update.moves())
-        else {
-            continue;
-        };
-        let Some(package) = import.value.strip_prefix(update.old_path.as_str()) else {
+        let Some((update, path)) = moved_path(&import.value, updates, module_paths) else {
             continue;
         };
         let quote = import.quote;
-        edits.push((
-            import.range,
-            format!("{quote}{}{package}{quote}", update.new_path),
-        ));
+        edits.push((import.range, format!("{quote}{path}{quote}")));
         changed.insert(update.old_path.clone());
     }
 
     apply_edits(source, edits, changed)
+}
+
+/// Moves the `go_package` options of protobuf `source` to the new module paths, keeping the
+/// package name after a `;`.
+#[must_use]
+pub fn rewrite_proto(
+    source: &str,
+    updates: &[ModuleUpdate],
+    module_paths: &[String],
+) -> Option<Rewrite> {
+    let mut edits = Vec::new();
+    let mut changed = BTreeSet::new();
+
+    for option in proto_go_packages(source) {
+        let (import, name) = match option.value.split_once(';') {
+            Some((import, name)) => (import, Some(name)),
+            None => (option.value.as_str(), None),
+        };
+        let Some((update, path)) = moved_path(import, updates, module_paths) else {
+            continue;
+        };
+        let quote = option.quote;
+        let name = name.map(|name| format!(";{name}")).unwrap_or_default();
+        edits.push((option.range, format!("{quote}{path}{name}{quote}")));
+        changed.insert(update.old_path.clone());
+    }
+
+    apply_edits(source, edits, changed)
+}
+
+/// Moves the Go import paths in the values of buf template `source` to the new module paths,
+/// such as `managed` `go_package_prefix` and `go_package` values, and `module=` and `M`
+/// plugin options.
+#[must_use]
+pub fn rewrite_buf_template(
+    source: &str,
+    updates: &[ModuleUpdate],
+    module_paths: &[String],
+) -> Option<Rewrite> {
+    let mut edits = Vec::new();
+    let mut changed = BTreeSet::new();
+
+    for range in yaml_value_paths(source) {
+        let Some(value) = source.get(range.clone()) else {
+            continue;
+        };
+        let Some((update, path)) = moved_path(value, updates, module_paths) else {
+            continue;
+        };
+        edits.push((range, path));
+        changed.insert(update.old_path.clone());
+    }
+
+    apply_edits(source, edits, changed)
+}
+
+/// Returns the update moving the module that provides the package at import path `path`, with
+/// the package's new import path.
+fn moved_path<'a>(
+    path: &str,
+    updates: &'a [ModuleUpdate],
+    module_paths: &[String],
+) -> Option<(&'a ModuleUpdate, String)> {
+    // the most specific module provides the package, so nested modules keep their paths
+    let owner = module_paths
+        .iter()
+        .chain(updates.iter().map(|update| &update.old_path))
+        .filter(|module| is_within_module(path, module))
+        .max_by_key(|module| module.len())?;
+    let update = updates
+        .iter()
+        .find(|update| update.old_path == *owner)
+        .filter(|update| update.moves())?;
+    let package = path.strip_prefix(update.old_path.as_str())?;
+    Some((update, format!("{}{package}", update.new_path)))
 }
 
 fn is_within_module(package: &str, module: &str) -> bool {
@@ -493,7 +576,7 @@ fn strip_line_comment(line: &str) -> &str {
     line
 }
 
-/// An import path string in a Go file.
+/// An import path string in a Go or protobuf file.
 struct ImportPath {
     range: Range<usize>,
     value: String,
@@ -507,13 +590,40 @@ enum GoToken<'a> {
     Punctuation(char),
 }
 
-/// Reads the tokens at the start of a Go file, up to the end of its import declarations.
+/// The languages [`GoLexer`] reads, which differ in their string literals.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Syntax {
+    /// Go, with interpreted `"` strings and raw `` ` `` strings.
+    Go,
+    /// Protobuf, with interpreted `"` and `'` strings.
+    Protobuf,
+}
+
+impl Syntax {
+    fn is_quote(self, character: char) -> bool {
+        match self {
+            Self::Go => matches!(character, '"' | '`'),
+            Self::Protobuf => matches!(character, '"' | '\''),
+        }
+    }
+}
+
+/// Reads the tokens of a Go or protobuf file.
 struct GoLexer<'a> {
     source: &'a str,
     characters: Peekable<CharIndices<'a>>,
+    syntax: Syntax,
 }
 
 impl<'a> GoLexer<'a> {
+    fn new(source: &'a str, syntax: Syntax) -> Self {
+        Self {
+            source,
+            characters: source.char_indices().peekable(),
+            syntax,
+        }
+    }
+
     /// The next token, skipping whitespace, comments and semicolons. `None` at the end of
     /// the file or at a malformed comment or string.
     fn next_token(&mut self) -> Option<GoToken<'a>> {
@@ -534,7 +644,7 @@ impl<'a> GoLexer<'a> {
                         star = next == '*';
                     }
                 }
-                '"' | '`' => return self.string(start, character),
+                _ if self.syntax.is_quote(character) => return self.string(start, character),
                 _ if character.is_whitespace() => {}
                 _ if character.is_alphabetic() || character == '_' => {
                     let mut end = self.source.len();
@@ -553,16 +663,17 @@ impl<'a> GoLexer<'a> {
     }
 
     fn string(&mut self, start: usize, quote: char) -> Option<GoToken<'a>> {
+        let interpreted = quote != '`';
         let mut escaped = false;
         let mut has_escape = false;
         loop {
             let (index, next) = self.characters.next()?;
             if escaped {
                 escaped = false;
-            } else if quote == '"' && next == '\\' {
+            } else if interpreted && next == '\\' {
                 escaped = true;
                 has_escape = true;
-            } else if quote == '"' && next == '\n' {
+            } else if interpreted && next == '\n' {
                 return None;
             } else if next == quote {
                 let value = self.source.get(start.checked_add(1)?..index)?;
@@ -578,10 +689,7 @@ impl<'a> GoLexer<'a> {
 
 /// Returns the import paths of Go `source`, or none when its imports can't be parsed.
 fn import_paths(source: &str) -> Vec<ImportPath> {
-    let mut lexer = GoLexer {
-        source,
-        characters: source.char_indices().peekable(),
-    };
+    let mut lexer = GoLexer::new(source, Syntax::Go);
     let mut paths = Vec::new();
     if !matches!(lexer.next_token(), Some(GoToken::Word("package")))
         || !matches!(lexer.next_token(), Some(GoToken::Word(_)))
@@ -626,6 +734,225 @@ fn import_spec(token: GoToken<'_>, lexer: &mut GoLexer<'_>, paths: &mut Vec<Impo
         }
         _ => false,
     }
+}
+
+/// Returns the values of the `option go_package = "...";` statements in protobuf `source`
+/// that have no escapes, stopping at a malformed comment or string.
+fn proto_go_packages(source: &str) -> Vec<ImportPath> {
+    let mut lexer = GoLexer::new(source, Syntax::Protobuf);
+    let mut paths = Vec::new();
+    // how much of `option go_package =` the previous tokens matched
+    let mut matched = 0;
+    while let Some(token) = lexer.next_token() {
+        matched = match (matched, token) {
+            (_, GoToken::Word("option")) => 1,
+            (1, GoToken::Word("go_package")) => 2,
+            (2, GoToken::Punctuation('=')) => 3,
+            (3, GoToken::String(path)) => {
+                paths.extend(path);
+                0
+            }
+            _ => 0,
+        };
+    }
+    paths
+}
+
+/// Returns the ranges of the words in buf template `source` that could be Go import paths:
+/// `value` entries such as `value: example.com/lib/gen`, values under `go_package_prefix`, and
+/// plugin options such as `- module=example.com/lib` or `opt: paths=source_relative,Mfoo.proto=example.com/lib/foo`.
+/// Other values, such as `out` directories, and comments are skipped.
+fn yaml_value_paths(source: &str) -> Vec<Range<usize>> {
+    let is_path = |character: char| {
+        character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_' | '~' | '+' | '/')
+    };
+    let mut ranges = Vec::new();
+    // the keys of the mappings around the current line, with their indentation
+    let mut keys: Vec<(usize, &str)> = Vec::new();
+    let mut offset = 0_usize;
+
+    for line in source.split_inclusive('\n') {
+        let start = offset;
+        offset = offset.saturating_add(line.len());
+        let content = strip_yaml_comment(line);
+        if content.trim().is_empty() {
+            continue;
+        }
+        let parsed = yaml_line(content);
+        match (parsed.dash, parsed.key) {
+            (Some(dash), _) => keys.retain(|(indent, _)| *indent <= dash),
+            (None, Some((indent, _))) => keys.retain(|(key_indent, _)| *key_indent < indent),
+            // a continuation of the previous value
+            (None, None) => {}
+        }
+        if let Some(key) = parsed.key {
+            keys.push(key);
+        }
+        let Some(value) = content.get(parsed.value..) else {
+            continue;
+        };
+
+        // the keys of the flow collections around the current word, such as `{value: ...}`
+        let mut flow: Vec<Option<&str>> = Vec::new();
+        let mut characters = value.char_indices().peekable();
+        while let Some((index, character)) = characters.next() {
+            if !is_path(character) {
+                match character {
+                    '{' | '[' => flow.push(None),
+                    '}' | ']' => {
+                        flow.pop();
+                    }
+                    ',' => {
+                        if let Some(key) = flow.last_mut() {
+                            *key = None;
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            let mut end = value.len();
+            while let Some(&(next_index, next)) = characters.peek() {
+                if !is_path(next) {
+                    end = next_index;
+                    break;
+                }
+                characters.next();
+            }
+            let word = value.get(index..end).unwrap_or_default();
+            let next = characters.peek().map(|&(_, next)| next);
+            if next == Some(':') {
+                if let Some(key) = flow.last_mut() {
+                    *key = Some(word);
+                }
+                continue;
+            }
+
+            let mut enclosing = keys
+                .iter()
+                .map(|(_, key)| *key)
+                .chain(flow.iter().flatten().copied());
+            let innermost = flow
+                .iter()
+                .rev()
+                .flatten()
+                .next()
+                .copied()
+                .or_else(|| keys.last().map(|(_, key)| *key));
+            let go_value = innermost == Some("value")
+                || enclosing.any(|key| matches!(key, "opt" | "go_package_prefix"));
+            let separated_before = value
+                .get(..index)
+                .and_then(|before| before.chars().next_back())
+                .is_none_or(|before| {
+                    before.is_whitespace() || matches!(before, '"' | '\'' | ',' | '[' | '{' | '=')
+                });
+            let separated_after = next.is_none_or(|next| {
+                next.is_whitespace() || matches!(next, '"' | '\'' | ',' | ']' | '}' | ';')
+            });
+            if go_value && separated_before && separated_after {
+                let base = start.saturating_add(parsed.value);
+                ranges.push(base.saturating_add(index)..base.saturating_add(end));
+            }
+        }
+    }
+
+    ranges
+}
+
+/// The structure of a YAML line.
+struct YamlLine<'a> {
+    /// The indentation of its first sequence indicator.
+    dash: Option<usize>,
+    /// Its mapping key and the key's indentation.
+    key: Option<(usize, &'a str)>,
+    /// Where its value starts.
+    value: usize,
+}
+
+fn yaml_line(line: &str) -> YamlLine<'_> {
+    let mut dash = None;
+    let mut start = 0;
+    loop {
+        let rest = line.get(start..).unwrap_or_default();
+        let trimmed = rest.trim_start();
+        let indent = rest.len().saturating_sub(trimmed.len());
+        start = start.saturating_add(indent);
+        match trimmed.strip_prefix('-') {
+            Some(after) if after.is_empty() || after.starts_with(char::is_whitespace) => {
+                dash.get_or_insert(start);
+                start = start.saturating_add(1);
+            }
+            _ => break,
+        }
+    }
+
+    let rest = line.get(start..).unwrap_or_default();
+    let mut quote = None;
+    let mut characters = rest.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        match quote {
+            Some('"') if character == '\\' => {
+                characters.next();
+            }
+            Some(delimiter) if character == delimiter => quote = None,
+            None if index == 0 && matches!(character, '"' | '\'') => quote = Some(character),
+            None if character == ':'
+                && characters
+                    .peek()
+                    .is_none_or(|&(_, next)| next.is_whitespace()) =>
+            {
+                let key = rest
+                    .get(..index)
+                    .unwrap_or_default()
+                    .trim()
+                    .trim_matches(['"', '\'']);
+                return YamlLine {
+                    dash,
+                    key: Some((start, key)),
+                    value: start.saturating_add(index).saturating_add(1),
+                };
+            }
+            // a flow collection is all value
+            None if index == 0 && matches!(character, '{' | '[') => break,
+            _ => {}
+        }
+    }
+    YamlLine {
+        dash,
+        key: None,
+        value: start,
+    }
+}
+
+/// Removes a `#` comment from a YAML line, ignoring `#` inside quoted scalars and words.
+fn strip_yaml_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut previous = None;
+    let mut characters = line.char_indices().peekable();
+
+    while let Some((index, character)) = characters.next() {
+        match quote {
+            Some('"') if character == '\\' => {
+                characters.next();
+            }
+            Some(delimiter) if character == delimiter => quote = None,
+            None if matches!(character, '"' | '\'')
+                && previous.is_none_or(|previous: char| {
+                    previous.is_whitespace() || matches!(previous, ':' | '-' | ',' | '[' | '{')
+                }) =>
+            {
+                quote = Some(character);
+            }
+            None if character == '#' && previous.is_none_or(char::is_whitespace) => {
+                return line.get(..index).unwrap_or(line);
+            }
+            _ => {}
+        }
+        previous = Some(character);
+    }
+
+    line
 }
 
 #[cfg(test)]
@@ -933,6 +1260,207 @@ mod tests {
                 ("example.com/lib".to_string(), "../lib".to_string()),
                 ("example.com/pinned".to_string(), "./pinned".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn recognizes_buf_templates_and_proto_files() {
+        for name in [
+            "buf.gen.yaml",
+            "buf.gen.yml",
+            "buf.gen.go.yaml",
+            "buf.go.gen.yaml",
+        ] {
+            assert!(is_buf_template(Path::new(name)), "{name}");
+        }
+        for name in [
+            "buf.yaml",
+            "buf.work.yaml",
+            "buf.gen.json",
+            "my.buf.gen.yaml",
+        ] {
+            assert!(!is_buf_template(Path::new(name)), "{name}");
+        }
+        assert!(is_proto(Path::new("proto/auth/v1/login.proto")));
+        assert!(!is_proto(Path::new("proto/buf.yaml")));
+    }
+
+    #[test]
+    fn buf_template_rewrite_moves_go_package_values_and_plugin_options() {
+        let updates = [update(
+            "example.com/stack/server",
+            "example.com/stack/server/v2",
+            "2.0.0",
+        )];
+        let modules = [
+            "example.com/stack/server".to_string(),
+            "example.com/stack/server/tools".to_string(),
+        ];
+        let source = concat!(
+            "version: v2\n",
+            "plugins:\n",
+            "  - local: protoc-gen-go\n",
+            "    out: server/gen # example.com/stack/server/gen\n",
+            "    opt:\n",
+            "      - paths=import\n",
+            "      - module=example.com/stack/server/gen\n",
+            "      - \"Mfoo/v1/foo.proto=example.com/stack/server/gen/foo/v1;foov1\"\n",
+            "  - remote: buf.build/connectrpc/go\n",
+            "    out: server/gen\n",
+            "    opt: [paths=import, 'module=example.com/stack/server/gen']\n",
+            "  - local: protoc-gen-other\n",
+            "    out: example.com/stack/server/gen\n",
+            "    opt: Mbar.proto=example.com/stack/server/tools/gen,Mbaz.proto=example.com/stack/server/gen/baz\n",
+            "managed:\n",
+            "  enabled: true\n",
+            "  override:\n",
+            "    - file_option: go_package_prefix\n",
+            "      value: example.com/stack/server/gen\n",
+            "    - file_option: go_package\n",
+            "      path: foo/v1/foo.proto\n",
+            "      value: \"example.com/stack/server/gen/foo/v1;foov1\"\n",
+            "    - {file_option: go_package_prefix, module: buf.build/acme/weather, value: example.com/stack/server/weather}\n",
+            "  disable:\n",
+            "    - file_option: go_package_prefix\n",
+            "      module: buf.build/trevrpc/trevrpc\n",
+        );
+
+        let rewrite = rewrite_buf_template(source, &updates, &modules).expect("rewrite template");
+
+        assert_eq!(
+            rewrite.content,
+            concat!(
+                "version: v2\n",
+                "plugins:\n",
+                "  - local: protoc-gen-go\n",
+                "    out: server/gen # example.com/stack/server/gen\n",
+                "    opt:\n",
+                "      - paths=import\n",
+                "      - module=example.com/stack/server/v2/gen\n",
+                "      - \"Mfoo/v1/foo.proto=example.com/stack/server/v2/gen/foo/v1;foov1\"\n",
+                "  - remote: buf.build/connectrpc/go\n",
+                "    out: server/gen\n",
+                "    opt: [paths=import, 'module=example.com/stack/server/v2/gen']\n",
+                "  - local: protoc-gen-other\n",
+                "    out: example.com/stack/server/gen\n",
+                "    opt: Mbar.proto=example.com/stack/server/tools/gen,Mbaz.proto=example.com/stack/server/v2/gen/baz\n",
+                "managed:\n",
+                "  enabled: true\n",
+                "  override:\n",
+                "    - file_option: go_package_prefix\n",
+                "      value: example.com/stack/server/v2/gen\n",
+                "    - file_option: go_package\n",
+                "      path: foo/v1/foo.proto\n",
+                "      value: \"example.com/stack/server/v2/gen/foo/v1;foov1\"\n",
+                "    - {file_option: go_package_prefix, module: buf.build/acme/weather, value: example.com/stack/server/v2/weather}\n",
+                "  disable:\n",
+                "    - file_option: go_package_prefix\n",
+                "      module: buf.build/trevrpc/trevrpc\n",
+            )
+        );
+        assert_eq!(
+            rewrite.changed,
+            BTreeSet::from(["example.com/stack/server".to_string()])
+        );
+    }
+
+    #[test]
+    fn buf_template_rewrite_moves_v1_go_package_prefixes() {
+        let updates = [update("example.com/lib", "example.com/lib/v2", "2.0.0")];
+        let modules = ["example.com/lib".to_string()];
+        let source = concat!(
+            "version: v1\n",
+            "managed:\n",
+            "  enabled: true\n",
+            "  go_package_prefix:\n",
+            "    default: example.com/lib/gen\n",
+            "    except:\n",
+            "      - buf.build/googleapis/googleapis\n",
+            "    override:\n",
+            "      buf.build/acme/weather: example.com/lib/weather\n",
+            "plugins:\n",
+            "  - plugin: go\n",
+            "    out: gen\n",
+            "    opt: module=example.com/lib/gen\n",
+        );
+
+        let rewrite = rewrite_buf_template(source, &updates, &modules).expect("rewrite template");
+
+        assert_eq!(
+            rewrite.content,
+            source
+                .replace(
+                    "default: example.com/lib/gen",
+                    "default: example.com/lib/v2/gen"
+                )
+                .replace(": example.com/lib/weather", ": example.com/lib/v2/weather")
+                .replace(
+                    "module=example.com/lib/gen",
+                    "module=example.com/lib/v2/gen"
+                )
+        );
+    }
+
+    #[test]
+    fn buf_template_rewrite_skips_modules_that_keep_their_path() {
+        let source = "version: v2\nmanaged:\n  override:\n    - file_option: go_package_prefix\n      value: example.com/lib/gen\n";
+        let modules = ["example.com/lib".to_string()];
+        assert_eq!(
+            rewrite_buf_template(
+                source,
+                &[update("example.com/lib", "example.com/lib", "1.1.0")],
+                &modules
+            ),
+            None
+        );
+        assert_eq!(
+            rewrite_buf_template(
+                source,
+                &[update("example.com/other", "example.com/other/v2", "2.0.0")],
+                &modules
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn proto_rewrite_moves_go_package_options() {
+        let updates = [update("example.com/lib", "example.com/lib/v2", "2.0.0")];
+        let modules = [
+            "example.com/lib".to_string(),
+            "example.com/lib/api".to_string(),
+        ];
+        let source = concat!(
+            "syntax = \"proto3\";\n\n",
+            "// option go_package = \"example.com/lib/gen/comment\";\n",
+            "/* option go_package = \"example.com/lib/gen/block\"; */\n",
+            "package foo.v1;\n\n",
+            "option java_package = \"example.com/lib/gen/java\";\n",
+            "option go_package = \"example.com/lib/gen/foo/v1;foov1\";\n",
+            "option go_package='example.com/lib/gen/bar';\n",
+            "option go_package = \"example.com/lib/api/gen\";\n",
+            "option go_package = \"example.com/lib/gen/\\x62az\";\n\n",
+            "message Foo { string name = 1; }\n",
+        );
+
+        let rewrite = rewrite_proto(source, &updates, &modules).expect("rewrite proto");
+
+        assert_eq!(
+            rewrite.content,
+            source
+                .replace(
+                    "= \"example.com/lib/gen/foo/v1;foov1\"",
+                    "= \"example.com/lib/v2/gen/foo/v1;foov1\""
+                )
+                .replace("'example.com/lib/gen/bar'", "'example.com/lib/v2/gen/bar'")
+        );
+        assert_eq!(
+            rewrite.changed,
+            BTreeSet::from(["example.com/lib".to_string()])
+        );
+        assert_eq!(
+            rewrite_proto("syntax = \"proto3\";\npackage foo;\n", &updates, &modules),
+            None
         );
     }
 }

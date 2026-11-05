@@ -102,6 +102,7 @@ Go puts the major version of a module at v2 or above into its module path (`exam
 - its `go.mod` `module` directive becomes `example.com/lib/v2`
 - import declarations of its packages (`example.com/lib`, `example.com/lib/internal/text`) move to the new path in its `.go` files, except in `testdata` and in directories the go command ignores
 - other Go modules in the repository that build against the local copy, through a `replace` directive pointing at its directory or the repository's `go.work`, get the same import changes, and their `require` and `replace` directives move to the new path at the new version (`example.com/lib/v2 v2.0.0`)
+- Go packages of generated protobuf code inside the module move to the new path in tracked `.proto` files (`option go_package = "example.com/lib/gen/foo/v1;foov1";`) and buf templates (`buf.gen.yaml`, `buf.gen.*.yaml`): `managed` `go_package_prefix` and `go_package` values and plugin `opt` entries such as `module=example.com/lib/gen` or `Mfoo.proto=example.com/lib/gen/foo`. Generated `.go` files get the same import changes as other `.go` files, so code generation doesn't need to run again
 
 Those dependent modules release with a patch, and the release plan lists every rewritten file:
 

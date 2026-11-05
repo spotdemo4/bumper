@@ -7,8 +7,8 @@ use bumper::bump::{
     DependencyUpdate, VersionBump, package_name_for_file, preview_dependency_update,
 };
 use bumper::go::{
-    ModuleUpdate, PathMajor, local_replacements, read_module_path, required_module_path,
-    rewrite_file, split_path_major, workspace_uses,
+    ModuleUpdate, PathMajor, is_buf_template, is_proto, local_replacements, read_module_path,
+    required_module_path, rewrite_file, split_path_major, workspace_uses,
 };
 use bumper::package::{Package, is_package_marker, package_version};
 use git2::{Oid, Repository};
@@ -78,7 +78,7 @@ pub struct DependencyFilePlan {
     pub dependencies: BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
-/// A go.mod or .go file whose references to releasing Go modules change.
+/// A go.mod, .go, .proto or buf template file whose references to releasing Go modules change.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GoFilePlan {
     pub updates: Vec<ModuleUpdate>,
@@ -458,6 +458,9 @@ struct GoRepository {
     modules: Vec<GoModule>,
     /// The module directories `use`d by the repository's go.work.
     workspace: HashSet<PathBuf>,
+    /// The tracked .proto files and buf templates, which can name the Go packages of
+    /// generated code.
+    protobuf_files: Vec<PathBuf>,
 }
 
 impl GoRepository {
@@ -498,7 +501,12 @@ fn go_repository(input: &PlanInput<'_>) -> GoRepository {
         return GoRepository::default();
     }
 
+    let mut protobuf_files = Vec::new();
     for file in input.tracked_files {
+        if is_proto(file) || is_buf_template(file) {
+            protobuf_files.push(file.clone());
+            continue;
+        }
         if file.extension() != Some(OsStr::new("go"))
             && file.file_name() != Some(OsStr::new("go.mod"))
         {
@@ -556,7 +564,11 @@ fn go_repository(input: &PlanInput<'_>) -> GoRepository {
         HashSet::new()
     };
 
-    GoRepository { modules, workspace }
+    GoRepository {
+        modules,
+        workspace,
+        protobuf_files,
+    }
 }
 
 /// Updates the modules that build against the local copy of each releasing Go module to
@@ -668,7 +680,49 @@ fn plan_go_rewrites(
         }
     }
 
+    plan_protobuf_rewrites(go, repo_root, &updates, &module_paths, &mut files)?;
+
     Ok(files)
+}
+
+/// Moves the Go packages that .proto files and buf templates name for generated code along
+/// with the modules `updates` move to new module paths, since the generated code moves with
+/// them.
+fn plan_protobuf_rewrites(
+    go: &GoRepository,
+    repo_root: &Path,
+    updates: &BTreeMap<PathBuf, ModuleUpdate>,
+    module_paths: &[String],
+    files: &mut BTreeMap<PathBuf, GoFilePlan>,
+) -> AppResult<()> {
+    let moving = updates
+        .values()
+        .filter(|update| update.moves())
+        .cloned()
+        .collect::<Vec<_>>();
+    if moving.is_empty() {
+        return Ok(());
+    }
+    for file in &go.protobuf_files {
+        let rewrite = match rewrite_file(file, &moving, module_paths) {
+            Ok(Some(rewrite)) => rewrite,
+            Ok(None) => continue,
+            Err(error) => {
+                eprintln!("warning: {error}");
+                continue;
+            }
+        };
+        let updates = moving
+            .iter()
+            .filter(|update| rewrite.changed.contains(&update.old_path))
+            .cloned()
+            .collect();
+        files.insert(
+            repository_relative(repo_root, file)?,
+            GoFilePlan { updates },
+        );
+    }
+    Ok(())
 }
 
 /// Applies `--bump-type` to a commit-derived impact, returning it with the impact it replaced.

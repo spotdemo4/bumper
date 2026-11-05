@@ -1963,6 +1963,112 @@ fn go_release_updates_the_requires_of_its_local_dependents() {
 }
 
 #[test]
+fn go_major_release_moves_the_go_packages_of_generated_protobuf_code() {
+    let buf_template = concat!(
+        "version: v2\n",
+        "plugins:\n",
+        "  - local: protoc-gen-go\n",
+        "    out: server/gen\n",
+        "    opt:\n",
+        "      - paths=source_relative\n",
+        "  - local: protoc-gen-go-grpc\n",
+        "    out: server/gen\n",
+        "    opt: module=example.com/stack/server/gen\n",
+        "managed:\n",
+        "  enabled: true\n",
+        "  override:\n",
+        "    - file_option: go_package_prefix\n",
+        "      value: example.com/stack/server/gen\n",
+        "  disable:\n",
+        "    - file_option: go_package_prefix\n",
+        "      module: buf.build/acme/weather\n",
+    );
+    let proto = concat!(
+        "syntax = \"proto3\";\n\n",
+        "package foo.v1;\n\n",
+        "option go_package = \"example.com/stack/server/gen/foo/v1;foov1\";\n",
+    );
+    let main = |module: &str| {
+        format!(
+            "package main\n\nimport foov1 \"{module}/gen/foo/v1\"\n\nfunc main() {{ _ = foov1.Name }}\n"
+        )
+    };
+    let (local, _remote, repo) = files_fixture(
+        "go-major-release-protobuf",
+        &[
+            ("buf.gen.yaml", buf_template),
+            ("proto/foo/v1/foo.proto", proto),
+            (
+                "server/go.mod",
+                "module example.com/stack/server\n\ngo 1.24\n",
+            ),
+            (
+                "server/gen/foo/v1/foo.pb.go",
+                "package foov1\n\nconst Name = \"foo\"\n",
+            ),
+            ("server/main.go", &main("example.com/stack/server")),
+        ],
+    );
+    let baseline = commit_all(&repo, "chore: initialize stack");
+    for name in ["v1.0.0", "server/v1.2.3"] {
+        tag(&repo, name, baseline);
+    }
+    fs::write(
+        local.path().join("server/main.go"),
+        main("example.com/stack/server").replace("_ = foov1.Name", "println(foov1.Name)"),
+    )
+    .expect("update server");
+    commit_all(&repo, "feat(server)!: print the name");
+
+    let output = run_bumper(&local);
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("server (1.2.3 -> 2.0.0, major)"),
+        "{stdout}"
+    );
+    for file in ["buf.gen.yaml", "foo.proto"] {
+        assert!(
+            stdout.contains(&format!(
+                "{file} (example.com/stack/server -> example.com/stack/server/v2)"
+            )),
+            "{stdout}"
+        );
+    }
+
+    let read = |path: &str| fs::read_to_string(local.path().join(path)).expect("read file");
+    assert_eq!(
+        read("buf.gen.yaml"),
+        buf_template.replace(
+            "example.com/stack/server/gen",
+            "example.com/stack/server/v2/gen"
+        )
+    );
+    assert_eq!(
+        read("proto/foo/v1/foo.proto"),
+        proto.replace(
+            "example.com/stack/server/gen",
+            "example.com/stack/server/v2/gen"
+        )
+    );
+    assert_eq!(
+        read("server/go.mod"),
+        "module example.com/stack/server/v2\n\ngo 1.24\n"
+    );
+    assert_eq!(
+        read("server/main.go"),
+        main("example.com/stack/server/v2").replace("_ = foov1.Name", "println(foov1.Name)")
+    );
+    assert!(repo.statuses(None).expect("read status").is_empty());
+}
+
+#[test]
 fn go_major_subdirectory_releases_under_its_parent_tag_prefix() {
     let (local, _remote, repo) = files_fixture(
         "go-major-subdirectory",
