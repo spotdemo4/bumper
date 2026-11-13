@@ -10,7 +10,7 @@ use bumper::go::{
     ModuleUpdate, PathMajor, is_buf_template, is_proto, local_replacements, read_module_path,
     required_module_path, rewrite_file, split_path_major, workspace_uses,
 };
-use bumper::package::{Package, is_package_marker, package_version};
+use bumper::package::{Package, package_markers, package_version};
 use git2::{Oid, Repository};
 
 use crate::git_ops::{ImpactConfig, MajorFilter, get_impact_for_package, latest_tag_or_none};
@@ -887,21 +887,9 @@ fn version_bumps(
 }
 
 pub fn package_files(package_root: &Path, tracked_paths: &HashSet<PathBuf>) -> Vec<PathBuf> {
-    const MARKERS: &[&str] = &[
-        "package.json",
-        "Cargo.toml",
-        "pyproject.toml",
-        "gleam.toml",
-        "build.zig.zon",
-        "CMakeLists.txt",
-        "build.gradle",
-        "build.gradle.kts",
-        "go.mod",
-    ];
-    let markers = MARKERS
-        .iter()
-        .map(|name| package_root.join(name))
-        .filter(|path| tracked_paths.contains(path) && is_package_marker(path))
+    let markers = package_markers(package_root)
+        .into_iter()
+        .filter(|path| tracked_paths.contains(path))
         .collect::<Vec<_>>();
     let marker_names = markers
         .iter()

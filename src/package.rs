@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value as JsonValue;
 use toml_edit::{DocumentMut, Table};
 
+use crate::erlang::{app_src_version_range, is_app_src_name, is_app_src_path};
 use crate::go::read_module_path;
 
 /// A package directory within a repository.
@@ -16,6 +17,19 @@ pub struct Package {
     pub path: PathBuf,
 }
 
+/// Package marker file names, in the order their versions take precedence.
+const MARKER_NAMES: &[&str] = &[
+    "package.json",
+    "Cargo.toml",
+    "pyproject.toml",
+    "gleam.toml",
+    "build.zig.zon",
+    "CMakeLists.txt",
+    "build.gradle",
+    "build.gradle.kts",
+    "go.mod",
+];
+
 /// Returns whether `directory` contains a supported, valid package marker.
 ///
 /// Merely having a similarly named file is not enough: the marker must contain
@@ -23,56 +37,64 @@ pub struct Package {
 /// version in the manifest must also contain that version.
 pub fn is_versioned_package(directory: impl AsRef<Path>) -> bool {
     let directory = directory.as_ref();
-    if !directory.is_dir() {
-        return false;
-    }
+    directory.is_dir() && !package_markers(directory).is_empty()
+}
 
-    [
-        "package.json",
-        "Cargo.toml",
-        "pyproject.toml",
-        "gleam.toml",
-        "build.zig.zon",
-        "CMakeLists.txt",
-        "build.gradle",
-        "build.gradle.kts",
-        "go.mod",
-    ]
-    .iter()
-    .any(|name| is_package_marker(directory.join(name)))
+/// Returns the valid package markers of `directory`, in the order their
+/// versions take precedence.
+///
+/// Erlang/OTP applications are marked by `src/<app>.app.src`, so their marker
+/// lives below the package directory.
+pub fn package_markers(directory: impl AsRef<Path>) -> Vec<PathBuf> {
+    let directory = directory.as_ref();
+    let mut markers = MARKER_NAMES
+        .iter()
+        .map(|name| directory.join(name))
+        .collect::<Vec<_>>();
+    if let Ok(entries) = fs::read_dir(directory.join("src")) {
+        let mut app_srcs = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_app_src_name)
+            })
+            .collect::<Vec<_>>();
+        app_srcs.sort();
+        markers.extend(app_srcs);
+    }
+    markers.retain(|path| is_package_marker(path));
+    markers
+}
+
+/// Returns the package directory that a valid package `marker` defines.
+#[must_use]
+pub fn marker_package_directory(marker: &Path) -> Option<&Path> {
+    let directory = marker.parent()?;
+    if is_app_src_path(marker) {
+        directory.parent()
+    } else {
+        Some(directory)
+    }
 }
 
 /// Reads the version from the first valid package marker that stores one.
 ///
 /// Versionless formats such as Go modules return `None`.
 pub fn package_version(directory: impl AsRef<Path>) -> Option<String> {
-    let directory = directory.as_ref();
-    for name in [
-        "package.json",
-        "Cargo.toml",
-        "pyproject.toml",
-        "gleam.toml",
-        "build.zig.zon",
-        "CMakeLists.txt",
-        "build.gradle",
-        "build.gradle.kts",
-        "go.mod",
-    ] {
-        let path = directory.join(name);
-        if !is_package_marker(&path) {
-            continue;
-        }
-
-        let version = match name {
-            "package.json" => read(&path)
+    for path in package_markers(directory) {
+        let version = match path.file_name().and_then(|name| name.to_str()) {
+            Some("package.json") => read(&path)
                 .and_then(|source| serde_json::from_str::<JsonValue>(&source).ok())
                 .and_then(|value| value.get("version")?.as_str().map(str::to_string)),
-            "Cargo.toml" => toml_version(&path, Some("package")),
-            "pyproject.toml" => toml_version(&path, Some("project")),
-            "gleam.toml" => toml_version(&path, None),
-            "build.zig.zon" => zig_version(&path),
-            "CMakeLists.txt" => cmake_version(&path),
-            "build.gradle" | "build.gradle.kts" => gradle_version(&path),
+            Some("Cargo.toml") => toml_version(&path, Some("package")),
+            Some("pyproject.toml") => toml_version(&path, Some("project")),
+            Some("gleam.toml") => toml_version(&path, None),
+            Some("build.zig.zon") => zig_version(&path),
+            Some("CMakeLists.txt") => cmake_version(&path),
+            Some("build.gradle" | "build.gradle.kts") => gradle_version(&path),
+            Some(name) if is_app_src_name(name) => app_src_version(&path),
             // go.mod has no version, and `is_package_marker` accepts no other names
             _ => None,
         };
@@ -101,6 +123,7 @@ pub fn is_package_marker(path: impl AsRef<Path>) -> bool {
         Some("CMakeLists.txt") => is_cmake(path),
         Some("build.gradle" | "build.gradle.kts") => is_gradle(path),
         Some("go.mod") => is_go_mod(path),
+        Some(_) if is_app_src_path(path) => is_app_src(path),
         _ => false,
     }
 }
@@ -435,6 +458,17 @@ fn is_go_mod(path: &Path) -> bool {
     read_module_path(path).is_some()
 }
 
+fn is_app_src(path: &Path) -> bool {
+    nonempty(app_src_version(path).as_deref())
+}
+
+fn app_src_version(path: &Path) -> Option<String> {
+    let source = read(path)?;
+    source
+        .get(app_src_version_range(&source)?)
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +596,35 @@ mod tests {
         for directory in [zig, cmake, gradle, kotlin] {
             assert!(is_versioned_package(&directory));
             assert_eq!(package_version(directory).as_deref(), Some("1.2.3"));
+        }
+    }
+
+    #[test]
+    fn recognizes_erlang_applications_by_their_resource_file() {
+        let temp = TempDir::new();
+        let app = temp.mkdir("apps/my_app");
+        let marker = temp.write(
+            "apps/my_app/src/my_app.app.src",
+            "{application, my_app, [{description, \"app\"}, {vsn, \"1.2.3\"}]}.\n",
+        );
+        let misplaced = temp.mkdir("misplaced");
+        temp.write(
+            "misplaced/my_app.app.src",
+            "{application, my_app, [{vsn, \"1.2.3\"}]}.\n",
+        );
+        let git_version = temp.mkdir("git-version");
+        temp.write(
+            "git-version/src/my_app.app.src",
+            "{application, my_app, [{vsn, git}]}.\n",
+        );
+
+        assert!(is_versioned_package(&app));
+        assert_eq!(package_version(&app).as_deref(), Some("1.2.3"));
+        assert_eq!(package_markers(&app), std::slice::from_ref(&marker));
+        assert_eq!(marker_package_directory(&marker), Some(app.as_path()));
+        assert!(!is_versioned_package(temp.path().join("apps/my_app/src")));
+        for directory in [misplaced, git_version] {
+            assert!(!is_versioned_package(directory));
         }
     }
 

@@ -358,6 +358,18 @@ fn zig_case_updates_zon_file() {
 }
 
 #[test]
+fn erlang_case_updates_app_src_file() {
+    let dir = copy_fixture("erlang");
+    let app_src = dir.join("src/erlang_template.app.src");
+
+    apply_typed_change(&app_src, "0.21.1", "0.21.2").expect("bump app.src");
+
+    let source = fs::read_to_string(app_src).expect("read app.src");
+    assert!(source.contains("{vsn, \"0.21.2\"},"));
+    assert!(source.contains("{description, \"An OTP application\"},"));
+}
+
+#[test]
 fn nix_case_updates_flake_files() {
     let dir = copy_fixture("nix");
 

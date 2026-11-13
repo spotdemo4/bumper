@@ -1,0 +1,16 @@
+%% -*- mode: erlang -*-
+{application, erlang_template, [
+    {description, "An OTP application"},
+    {vsn, "0.21.1"},
+    {registered, []},
+    {mod, {erlang_template_app, []}},
+    {applications, [
+        kernel,
+        stdlib
+    ]},
+    {env, []},
+    {modules, []},
+
+    {licenses, ["MIT"]},
+    {links, []}
+]}.

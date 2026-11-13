@@ -626,6 +626,70 @@ fn tracked_openapi_yaml_is_bumped_during_package_scan() {
 }
 
 #[test]
+fn erlang_application_is_a_package_marked_by_its_resource_file() {
+    let local = TempDir::new("erlang-app-local");
+    let remote = TempDir::new("erlang-app-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::write(local.path().join("rebar.config"), "{deps, []}.\n").expect("write rebar.config");
+    fs::create_dir_all(local.path().join("apps/my_app/src")).expect("create application");
+    let app_src = local.path().join("apps/my_app/src/my_app.app.src");
+    fs::write(
+        &app_src,
+        concat!(
+            "{application, my_app,\n",
+            " [{description, \"My application\"},\n",
+            "  {vsn, \"1.11.1\"},\n",
+            "  {applications, [kernel, stdlib]}\n",
+            " ]}.\n",
+        ),
+    )
+    .expect("write application resource file");
+    let baseline = commit_all(&repo, "chore: initialize umbrella");
+    tag(&repo, "v1.0.0", baseline);
+    fs::write(
+        local.path().join("apps/my_app/src/my_app.erl"),
+        "-module(my_app).\n",
+    )
+    .expect("write module");
+    commit_all(&repo, "feat: add module");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("my_app (1.11.1 -> 1.12.0, minor)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("my_app.app.src (1.11.1 -> 1.12.0)"),
+        "{stdout}"
+    );
+    repo.revparse_single("refs/tags/apps/my_app/v1.12.0")
+        .expect("find application tag");
+    repo.revparse_single("refs/tags/v1.0.1")
+        .expect("find propagated root tag");
+    assert!(
+        fs::read_to_string(app_src)
+            .expect("read application resource file")
+            .contains("{vsn, \"1.12.0\"},")
+    );
+    assert!(repo.statuses(None).expect("read status").is_empty());
+}
+
+#[test]
 fn ignored_directory_changes_do_not_trigger_or_receive_a_release() {
     let local = TempDir::new("ignored-directory-local");
     let remote = TempDir::new("ignored-directory-remote");

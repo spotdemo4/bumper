@@ -9,6 +9,8 @@ use std::path::Path;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::erlang::{app_src_version_range, is_app_src_name};
+
 type AppResult<T> = Result<T, String>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +117,7 @@ fn evaluate_typed_change(
         "build.zig.zon" => replace_line_value(file, ".version", new_version, write),
         "gleam.toml" => bump_toml_path(file, &["version"], new_version, write),
         "go.mod" => Ok(false),
+        _ if is_app_src_name(name) => bump_app_src(file, new_version, write),
         // case-sensitive, as documented
         _ if name.starts_with("openapi") && file.extension() == Some(OsStr::new("yaml")) => {
             bump_openapi_yaml(file, new_version, write)
@@ -842,6 +845,25 @@ fn bump_openapi_yaml(file: &Path, new_version: &str, write: bool) -> AppResult<b
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
     let Some(range) = find_openapi_version_range(&source) else {
+        return Ok(false);
+    };
+    if source.get(range.clone()) == Some(new_version) {
+        return Ok(false);
+    }
+
+    let mut replaced = source;
+    replaced.replace_range(range, new_version);
+    if write {
+        fs::write(file, replaced)
+            .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
+    }
+    Ok(true)
+}
+
+fn bump_app_src(file: &Path, new_version: &str, write: bool) -> AppResult<bool> {
+    let source = fs::read_to_string(file)
+        .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    let Some(range) = app_src_version_range(&source) else {
         return Ok(false);
     };
     if source.get(range.clone()) == Some(new_version) {

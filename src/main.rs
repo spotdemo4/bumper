@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use bumper::bump::{DependencyUpdate, TypedChange, apply_dependency_update, apply_typed_change};
 use bumper::go::rewrite_file;
-use bumper::package::{Package, is_package_marker};
+use bumper::package::{Package, is_package_marker, marker_package_directory};
 use git2::Repository;
 use inquire::{InquireError, MultiSelect};
 
@@ -832,7 +832,7 @@ fn discover_packages(repo_root: &Path, tracked_files: &[PathBuf]) -> AppResult<D
         if !is_package_marker(file) {
             continue;
         }
-        let Some(directory) = file.parent() else {
+        let Some(directory) = marker_package_directory(file) else {
             continue;
         };
         let directory = fs::canonicalize(directory).map_err(|e| {
