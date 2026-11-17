@@ -131,6 +131,9 @@
                 openssl
               ];
 
+              # keep vendoring libgit2, libssh2 and libz so cross builds don't depend on the nixpkgs ones
+              dontCargoUseSystemLibs = true;
+
               doCheck = true;
               checkPhase = ''
                 runHook preCheck
