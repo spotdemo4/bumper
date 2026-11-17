@@ -4,7 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use bumper::bump::{
-    DependencyUpdate, VersionBump, package_name_for_file, preview_dependency_update,
+    ChangedDependency, DependencyBumps, DependencyUpdate, VersionBump, package_name_for_file,
+    preview_dependency_update,
 };
 use bumper::go::{
     ModuleUpdate, PathMajor, is_buf_template, is_proto, local_replacements, read_module_path,
@@ -105,8 +106,24 @@ pub struct ReleasePlan {
 }
 
 impl ReleasePlan {
-    pub fn version_bumps(&self) -> BTreeMap<String, VersionBump> {
-        version_bumps(&self.named_bumps)
+    /// The version bumps that dependency updates apply.
+    pub fn dependency_bumps(&self) -> DependencyBumps {
+        DependencyBumps {
+            named: version_bumps(&self.named_bumps),
+            local: self
+                .releases
+                .values()
+                .map(|release| {
+                    (
+                        release.package.root.clone(),
+                        VersionBump {
+                            old_version: release.old_version.clone(),
+                            new_version: release.new_version.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        }
     }
 
     /// The version every package currently has, when there are several packages and they all agree.
@@ -385,18 +402,25 @@ fn propagate_dependencies(
             break;
         }
         let named_bumps = named_package_bumps(states)?;
-        let version_bumps = version_bumps(&named_bumps);
+        let local_bumps = local_package_bumps(states)?;
+        let bumps = DependencyBumps {
+            named: version_bumps(&named_bumps),
+            local: local_bumps
+                .iter()
+                .map(|(root, bump)| (root.clone(), bump.version.clone()))
+                .collect(),
+        };
         let mut round_files = BTreeMap::<PathBuf, DependencyFilePlan>::new();
 
         for file in input.tracked_files {
-            let update = match preview_dependency_update(file, &version_bumps) {
+            let update = match preview_dependency_update(file, &bumps) {
                 Ok(update) => update,
                 Err(error) => {
                     eprintln!("warning: {error}");
                     continue;
                 }
             };
-            let DependencyUpdate::Changed(names) = update else {
+            let DependencyUpdate::Changed(dependencies) = update else {
                 continue;
             };
             let owner = resolve_known_package_owner(input.repo_root, file, input.known_packages)?;
@@ -407,13 +431,18 @@ fn propagate_dependencies(
                     package_label(&owner.path)
                 )
             })?;
-            for name in names {
-                let Some(producer) = named_bumps.get(&name) else {
+            for dependency in dependencies {
+                let producer = match &dependency {
+                    ChangedDependency::Named(name) => named_bumps.get(name),
+                    ChangedDependency::Local { root, .. } => local_bumps.get(root),
+                };
+                let Some(producer) = producer else {
                     continue;
                 };
                 if producer.package_path == owner.path {
                     continue;
                 }
+                let name = dependency.name().to_string();
                 let cause = owner_state
                     .reasons
                     .dependencies
@@ -873,6 +902,29 @@ fn named_package_bumps(
                     },
                 });
         }
+    }
+    Ok(bumped)
+}
+
+/// The bumps of releasing packages by their absolute, canonical directory.
+fn local_package_bumps(
+    states: &BTreeMap<PathBuf, PackageState>,
+) -> AppResult<BTreeMap<PathBuf, NamedPackageBump>> {
+    let mut bumped = BTreeMap::new();
+    for (path, state) in states {
+        let Some(impact) = state.impact() else {
+            continue;
+        };
+        bumped.insert(
+            state.package.root.clone(),
+            NamedPackageBump {
+                package_path: path.clone(),
+                version: VersionBump {
+                    old_version: state.base.version.clone(),
+                    new_version: planned_version(state, impact)?,
+                },
+            },
+        );
     }
     Ok(bumped)
 }

@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::hash::BuildHasher;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde_json::Value;
@@ -36,16 +36,55 @@ pub struct VersionBump {
     pub new_version: String,
 }
 
+/// The version bumps of releasing packages, for updating the dependencies on them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DependencyBumps {
+    /// Bumps by package name, for dependencies that name the package.
+    pub named: BTreeMap<String, VersionBump>,
+    /// Bumps by absolute, canonical package directory, for path dependencies.
+    pub local: BTreeMap<PathBuf, VersionBump>,
+}
+
+impl DependencyBumps {
+    fn is_empty(&self) -> bool {
+        self.named.is_empty() && self.local.is_empty()
+    }
+}
+
+/// A dependency whose version a dependency update changes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ChangedDependency {
+    /// A dependency on the package with this name in [`DependencyBumps::named`].
+    Named(String),
+    /// A path dependency named `name` on the package directory `root` in
+    /// [`DependencyBumps::local`].
+    Local { name: String, root: PathBuf },
+}
+
+impl ChangedDependency {
+    /// The name of the dependency in the file that depends on it.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Named(name) | Self::Local { name, .. } => name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DependencyUpdate {
-    Changed(BTreeSet<String>),
+    Changed(BTreeSet<ChangedDependency>),
     Unchanged,
     Unhandled,
 }
 
 struct DependencyTransform {
     content: String,
-    names: BTreeSet<String>,
+    dependencies: BTreeSet<ChangedDependency>,
+}
+
+fn named_dependencies(names: BTreeSet<String>) -> BTreeSet<ChangedDependency> {
+    names.into_iter().map(ChangedDependency::Named).collect()
 }
 
 #[derive(Clone, Copy)]
@@ -54,6 +93,7 @@ enum DependencyFormat {
     PackageLock,
     CargoToml,
     CargoLock,
+    GleamManifest,
 }
 
 /// Bumps the version in `file` with the writer for its file name.
@@ -166,9 +206,9 @@ fn read_package_json_name(path: &Path) -> Option<String> {
 /// Fails when the file can't be read or serialized.
 pub fn preview_dependency_update(
     file: &Path,
-    bumped: &BTreeMap<String, VersionBump>,
+    bumps: &DependencyBumps,
 ) -> AppResult<DependencyUpdate> {
-    evaluate_dependency_update(file, bumped, false)
+    evaluate_dependency_update(file, bumps, false)
 }
 
 /// Updates the versions of bumped dependencies in `file`.
@@ -178,14 +218,14 @@ pub fn preview_dependency_update(
 /// Fails when the file can't be read, serialized or written.
 pub fn apply_dependency_update(
     file: &Path,
-    bumped: &BTreeMap<String, VersionBump>,
+    bumps: &DependencyBumps,
 ) -> AppResult<DependencyUpdate> {
-    evaluate_dependency_update(file, bumped, true)
+    evaluate_dependency_update(file, bumps, true)
 }
 
 fn evaluate_dependency_update(
     file: &Path,
-    bumped: &BTreeMap<String, VersionBump>,
+    bumps: &DependencyBumps,
     write: bool,
 ) -> AppResult<DependencyUpdate> {
     let format = match file.file_name().and_then(|name| name.to_str()) {
@@ -193,20 +233,25 @@ fn evaluate_dependency_update(
         Some("package-lock.json") => DependencyFormat::PackageLock,
         Some("Cargo.toml") => DependencyFormat::CargoToml,
         Some("Cargo.lock") => DependencyFormat::CargoLock,
+        Some("manifest.toml") => DependencyFormat::GleamManifest,
         _ => return Ok(DependencyUpdate::Unhandled),
     };
-    if bumped.is_empty() {
+    if bumps.is_empty() {
         return Ok(DependencyUpdate::Unchanged);
     }
 
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
+    let bumped = &bumps.named;
     let transformed = match format {
         DependencyFormat::PackageJson => transform_package_json_dependencies(&source, bumped),
         DependencyFormat::PackageLock => transform_package_lock_dependencies(&source, bumped)
             .map_err(|e| format!("failed to serialize '{}': {e}", file.display()))?,
         DependencyFormat::CargoToml => transform_cargo_toml_dependencies(&source, bumped),
         DependencyFormat::CargoLock => transform_cargo_lock_dependencies(&source, bumped),
+        DependencyFormat::GleamManifest => {
+            transform_gleam_manifest_dependencies(file, &source, &bumps.local)
+        }
     };
     let Some(transformed) = transformed else {
         return Ok(DependencyUpdate::Unchanged);
@@ -216,24 +261,25 @@ fn evaluate_dependency_update(
         fs::write(file, transformed.content)
             .map_err(|e| format!("failed to write '{}': {e}", file.display()))?;
     }
-    Ok(DependencyUpdate::Changed(transformed.names))
+    Ok(DependencyUpdate::Changed(transformed.dependencies))
 }
 
-fn typed_bumps<S: BuildHasher>(
-    bumped: &HashMap<String, (String, String), S>,
-) -> BTreeMap<String, VersionBump> {
-    bumped
-        .iter()
-        .map(|(name, (old_version, new_version))| {
-            (
-                name.clone(),
-                VersionBump {
-                    old_version: old_version.clone(),
-                    new_version: new_version.clone(),
-                },
-            )
-        })
-        .collect()
+fn typed_bumps<S: BuildHasher>(bumped: &HashMap<String, (String, String), S>) -> DependencyBumps {
+    DependencyBumps {
+        named: bumped
+            .iter()
+            .map(|(name, (old_version, new_version))| {
+                (
+                    name.clone(),
+                    VersionBump {
+                        old_version: old_version.clone(),
+                        new_version: new_version.clone(),
+                    },
+                )
+            })
+            .collect(),
+        local: BTreeMap::new(),
+    }
 }
 
 /// Returns whether a dependency propagation writer would update `file` without
@@ -354,7 +400,7 @@ fn transform_package_json_dependencies(
 
     Some(DependencyTransform {
         content,
-        names: changed_names,
+        dependencies: named_dependencies(changed_names),
     })
 }
 
@@ -461,7 +507,7 @@ fn transform_package_lock_dependencies(
     }
     Ok(Some(DependencyTransform {
         content,
-        names: changed_names,
+        dependencies: named_dependencies(changed_names),
     }))
 }
 
@@ -528,7 +574,7 @@ fn transform_cargo_toml_dependencies(
 
     Some(DependencyTransform {
         content: doc.to_string(),
-        names: changed_names,
+        dependencies: named_dependencies(changed_names),
     })
 }
 
@@ -679,7 +725,70 @@ fn transform_cargo_lock_dependencies(
 
     Some(DependencyTransform {
         content,
-        names: changed_names,
+        dependencies: named_dependencies(changed_names),
+    })
+}
+
+/// Dependency update for a Gleam `manifest.toml`: sets the locked `version` of each
+/// `source = "local"` package whose `path`, relative to the manifest's directory, is a
+/// releasing package directory. Matches on the path rather than on the name, because a Gleam
+/// name can differ from its directory and Hex packages may share the old version.
+fn transform_gleam_manifest_dependencies(
+    file: &Path,
+    source: &str,
+    local: &BTreeMap<PathBuf, VersionBump>,
+) -> Option<DependencyTransform> {
+    if local.is_empty() {
+        return None;
+    }
+    let directory = file.parent()?;
+    let mut doc: toml_edit::DocumentMut = source.parse().ok()?;
+    let packages = doc.get_mut("packages")?.as_array_mut()?;
+
+    let mut dependencies = BTreeSet::new();
+    for package in packages.iter_mut() {
+        let Some(package) = package.as_inline_table_mut() else {
+            continue;
+        };
+        if package.get("source").and_then(toml_edit::Value::as_str) != Some("local") {
+            continue;
+        }
+        let Some(path) = package.get("path").and_then(toml_edit::Value::as_str) else {
+            continue;
+        };
+        let Ok(root) = fs::canonicalize(directory.join(path)) else {
+            continue;
+        };
+        let Some(bump) = local.get(&root) else {
+            continue;
+        };
+        let name = package
+            .get("name")
+            .and_then(toml_edit::Value::as_str)
+            .unwrap_or(path)
+            .to_string();
+        let Some(version) = package.get_mut("version") else {
+            continue;
+        };
+        // update even when the locked version isn't `old_version`, so stale locks are repaired
+        if version
+            .as_str()
+            .is_none_or(|current| current == bump.new_version)
+        {
+            continue;
+        }
+        let decor = version.decor().clone();
+        *version = toml_edit::Value::from(bump.new_version.as_str());
+        *version.decor_mut() = decor;
+        dependencies.insert(ChangedDependency::Local { name, root });
+    }
+
+    if dependencies.is_empty() {
+        return None;
+    }
+    Some(DependencyTransform {
+        content: doc.to_string(),
+        dependencies,
     })
 }
 
@@ -1856,23 +1965,29 @@ mod tests {
             "}\n",
         );
         fs::write(&path, original).expect("write package.json");
-        let bumped = BTreeMap::from([
-            (
-                "pkg-a".to_string(),
-                VersionBump {
-                    old_version: "0.13.0".to_string(),
-                    new_version: "0.14.0".to_string(),
-                },
-            ),
-            (
-                "pkg-b".to_string(),
-                VersionBump {
-                    old_version: "2.0.0".to_string(),
-                    new_version: "2.1.0".to_string(),
-                },
-            ),
+        let bumped = DependencyBumps {
+            named: BTreeMap::from([
+                (
+                    "pkg-a".to_string(),
+                    VersionBump {
+                        old_version: "0.13.0".to_string(),
+                        new_version: "0.14.0".to_string(),
+                    },
+                ),
+                (
+                    "pkg-b".to_string(),
+                    VersionBump {
+                        old_version: "2.0.0".to_string(),
+                        new_version: "2.1.0".to_string(),
+                    },
+                ),
+            ]),
+            local: BTreeMap::new(),
+        };
+        let expected_names = BTreeSet::from([
+            ChangedDependency::Named("pkg-a".to_string()),
+            ChangedDependency::Named("pkg-b".to_string()),
         ]);
-        let expected_names = BTreeSet::from(["pkg-a".to_string(), "pkg-b".to_string()]);
 
         assert_eq!(
             preview_dependency_update(&path, &bumped).expect("preview dependency update"),
@@ -1932,11 +2047,102 @@ mod tests {
             );
         }
 
+        let manifest = dir.join("manifest.toml");
+        let original = "packages = [\n  { name = \"pkg_a\", version = \"0.14.0\", build_tools = [\"gleam\"], requirements = [], source = \"local\", path = \".\" },\n]\n";
+        fs::write(&manifest, original).expect("write manifest.toml");
+        let bumps = DependencyBumps {
+            named: BTreeMap::new(),
+            local: BTreeMap::from([(
+                fs::canonicalize(&dir).expect("canonicalize dir"),
+                VersionBump {
+                    old_version: "0.13.0".to_string(),
+                    new_version: "0.14.0".to_string(),
+                },
+            )]),
+        };
+        assert_eq!(
+            preview_dependency_update(&manifest, &bumps).expect("preview manifest.toml"),
+            DependencyUpdate::Unchanged
+        );
+
         let unsupported = dir.join("dependencies.txt");
         assert!(
             !dependency_update_needed(&unsupported, &bumped).expect("preview unsupported file")
         );
         assert!(!unsupported.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gleam_manifest_updates_local_packages_by_path() {
+        let dir = temp_path("gleam-manifest-local");
+        let library = dir.join("library-erlang");
+        let other = dir.join("other");
+        let app = dir.join("app");
+        for directory in [&library, &other, &app] {
+            fs::create_dir_all(directory).expect("create package dir");
+        }
+        let manifest = app.join("manifest.toml");
+        let original = concat!(
+            "# This file was generated by Gleam\n",
+            "# You typically do not need to edit this file\n",
+            "\n",
+            "packages = [\n",
+            "  { name = \"gleam_stdlib\", version = \"1.11.1\", build_tools = [\"gleam\"], requirements = [], otp_app = \"gleam_stdlib\", source = \"hex\", outer_checksum = \"ABC\" },\n",
+            "  { name = \"library\", version = \"1.11.1\", build_tools = [\"gleam\"], requirements = [\"gleam_stdlib\"], source = \"local\", path = \"../library-erlang\" },\n",
+            "  { name = \"other\", version = \"1.11.1\", build_tools = [\"gleam\"], requirements = [], source = \"local\", path = \"../other\" },\n",
+            "  { name = \"remote\", version = \"1.11.1\", build_tools = [\"gleam\"], requirements = [], source = \"git\", repo = \"https://example.com/remote.git\", commit = \"abc\" },\n",
+            "]\n",
+            "\n",
+            "[requirements]\n",
+            "gleam_stdlib = { version = \">= 0.44.0 and < 2.0.0\" }\n",
+            "library = { path = \"../library-erlang\" }\n",
+            "other = { path = \"../other\" }\n",
+        );
+        fs::write(&manifest, original).expect("write manifest.toml");
+        let library_root = fs::canonicalize(&library).expect("canonicalize library");
+        let bumps = DependencyBumps {
+            // a package of the same name elsewhere must not match
+            named: BTreeMap::from([(
+                "other".to_string(),
+                VersionBump {
+                    old_version: "1.11.1".to_string(),
+                    new_version: "9.9.9".to_string(),
+                },
+            )]),
+            local: BTreeMap::from([(
+                library_root.clone(),
+                VersionBump {
+                    old_version: "1.11.1".to_string(),
+                    new_version: "1.12.0".to_string(),
+                },
+            )]),
+        };
+        let expected = DependencyUpdate::Changed(BTreeSet::from([ChangedDependency::Local {
+            name: "library".to_string(),
+            root: library_root,
+        }]));
+
+        assert_eq!(
+            preview_dependency_update(&manifest, &bumps).expect("preview manifest.toml"),
+            expected
+        );
+        assert_eq!(
+            fs::read_to_string(&manifest).expect("read previewed manifest.toml"),
+            original
+        );
+        assert_eq!(
+            apply_dependency_update(&manifest, &bumps).expect("apply manifest.toml"),
+            expected
+        );
+        assert_eq!(
+            fs::read_to_string(&manifest).expect("read updated manifest.toml"),
+            original.replace(
+                "{ name = \"library\", version = \"1.11.1\"",
+                "{ name = \"library\", version = \"1.12.0\""
+            )
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

@@ -298,17 +298,17 @@ fn propagate_dependency_updates(
     repo_root: &Path,
     plan: &ReleasePlan,
 ) -> AppResult<()> {
-    let version_bumps = plan.version_bumps();
-    if version_bumps.is_empty() {
+    if plan.dependency_files.is_empty() {
         return Ok(());
     }
+    let bumps = plan.dependency_bumps();
     println!(
-        "propagating version bumps for {} package(s) to package.json, package-lock.json, Cargo.toml and Cargo.lock dependencies...",
-        version_bumps.len()
+        "propagating version bumps for {} package(s) to package.json, package-lock.json, Cargo.toml, Cargo.lock and Gleam manifest.toml dependencies...",
+        plan.releases.len()
     );
     for relative in plan.dependency_files.keys() {
         let file = repo_root.join(relative);
-        match apply_dependency_update(&file, &version_bumps) {
+        match apply_dependency_update(&file, &bumps) {
             Ok(DependencyUpdate::Changed(_)) => {
                 println!("updated dependencies in {}", file.display());
                 stage_path(repo, repo_root, &file)?;

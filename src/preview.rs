@@ -292,15 +292,14 @@ fn file_change_labels(file: &PreviewFile, plan: &ReleasePlan) -> Vec<String> {
             version.old_version, version.new_version
         ));
     }
-    for dependency in file.dependencies.values() {
+    for (producer, dependency) in &file.dependencies {
+        let Some(release) = plan.releases.get(producer) else {
+            continue;
+        };
         for name in &dependency.names {
-            // dependency names come from the named bumps
-            let Some(bump) = plan.named_bumps.get(name).map(|named| &named.version) else {
-                continue;
-            };
             changes.push(format!(
                 "{name} {} -> {}",
-                bump.old_version, bump.new_version
+                release.old_version, release.new_version
             ));
         }
     }

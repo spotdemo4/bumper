@@ -1062,6 +1062,91 @@ fn dependency_updates_release_an_unselected_sibling_package() {
 }
 
 #[test]
+fn gleam_manifest_path_dependencies_release_the_dependent_package() {
+    let local = TempDir::new("gleam-manifest-local");
+    let remote = TempDir::new("gleam-manifest-remote");
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    fs::create_dir_all(local.path().join("library-erlang")).expect("create library");
+    fs::create_dir_all(local.path().join("app")).expect("create app");
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("library-erlang/gleam.toml"),
+        "name = \"library\"\nversion = \"1.11.1\"\n",
+    )
+    .expect("write library gleam.toml");
+    fs::write(
+        local.path().join("app/gleam.toml"),
+        "name = \"app\"\nversion = \"2.0.0\"\n\n[dependencies]\nlibrary = { path = \"../library-erlang\" }\n",
+    )
+    .expect("write app gleam.toml");
+    let manifest = concat!(
+        "packages = [\n",
+        "  { name = \"gleam_stdlib\", version = \"1.11.1\", build_tools = [\"gleam\"], requirements = [], otp_app = \"gleam_stdlib\", source = \"hex\", outer_checksum = \"ABC\" },\n",
+        "  { name = \"library\", version = \"1.11.1\", build_tools = [\"gleam\"], requirements = [\"gleam_stdlib\"], source = \"local\", path = \"../library-erlang\" },\n",
+        "]\n",
+        "\n",
+        "[requirements]\n",
+        "library = { path = \"../library-erlang\" }\n",
+    );
+    fs::write(local.path().join("app/manifest.toml"), manifest).expect("write app manifest.toml");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "library-erlang/v1.11.1", baseline);
+    tag(&repo, "app/v2.0.0", baseline);
+    fs::write(local.path().join("library-erlang/README.md"), "library\n")
+        .expect("write library readme");
+    commit_all(&repo, "feat: add library readme");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-push"])
+        .output()
+        .expect("run bumper");
+
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .contains("propagated from dependency library-erlang (library via app/manifest.toml)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("manifest.toml (library 1.11.1 -> 1.12.0)"),
+        "{stdout}"
+    );
+    repo.revparse_single("refs/tags/library-erlang/v1.12.0")
+        .expect("find library tag");
+    repo.revparse_single("refs/tags/app/v2.0.1")
+        .expect("find dependent app tag");
+    assert_eq!(
+        fs::read_to_string(local.path().join("app/manifest.toml")).expect("read app manifest"),
+        manifest.replace(
+            "{ name = \"library\", version = \"1.11.1\"",
+            "{ name = \"library\", version = \"1.12.0\""
+        )
+    );
+    assert!(
+        repo.statuses(None)
+            .expect("read statuses")
+            .iter()
+            .all(|entry| entry.status().is_empty()),
+        "the bump commit includes every change"
+    );
+}
+
+#[test]
 fn explicit_file_is_added_to_discovered_package_targets() {
     let local = TempDir::new("pathless-packages-local");
     let remote = TempDir::new("pathless-packages-remote");
