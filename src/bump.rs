@@ -245,8 +245,7 @@ fn evaluate_dependency_update(
     let bumped = &bumps.named;
     let transformed = match format {
         DependencyFormat::PackageJson => transform_package_json_dependencies(&source, bumped),
-        DependencyFormat::PackageLock => transform_package_lock_dependencies(&source, bumped)
-            .map_err(|e| format!("failed to serialize '{}': {e}", file.display()))?,
+        DependencyFormat::PackageLock => transform_package_lock_dependencies(&source, bumped),
         DependencyFormat::CargoToml => transform_cargo_toml_dependencies(&source, bumped),
         DependencyFormat::CargoLock => transform_cargo_lock_dependencies(&source, bumped),
         DependencyFormat::GleamManifest => {
@@ -432,11 +431,15 @@ fn collect_json_dependency_names(
 
 /// Second-pass bump for `package-lock.json`: update `packages["node_modules/<name>"].version`
 /// and legacy `dependencies["<name>"].version` entries whose version exactly matches
-/// `old_version` for a bumped package.
+/// `old_version` for a bumped package, and the dependency ranges of local package entries
+/// (such as the root entry `packages[""]`) that contain `old_version`, as in `package.json`.
+///
+/// Preserves original formatting by replacing the version strings in the raw text
+/// rather than re-serializing JSON.
 ///
 /// # Errors
 ///
-/// Fails when the file can't be read, serialized or written.
+/// Fails when the file can't be read or written.
 pub fn bump_package_lock_dependencies<S: BuildHasher>(
     file: &Path,
     bumped: &HashMap<String, (String, String), S>,
@@ -444,71 +447,105 @@ pub fn bump_package_lock_dependencies<S: BuildHasher>(
     write_dependency_update(file, bumped, "package-lock.json")
 }
 
+/// The dependency maps that npm copies from a local package's `package.json`
+/// into its `package-lock.json` entry.
+const PACKAGE_LOCK_RANGE_SECTIONS: [&str; 4] = [
+    "dependencies",
+    "devDependencies",
+    "peerDependencies",
+    "optionalDependencies",
+];
+
 fn transform_package_lock_dependencies(
     source: &str,
     bumped: &BTreeMap<String, VersionBump>,
-) -> Result<Option<DependencyTransform>, serde_json::Error> {
-    let mut value: Value = match serde_json::from_str(source) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    let Value::Object(root) = &mut value else {
-        return Ok(None);
+) -> Option<DependencyTransform> {
+    let value: Value = serde_json::from_str(source).ok()?;
+    let Value::Object(root) = &value else {
+        return None;
     };
 
+    let mut targets = BTreeMap::new();
     let mut changed_names = BTreeSet::new();
 
     // Update `packages` map (lockfileVersion 2/3)
-    if let Some(Value::Object(packages)) = root.get_mut("packages") {
-        for (key, pkg_val) in packages.iter_mut() {
-            if key.is_empty() {
+    if let Some(Value::Object(packages)) = root.get("packages") {
+        for (key, entry) in packages {
+            let Some(entry) = entry.as_object() else {
+                continue;
+            };
+            let entry_path = ["packages", key.as_str()];
+
+            if !key.is_empty()
+                && let Some(Value::String(version)) = entry.get("version")
+                && let Some(pkg_name) = entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .or_else(|| package_lock_entry_name(key))
+                && let Some(bump) = bumped.get(pkg_name)
+                && version == &bump.old_version
+                && bump.old_version != bump.new_version
+            {
+                targets.insert(
+                    json_path(&entry_path, &["version"]),
+                    bump.new_version.clone(),
+                );
+                changed_names.insert(pkg_name.to_string());
+            }
+
+            // Entries outside `node_modules` are local packages (the root, workspaces
+            // and linked directories) whose dependency maps mirror their
+            // `package.json`, which `transform_package_json_dependencies` updates.
+            if package_lock_entry_name(key).is_some() {
                 continue;
             }
-            let Some(obj) = pkg_val.as_object_mut() else {
-                continue;
-            };
-            let Some(Value::String(ver)) = obj.get("version") else {
-                continue;
-            };
-            let Some(pkg_name) = obj
-                .get("name")
-                .and_then(Value::as_str)
-                .or_else(|| package_lock_entry_name(key))
-                .map(str::to_string)
-            else {
-                continue;
-            };
-            let Some(bump) = bumped.get(&pkg_name) else {
-                continue;
-            };
-            if ver == &bump.old_version {
-                obj.insert(
-                    "version".to_string(),
-                    Value::String(bump.new_version.clone()),
-                );
-                changed_names.insert(pkg_name);
+            for section in PACKAGE_LOCK_RANGE_SECTIONS {
+                let Some(Value::Object(dependencies)) = entry.get(section) else {
+                    continue;
+                };
+                for (dep_name, range) in dependencies {
+                    if let Some(bump) = bumped.get(dep_name)
+                        && let Value::String(range) = range
+                        && range.contains(&bump.old_version)
+                        && bump.old_version != bump.new_version
+                    {
+                        targets.insert(
+                            json_path(&entry_path, &[section, dep_name]),
+                            range.replace(&bump.old_version, &bump.new_version),
+                        );
+                        changed_names.insert(dep_name.clone());
+                    }
+                }
             }
         }
     }
 
     // Update legacy `dependencies` map (lockfileVersion 1) recursively
-    if let Some(Value::Object(deps)) = root.get_mut("dependencies") {
-        update_lock_dependencies_map(deps, bumped, &mut changed_names);
+    if let Some(Value::Object(deps)) = root.get("dependencies") {
+        let mut path = vec!["dependencies".to_string()];
+        collect_lock_dependencies_map(deps, bumped, &mut path, &mut targets, &mut changed_names);
     }
 
     if changed_names.is_empty() {
-        return Ok(None);
+        return None;
     }
 
-    let serialized = serde_json::to_string_pretty(&value)?;
-    let mut content = serialized;
-    if !content.ends_with('\n') {
-        content.push('\n');
+    let content = replace_json_strings(source, &targets)?;
+    if content == source {
+        return None;
     }
-    Ok(Some(DependencyTransform {
+    Some(DependencyTransform {
         content,
         dependencies: named_dependencies(changed_names),
-    }))
+    })
+}
+
+fn json_path(prefix: &[&str], suffix: &[&str]) -> Vec<String> {
+    prefix
+        .iter()
+        .chain(suffix)
+        .map(|segment| (*segment).to_string())
+        .collect()
 }
 
 fn package_lock_entry_name(key: &str) -> Option<&str> {
@@ -517,28 +554,188 @@ fn package_lock_entry_name(key: &str) -> Option<&str> {
         .or_else(|| key.strip_prefix("node_modules/"))
 }
 
-fn update_lock_dependencies_map(
-    map: &mut serde_json::Map<String, Value>,
+fn collect_lock_dependencies_map(
+    map: &serde_json::Map<String, Value>,
     bumped: &BTreeMap<String, VersionBump>,
+    path: &mut Vec<String>,
+    targets: &mut BTreeMap<Vec<String>, String>,
     changed_names: &mut BTreeSet<String>,
 ) {
-    for (dep_name, dep_val) in map.iter_mut() {
+    for (dep_name, dep_val) in map {
+        let Some(obj) = dep_val.as_object() else {
+            continue;
+        };
+        path.push(dep_name.clone());
         if let Some(bump) = bumped.get(dep_name)
-            && let Some(obj) = dep_val.as_object_mut()
             && let Some(Value::String(ver)) = obj.get("version")
             && ver == &bump.old_version
+            && bump.old_version != bump.new_version
         {
-            obj.insert(
-                "version".to_string(),
-                Value::String(bump.new_version.clone()),
-            );
+            let mut version_path = path.clone();
+            version_path.push("version".to_string());
+            targets.insert(version_path, bump.new_version.clone());
             changed_names.insert(dep_name.clone());
         }
-        if let Some(obj) = dep_val.as_object_mut()
-            && let Some(Value::Object(nested)) = obj.get_mut("dependencies")
-        {
-            update_lock_dependencies_map(nested, bumped, changed_names);
+        if let Some(Value::Object(nested)) = obj.get("dependencies") {
+            path.push("dependencies".to_string());
+            collect_lock_dependencies_map(nested, bumped, path, targets, changed_names);
+            path.pop();
         }
+        path.pop();
+    }
+}
+
+/// Replaces the string values at the `targets` paths of object keys in the JSON
+/// document `source`, leaving the rest of the text as it is.
+///
+/// Returns `None` when `source` isn't valid JSON.
+fn replace_json_strings(source: &str, targets: &BTreeMap<Vec<String>, String>) -> Option<String> {
+    let mut scanner = JsonScanner {
+        source,
+        pos: 0,
+        targets,
+        edits: Vec::new(),
+    };
+    scanner.value(Some(&mut Vec::new()))?;
+    scanner.skip_whitespace();
+    if scanner.pos != source.len() {
+        return None;
+    }
+
+    let mut content = source.to_string();
+    for (range, replacement) in scanner.edits.into_iter().rev() {
+        content.replace_range(range, &replacement);
+    }
+    Some(content)
+}
+
+/// Walks the raw text of a JSON document, recording the replacements of the
+/// string values at the target paths.
+struct JsonScanner<'a> {
+    source: &'a str,
+    pos: usize,
+    targets: &'a BTreeMap<Vec<String>, String>,
+    /// The byte range of each replaced string, including its quotes, and its
+    /// replacement, in document order.
+    edits: Vec<(Range<usize>, String)>,
+}
+
+impl JsonScanner<'_> {
+    fn peek(&self) -> Option<u8> {
+        self.source.as_bytes().get(self.pos).copied()
+    }
+
+    fn advance(&mut self, bytes: usize) {
+        self.pos = self.pos.saturating_add(bytes);
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.advance(1);
+        }
+    }
+
+    fn expect(&mut self, byte: u8) -> Option<()> {
+        (self.peek()? == byte).then(|| self.advance(1))
+    }
+
+    /// Scans the value at the current position. `path` holds the object keys
+    /// leading to it, or is `None` inside an array, where nothing is replaced.
+    fn value(&mut self, path: Option<&mut Vec<String>>) -> Option<()> {
+        self.skip_whitespace();
+        match self.peek()? {
+            b'{' => self.object(path),
+            b'[' => self.array(),
+            b'"' => {
+                let (_, range) = self.string()?;
+                if let Some(path) = path
+                    && let Some(new_value) = self.targets.get(path)
+                {
+                    self.edits
+                        .push((range, serde_json::to_string(new_value).ok()?));
+                }
+                Some(())
+            }
+            _ => {
+                // number, `true`, `false` or `null`
+                let start = self.pos;
+                while !matches!(
+                    self.peek(),
+                    None | Some(b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')
+                ) {
+                    self.advance(1);
+                }
+                (self.pos > start).then_some(())
+            }
+        }
+    }
+
+    fn object(&mut self, mut path: Option<&mut Vec<String>>) -> Option<()> {
+        self.expect(b'{')?;
+        self.skip_whitespace();
+        if self.expect(b'}').is_some() {
+            return Some(());
+        }
+        loop {
+            self.skip_whitespace();
+            let (key, _) = self.string()?;
+            self.skip_whitespace();
+            self.expect(b':')?;
+            if let Some(path) = path.as_deref_mut() {
+                path.push(key);
+                self.value(Some(path))?;
+                path.pop();
+            } else {
+                self.value(None)?;
+            }
+            self.skip_whitespace();
+            match self.peek()? {
+                b',' => self.advance(1),
+                b'}' => {
+                    self.advance(1);
+                    return Some(());
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn array(&mut self) -> Option<()> {
+        self.expect(b'[')?;
+        self.skip_whitespace();
+        if self.expect(b']').is_some() {
+            return Some(());
+        }
+        loop {
+            self.value(None)?;
+            self.skip_whitespace();
+            match self.peek()? {
+                b',' => self.advance(1),
+                b']' => {
+                    self.advance(1);
+                    return Some(());
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Scans the string at the current position, returning its decoded value
+    /// and its byte range, including the quotes.
+    fn string(&mut self) -> Option<(String, Range<usize>)> {
+        let start = self.pos;
+        self.expect(b'"')?;
+        loop {
+            match self.peek()? {
+                b'"' => break,
+                b'\\' => self.advance(2),
+                _ => self.advance(1),
+            }
+        }
+        self.advance(1);
+        let range = start..self.pos;
+        let decoded = serde_json::from_str(self.source.get(range.clone())?).ok()?;
+        Some((decoded, range))
     }
 }
 
@@ -1904,6 +2101,146 @@ mod tests {
         let changed = bump_package_lock_dependencies(&path, &bumped).expect("bump");
         assert!(!changed);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_lock_deps_preserves_order_and_formatting() {
+        let dir = temp_path("lock-format");
+        let original = concat!(
+            "{\n",
+            "  \"name\": \"@trevrpc/effect\",\n",
+            "  \"version\": \"1.11.1\",\n",
+            "  \"lockfileVersion\": 3,\n",
+            "  \"requires\": true,\n",
+            "  \"packages\": {\n",
+            "    \"\": {\n",
+            "      \"name\": \"@trevrpc/effect\",\n",
+            "      \"version\": \"1.11.1\",\n",
+            "      \"devDependencies\": {\n",
+            "        \"@trevrpc/trevrpc-js\": \"file:..\",\n",
+            "        \"typescript\": \"^5.9.3\"\n",
+            "      },\n",
+            "      \"peerDependencies\": {\n",
+            "        \"effect\": \"^3.19.0\",\n",
+            "        \"@trevrpc/trevrpc-js\": \"^1.11.1\"\n",
+            "      }\n",
+            "    },\n",
+            "    \"..\": {\n",
+            "      \"name\": \"@trevrpc/trevrpc-js\",\n",
+            "      \"version\": \"1.11.1\",\n",
+            "      \"dev\": true,\n",
+            "      \"license\": \"MIT\"\n",
+            "    },\n",
+            "    \"node_modules/@trevrpc/trevrpc-js\": {\n",
+            "      \"resolved\": \"\",\n",
+            "      \"link\": true\n",
+            "    },\n",
+            "    \"node_modules/other\": {\n",
+            "      \"version\": \"2.0.0\",\n",
+            "      \"peerDependencies\": { \"@trevrpc/trevrpc-js\": \"^1.11.1\" }\n",
+            "    }\n",
+            "  }\n",
+            "}\n",
+        );
+        let path = write_package_lock(&dir, original);
+        let mut bumped = HashMap::new();
+        bumped.insert(
+            "@trevrpc/trevrpc-js".to_string(),
+            ("1.11.1".to_string(), "1.12.0".to_string()),
+        );
+
+        let changed = bump_package_lock_dependencies(&path, &bumped).expect("bump");
+
+        assert!(changed);
+        let expected = original
+            .replace(
+                "\"version\": \"1.11.1\",\n      \"dev\"",
+                "\"version\": \"1.12.0\",\n      \"dev\"",
+            )
+            .replace(
+                "\"@trevrpc/trevrpc-js\": \"^1.11.1\"\n",
+                "\"@trevrpc/trevrpc-js\": \"^1.12.0\"\n",
+            );
+        assert_eq!(fs::read_to_string(&path).expect("read"), expected);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bump_package_lock_deps_updates_local_entry_ranges() {
+        let bumped = BTreeMap::from([(
+            "pkg-a".to_string(),
+            VersionBump {
+                old_version: "0.13.0".to_string(),
+                new_version: "0.14.0".to_string(),
+            },
+        )]);
+        let source = r#"{
+  "packages": {
+    "": {
+      "dependencies": { "pkg-a": "^0.13.0" },
+      "devDependencies": { "pkg-a": "~0.13.0" },
+      "optionalDependencies": { "pkg-a": ">=0.13.0" }
+    },
+    "packages/consumer": {
+      "name": "consumer",
+      "version": "1.0.0",
+      "dependencies": { "pkg-a": "0.13.0", "pkg-b": "^0.13.0" }
+    },
+    "packages/consumer/node_modules/dep": {
+      "version": "1.0.0",
+      "dependencies": { "pkg-a": "^0.13.0" }
+    }
+  }
+}"#;
+
+        let transformed =
+            transform_package_lock_dependencies(source, &bumped).expect("transformed");
+
+        let v: Value = serde_json::from_str(&transformed.content).expect("parse");
+        assert_eq!(v["packages"][""]["dependencies"]["pkg-a"], "^0.14.0");
+        assert_eq!(v["packages"][""]["devDependencies"]["pkg-a"], "~0.14.0");
+        assert_eq!(
+            v["packages"][""]["optionalDependencies"]["pkg-a"],
+            ">=0.14.0"
+        );
+        assert_eq!(
+            v["packages"]["packages/consumer"]["dependencies"]["pkg-a"],
+            "0.14.0"
+        );
+        assert_eq!(
+            v["packages"]["packages/consumer"]["dependencies"]["pkg-b"],
+            "^0.13.0"
+        );
+        assert_eq!(
+            v["packages"]["packages/consumer/node_modules/dep"]["dependencies"]["pkg-a"],
+            "^0.13.0"
+        );
+        assert_eq!(
+            transformed.dependencies,
+            BTreeSet::from([ChangedDependency::Named("pkg-a".to_string())])
+        );
+    }
+
+    #[test]
+    fn replace_json_strings_handles_escapes_and_skips_arrays() {
+        let source =
+            "{\"a\\\"b\": {\"v\": \"x\\u0031\"}, \"list\": [{\"v\": \"x\"}, \"]\"], \"v\":\"x\"}";
+        let targets = BTreeMap::from([
+            (
+                vec!["a\"b".to_string(), "v".to_string()],
+                "y\"z".to_string(),
+            ),
+            (vec!["list".to_string(), "v".to_string()], "no".to_string()),
+            (vec!["v".to_string()], "w".to_string()),
+        ]);
+
+        let replaced = replace_json_strings(source, &targets).expect("valid JSON");
+
+        assert_eq!(
+            replaced,
+            "{\"a\\\"b\": {\"v\": \"y\\\"z\"}, \"list\": [{\"v\": \"x\"}, \"]\"], \"v\":\"w\"}"
+        );
+        assert!(replace_json_strings("{\"v\": \"x\"", &targets).is_none());
     }
 
     #[test]
