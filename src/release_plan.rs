@@ -306,6 +306,7 @@ fn package_state(
                 minor_types: &input.config.minor_types,
                 patch_types: &input.config.patch_types,
                 skip_scopes: &input.config.skip_scopes,
+                breaking_changes: input.config.breaking_changes,
                 ignored_directories: input.ignored_directories,
             },
         )?

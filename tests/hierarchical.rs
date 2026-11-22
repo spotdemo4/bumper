@@ -159,6 +159,8 @@ fn run_breaking_change(name: &str, configure: impl FnOnce(&mut Command)) -> Stri
         .current_dir(local.path())
         .env_remove("BUMP_TYPE")
         .env_remove("FORCE_BUMP_TYPE")
+        .env_remove("BREAKING_CHANGES")
+        .env_remove("MAJOR_TYPES")
         .args(["--no-commit", "--no-tag", "--no-push"]);
     configure(&mut command);
     let output = command.output().expect("run bumper");
@@ -201,6 +203,32 @@ fn bump_type_overrides_the_impact_of_breaking_commits() {
         ]);
     });
     assert!(forced.contains(". (1.2.3 -> 2.0.0, major)"));
+}
+
+#[test]
+fn breaking_changes_can_be_turned_off() {
+    let cli = run_breaking_change("breaking-changes-cli", |command| {
+        command.arg("--no-breaking-changes");
+    });
+    assert!(cli.contains(". (1.2.3 -> 1.3.0, minor)"));
+    assert!(cli.contains("direct minor\n"));
+
+    let env = run_breaking_change("breaking-changes-env", |command| {
+        command.env("BREAKING_CHANGES", "false");
+    });
+    assert!(env.contains(". (1.2.3 -> 1.3.0, minor)"));
+
+    let flag_wins = run_breaking_change("breaking-changes-flag-wins", |command| {
+        command
+            .env("BREAKING_CHANGES", "false")
+            .arg("--breaking-changes");
+    });
+    assert!(flag_wins.contains(". (1.2.3 -> 2.0.0, major)"));
+
+    let major_type = run_breaking_change("breaking-changes-major-type", |command| {
+        command.args(["--no-breaking-changes", "--major-types", "feat"]);
+    });
+    assert!(major_type.contains(". (1.2.3 -> 2.0.0, major)"));
 }
 
 #[test]

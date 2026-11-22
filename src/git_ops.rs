@@ -164,6 +164,8 @@ pub struct ImpactConfig<'a> {
     pub minor_types: &'a HashSet<String>,
     pub patch_types: &'a HashSet<String>,
     pub skip_scopes: &'a HashSet<String>,
+    /// Whether a `!` after the type or a `BREAKING CHANGE:` footer makes a commit major.
+    pub breaking_changes: bool,
     pub ignored_directories: &'a [PathBuf],
 }
 
@@ -211,7 +213,12 @@ pub fn get_impact_for_package(
             continue;
         };
 
-        let typ = prefix.split('(').next().unwrap_or(prefix).trim();
+        let typ = prefix
+            .split('(')
+            .next()
+            .unwrap_or(prefix)
+            .trim()
+            .trim_end_matches('!');
         let mut scope = "none";
         if let Some((_, rest)) = prefix.split_once('(')
             && let Some((inner, _)) = rest.split_once(')')
@@ -226,8 +233,8 @@ pub fn get_impact_for_package(
             continue;
         }
 
-        if prefix.trim_end().ends_with('!')
-            || has_breaking_change_footer(message)
+        if (config.breaking_changes
+            && (prefix.trim_end().ends_with('!') || has_breaking_change_footer(message)))
             || config.major_types.contains(&typ.to_ascii_lowercase())
         {
             impact = Some(Impact::Major);
@@ -1138,16 +1145,57 @@ mod tests {
             Path::new(""),
             &[],
             &ImpactConfig {
-                major_types: &HashSet::from(["breaking change".to_string()]),
+                major_types: &HashSet::new(),
                 minor_types: &HashSet::from(["feat".to_string()]),
                 patch_types: &HashSet::from(["fix".to_string()]),
                 skip_scopes: &HashSet::new(),
+                breaking_changes: true,
                 ignored_directories: &[],
             },
         )
         .expect("get impact");
 
         assert_eq!(impact, Some(Impact::Major));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn impact_ignores_breaking_markers_when_breaking_changes_are_off() {
+        let dir = temp_path("breaking-off");
+        let repo = Repository::init(&dir).expect("init repo");
+        let first = commit_file(&repo, &dir, "README.md", "one", "chore: init");
+        let impact = |breaking_changes| {
+            get_impact_for_package(
+                &repo,
+                Some(first),
+                Path::new(""),
+                &[],
+                &ImpactConfig {
+                    major_types: &HashSet::new(),
+                    minor_types: &HashSet::from(["feat".to_string()]),
+                    patch_types: &HashSet::from(["fix".to_string()]),
+                    skip_scopes: &HashSet::new(),
+                    breaking_changes,
+                    ignored_directories: &[],
+                },
+            )
+            .expect("get impact")
+        };
+
+        commit_file(&repo, &dir, "README.md", "two", "fix(api)!: drop endpoint");
+        assert_eq!(impact(true), Some(Impact::Major));
+        assert_eq!(impact(false), Some(Impact::Patch));
+
+        commit_file(
+            &repo,
+            &dir,
+            "README.md",
+            "three",
+            "feat!: change API\n\nBREAKING CHANGE: response shape changed",
+        );
+        assert_eq!(impact(true), Some(Impact::Major));
+        assert_eq!(impact(false), Some(Impact::Minor));
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1174,6 +1222,7 @@ mod tests {
                 minor_types: &HashSet::from(["feat".to_string()]),
                 patch_types: &HashSet::from(["fix".to_string()]),
                 skip_scopes: &HashSet::new(),
+                breaking_changes: true,
                 ignored_directories: &[PathBuf::from("generated")],
             },
         )
@@ -1213,6 +1262,7 @@ mod tests {
             minor_types: &minor,
             patch_types: &patch,
             skip_scopes: &skipped,
+            breaking_changes: true,
             ignored_directories: &[],
         };
 

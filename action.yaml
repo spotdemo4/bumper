@@ -24,6 +24,9 @@ inputs:
   skip_scopes:
     description: conventional commit scopes to skip over
     required: false
+  breaking_changes:
+    description: bump the major version for a "!" after the commit type or a BREAKING CHANGE footer
+    required: false
   commit:
     description: commit changes after bumping
     required: false
@@ -73,6 +76,7 @@ runs:
     MINOR_TYPES: ${{ inputs.minor_types }}
     PATCH_TYPES: ${{ inputs.patch_types }}
     SKIP_SCOPES: ${{ inputs.skip_scopes }}
+    BREAKING_CHANGES: ${{ inputs.breaking_changes }}
     COMMIT: ${{ inputs.commit }}
     TAG: ${{ inputs.tag }}
     PUSH: ${{ inputs.push }}

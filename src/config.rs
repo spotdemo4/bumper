@@ -31,7 +31,7 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "PATH")]
     ignore_directories: Vec<PathBuf>,
 
-    /// Commit types that trigger a major version bump [env: MAJOR_TYPES] [default: "BREAKING CHANGE"]
+    /// Commit types that trigger a major version bump [env: MAJOR_TYPES] [default: none]
     #[arg(long, value_delimiter = ',', value_name = "TYPE")]
     major_types: Vec<String>,
 
@@ -46,6 +46,14 @@ pub struct Cli {
     /// Commit scopes to skip when determining version bump [env: SKIP_SCOPES] [default: ci,docs]
     #[arg(long, value_delimiter = ',', value_name = "SCOPE")]
     skip_scopes: Vec<String>,
+
+    /// Bump the major version for a `!` after the commit type or a BREAKING CHANGE footer [env: BREAKING_CHANGES]
+    #[arg(long, overrides_with = "no_breaking_changes")]
+    breaking_changes: bool,
+
+    /// Ignore `!` and BREAKING CHANGE footers when determining version bump
+    #[arg(long, overrides_with = "breaking_changes")]
+    no_breaking_changes: bool,
 
     /// Create a commit for the version bump [env: COMMIT]
     #[arg(long, overrides_with = "no_commit")]
@@ -148,12 +156,7 @@ fn resolve_config(cli: Cli, file: FileConfig) -> AppResult<Config> {
     let mut force_packages = parse_list_env("FORCE_PACKAGES");
     force_packages.extend(cli.force_package);
 
-    let major_types = resolve_set(
-        cli.major_types,
-        "MAJOR_TYPES",
-        file.major_types,
-        &["BREAKING CHANGE"],
-    );
+    let major_types = resolve_set(cli.major_types, "MAJOR_TYPES", file.major_types, &[]);
     let minor_types = resolve_set(cli.minor_types, "MINOR_TYPES", file.minor_types, &["feat"]);
     let patch_types = resolve_set(cli.patch_types, "PATCH_TYPES", file.patch_types, &["fix"]);
     let skip_scopes = resolve_set(
@@ -174,6 +177,13 @@ fn resolve_config(cli: Cli, file: FileConfig) -> AppResult<Config> {
         minor_types,
         patch_types,
         skip_scopes,
+        breaking_changes: resolve_optional_bool(
+            cli.breaking_changes,
+            cli.no_breaking_changes,
+            "BREAKING_CHANGES",
+        )
+        .or(file.breaking_changes)
+        .unwrap_or(true),
         commit,
         tag,
         push,
@@ -203,6 +213,7 @@ pub struct FileConfig {
     pub minor_types: Option<Vec<String>>,
     pub patch_types: Option<Vec<String>>,
     pub skip_scopes: Option<Vec<String>>,
+    pub breaking_changes: Option<bool>,
     pub fixed_version: Option<bool>,
     pub groups: Vec<GroupConfig>,
 }
@@ -230,12 +241,8 @@ pub fn parse_file_config(source: &str) -> AppResult<FileConfig> {
             "minor-types" => config.minor_types = Some(string_array(key, item)?),
             "patch-types" => config.patch_types = Some(string_array(key, item)?),
             "skip-scopes" => config.skip_scopes = Some(string_array(key, item)?),
-            "fixed-version" => {
-                config.fixed_version = Some(
-                    item.as_bool()
-                        .ok_or_else(|| format!("'{key}' must be a boolean"))?,
-                );
-            }
+            "breaking-changes" => config.breaking_changes = Some(bool_value(key, item)?),
+            "fixed-version" => config.fixed_version = Some(bool_value(key, item)?),
             "groups" => config.groups = parse_groups(item)?,
             _ => return Err(format!("unknown key '{key}'")),
         }
@@ -268,6 +275,11 @@ fn parse_groups(item: &Item) -> AppResult<Vec<GroupConfig>> {
         });
     }
     Ok(groups)
+}
+
+fn bool_value(key: &str, item: &Item) -> AppResult<bool> {
+    item.as_bool()
+        .ok_or_else(|| format!("'{key}' must be a boolean"))
 }
 
 fn string_array(key: &str, item: &Item) -> AppResult<Vec<String>> {
@@ -546,6 +558,7 @@ major-types = ["BREAKING CHANGE", "major"]
 minor-types = ["feat"]
 patch-types = ["fix", "perf"]
 skip-scopes = []
+breaking-changes = false
 fixed-version = false
 
 [groups.sdk]
@@ -568,6 +581,7 @@ packages = ["."]
                 minor_types: Some(vec!["feat".to_string()]),
                 patch_types: Some(vec!["fix".to_string(), "perf".to_string()]),
                 skip_scopes: Some(Vec::new()),
+                breaking_changes: Some(false),
                 fixed_version: Some(false),
                 groups: vec![
                     GroupConfig {
@@ -640,6 +654,10 @@ packages = ["."]
             (
                 "skip-scopes = [1]",
                 "'skip-scopes' must be an array of strings",
+            ),
+            (
+                "breaking-changes = 1",
+                "'breaking-changes' must be a boolean",
             ),
             (
                 "fixed-version = \"yes\"",
@@ -730,6 +748,44 @@ packages = ["."]
         let cli = Cli::try_parse_from(["bumper", "--no-fixed-version"]).expect("parse CLI");
         let config = resolve_config(cli, file()).expect("resolve config");
         assert_eq!(config.fixed_version, Some(false));
+    }
+
+    #[test]
+    fn breaking_changes_default_on_and_flags_override_the_config_file() {
+        let resolve = |args: &[&str], breaking_changes| {
+            let cli = Cli::try_parse_from(args).expect("parse CLI");
+            let file = FileConfig {
+                breaking_changes,
+                ..FileConfig::default()
+            };
+            resolve_config(cli, file)
+                .expect("resolve config")
+                .breaking_changes
+        };
+
+        if env::var_os("BREAKING_CHANGES").is_none() {
+            assert!(resolve(&["bumper"], None));
+            assert!(!resolve(&["bumper"], Some(false)));
+        }
+        assert!(!resolve(&["bumper", "--no-breaking-changes"], Some(true)));
+        assert!(resolve(&["bumper", "--breaking-changes"], Some(false)));
+        assert!(resolve(
+            &["bumper", "--no-breaking-changes", "--breaking-changes"],
+            None
+        ));
+    }
+
+    #[test]
+    fn major_types_default_to_none() {
+        assert_eq!(
+            resolve_set(Vec::new(), "BUMPER_TEST_UNSET", None, &[]),
+            HashSet::new()
+        );
+        if env::var_os("MAJOR_TYPES").is_none() {
+            let cli = Cli::try_parse_from(["bumper"]).expect("parse CLI");
+            let config = resolve_config(cli, FileConfig::default()).expect("resolve config");
+            assert!(config.major_types.is_empty());
+        }
     }
 
     #[test]

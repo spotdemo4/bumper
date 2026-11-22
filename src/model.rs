@@ -14,6 +14,8 @@ pub struct Config {
     pub minor_types: HashSet<String>,
     pub patch_types: HashSet<String>,
     pub skip_scopes: HashSet<String>,
+    /// Whether a `!` after the commit type or a `BREAKING CHANGE:` footer bumps the major version.
+    pub breaking_changes: bool,
     pub commit: bool,
     pub tag: bool,
     pub push: bool,

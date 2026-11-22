@@ -60,9 +60,12 @@ fn render_config(known_packages: &BTreeMap<PathBuf, Package>) -> String {
 # ignore-directories = ["generated"]
 
 # conventional commit types for major, minor and patch version bumps
-# major-types = ["BREAKING CHANGE"]
+# major-types = []
 # minor-types = ["feat"]
 # patch-types = ["fix"]
+
+# bump the major version for a `!` after the commit type or a BREAKING CHANGE footer
+# breaking-changes = true
 
 # conventional commit scopes to skip over
 # skip-scopes = ["ci", "docs"]

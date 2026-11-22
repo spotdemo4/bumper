@@ -53,15 +53,18 @@ Settings that describe the repository rather than a single run can live in a `bu
 
 paths = ["README.md", "action.yaml"] # additional files or directories to bump
 ignore-directories = ["generated", "packages/legacy"]
-major-types = ["BREAKING CHANGE"]
+major-types = []
 minor-types = ["feat"]
 patch-types = ["fix"]
 skip-scopes = ["ci", "docs"]
+breaking-changes = true
 fixed-version = false
 
 [groups.sdk]
 packages = ["packages/sdk-*", "packages/cli"]
 ```
+
+A `!` after the commit type or scope (`feat!:`, `feat(api)!:`) or a `BREAKING CHANGE:` footer bumps the major version whatever the commit type, and `major-types` adds commit types that always bump it. Set `breaking-changes = false`, pass `--no-breaking-changes` or set `BREAKING_CHANGES=false` to ignore those markers, so `feat!:` bumps the minor version like any other `feat`.
 
 Every key is optional, and unknown keys are an error. Paths are relative to the repository root. Command line flags beat environment variables, which beat `bumper.toml`, which beats the defaults; `paths` and `ignore-directories` add to the paths given by flags and environment variables instead. Unlike the flags and environment variables, `bumper.toml` can set a commit type or scope list to empty (`skip-scopes = []`). Settings for a single run, such as forcing, committing, tagging and pushing, are only flags and environment variables.
 
@@ -223,9 +226,9 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
       generated
       packages/legacy
 
-    # conventional commit types for MAJOR version bumps, default "BREAKING CHANGE"
+    # conventional commit types for MAJOR version bumps, default none
     major_types: |-
-      BREAKING CHANGE
+      major
 
     # conventional commit types for MINOR version bumps, default "feat"
     minor_types: |-
@@ -239,6 +242,9 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
     skip_scopes: |-
       ci
       docs
+
+    # bump the major version for a "!" after the commit type or a BREAKING CHANGE footer, default true
+    breaking_changes: true
 ```
 
 ### Nix

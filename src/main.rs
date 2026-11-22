@@ -874,6 +874,7 @@ mod tests {
             minor_types: HashSet::new(),
             patch_types: HashSet::new(),
             skip_scopes: HashSet::new(),
+            breaking_changes: true,
             commit: false,
             tag: false,
             push: false,

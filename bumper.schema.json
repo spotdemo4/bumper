@@ -19,10 +19,10 @@
       "examples": [["generated", "packages/legacy"]]
     },
     "major-types": {
-      "description": "Conventional commit types that trigger a major version bump.",
+      "description": "Conventional commit types that trigger a major version bump. Breaking changes marked with `!` or a `BREAKING CHANGE:` footer are controlled by `breaking-changes` instead.",
       "type": "array",
       "items": { "type": "string" },
-      "default": ["BREAKING CHANGE"]
+      "default": []
     },
     "minor-types": {
       "description": "Conventional commit types that trigger a minor version bump.",
@@ -41,6 +41,11 @@
       "type": "array",
       "items": { "type": "string" },
       "default": ["ci", "docs"]
+    },
+    "breaking-changes": {
+      "description": "Bump the major version for a `!` after the commit type or scope (`feat!:`, `feat(api)!:`) or a `BREAKING CHANGE:` or `BREAKING-CHANGE:` footer. When false, those commits bump by their type alone.",
+      "type": "boolean",
+      "default": true
     },
     "fixed-version": {
       "description": "Give every package the same version, releasing all of them when any releases. Puts every package in one version group, in place of any configured groups.",
