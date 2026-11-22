@@ -1,0 +1,11 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "scripts": [
+    {
+      "name": "Set up new worktree",
+      "command": "{ test -e .envrc || { test -e \"$T3CODE_PROJECT_ROOT/.envrc\" && cp -P \"$T3CODE_PROJECT_ROOT/.envrc\" .; } || ln -s .envrc.project .envrc; } && { test -e .env || ! test -e \"$T3CODE_PROJECT_ROOT/.env\" || cp -P \"$T3CODE_PROJECT_ROOT/.env\" .; } && direnv allow && direnv exec . true",
+      "icon": "configure",
+      "runOnWorktreeCreate": true
+    }
+  ]
+}
