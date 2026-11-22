@@ -22,10 +22,20 @@ pub struct Config {
     /// Replaces the impact implied by a package's commits when set.
     pub bump_type: Option<Impact>,
     pub force_bump_type: Impact,
-    /// `None` when neither the flags nor the environment chose, so a terminal run may ask.
+    /// `None` when neither the flags, the environment nor `bumper.toml` chose, so a terminal
+    /// run may ask.
     pub fixed_version: Option<bool>,
+    /// The `[groups]` of `bumper.toml`, whose packages release together at one version.
+    pub groups: Vec<GroupConfig>,
     pub allow_dirty: bool,
     pub interactive: bool,
+}
+
+/// A named group of package patterns from `bumper.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupConfig {
+    pub name: String,
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

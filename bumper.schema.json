@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://trev.zip/llc/bumper/raw/branch/main/bumper.schema.json",
+  "title": "bumper.toml",
+  "description": "Repository settings for bumper, the git semantic version bumper. Command line flags beat environment variables, which beat this file, which beats the defaults.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "paths": {
+      "description": "Additional repository-relative files or directories to bump. Adds to the paths given by flags and environment variables.",
+      "type": "array",
+      "items": { "type": "string" },
+      "examples": [["README.md", "action.yaml"]]
+    },
+    "ignore-directories": {
+      "description": "Repository-relative directories to ignore. Ignored trees do not contribute commits, packages, version files, or dependency updates. Adds to the directories given by flags and environment variables.",
+      "type": "array",
+      "items": { "type": "string" },
+      "examples": [["generated", "packages/legacy"]]
+    },
+    "major-types": {
+      "description": "Conventional commit types that trigger a major version bump.",
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["BREAKING CHANGE"]
+    },
+    "minor-types": {
+      "description": "Conventional commit types that trigger a minor version bump.",
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["feat"]
+    },
+    "patch-types": {
+      "description": "Conventional commit types that trigger a patch version bump.",
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["fix"]
+    },
+    "skip-scopes": {
+      "description": "Conventional commit scopes to skip when determining the version bump.",
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["ci", "docs"]
+    },
+    "fixed-version": {
+      "description": "Give every package the same version, releasing all of them when any releases. Puts every package in one version group, in place of any configured groups.",
+      "type": "boolean",
+      "default": false
+    },
+    "groups": {
+      "description": "Named version groups. Packages in the same group always release together at one version; other packages keep their own versions. A package can belong to only one group.",
+      "type": "object",
+      "additionalProperties": {
+        "description": "A version group, whose members release at the highest impact in the group, applied to their highest current version.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["packages"],
+        "properties": {
+          "packages": {
+            "description": "Repository-relative package directories (`.` is the root) or patterns, where `*` matches within one directory name and `**` matches any number of directories. Every entry must match a discovered package.",
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "examples": [["packages/sdk-*", "packages/cli"]]
+          }
+        }
+      }
+    }
+  }
+}

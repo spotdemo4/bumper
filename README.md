@@ -9,6 +9,8 @@
 - increments the git tag by the impact (v0.0.1 -> PATCH -> v0.0.2)
 - creates hierarchical tags for packages in subdirectories (`packages/consumer/v0.0.2`)
 - releases containing packages with a patch whenever one of their nested packages releases
+- releases [groups](#version-groups) of packages together at one version, while other packages keep their own versions
+- reads repository settings from a [`bumper.toml`](#configuration-file) at the repository root
 - applies the version bump to every discovered package and to additional files given as arguments (`bumper [files...]`)
 - applies the version bump in directories given as arguments to supported project files (`README.md`, `action.yaml`, `action.yml`, `openapi*.yaml` (case-sensitive, top-level `info.version` only), `package.json`, `package-lock.json`, `build.gradle`, `build.gradle.kts`, `gradle.properties`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `uv.lock`, `build.zig.zon`, `gleam.toml`, `*.app.src` (`{vsn, "x.y.z"}`), `*.nix` (`version = "x.y.z";`), `CMakeLists.txt`)
 - skips configured directories, likely vendored paths (`vendor`, `node_modules`), and symlinks during directory scans
@@ -20,6 +22,7 @@ This works well as a github action. Have it run on every push to main and it wil
 
 ```elm
 bumper [paths...]
+bumper init
 ```
 
 Before changing files, bumper reports selected packages without impactful changes as skipped, then prints one release-plan tree containing every releasing package, why its bump happened, and every file it will update. Interactive terminals color each package group and ask for confirmation; non-interactive runs such as CI print the same information as a plain tree and continue without prompting. Set `NO_COLOR` to disable colors.
@@ -41,6 +44,27 @@ Direct conventional-commit impacts, forced bumps, immediate child releases, and 
 
 Use `--ignore-directories generated,packages/legacy` or set `IGNORE_DIRECTORIES` to a whitespace- or newline-separated list of repository-relative directories. Ignored trees do not contribute commits, packages, version files, or dependency updates. Explicitly selected paths inside them are skipped.
 
+### Configuration file
+
+Settings that describe the repository rather than a single run can live in a `bumper.toml` at the repository root. Run `bumper init` to create one that lists every setting with its default, commented out, and suggests a [version group](#version-groups) of the repository's nested packages; it won't replace an existing `bumper.toml`. The `#:schema` comment gives editors with TOML language servers such as [Tombi](https://tombi-toml.github.io/tombi/) or [Taplo](https://taplo.tamasfe.dev/) completion and validation from [`bumper.schema.json`](bumper.schema.json):
+
+```toml
+#:schema https://trev.zip/llc/bumper/raw/branch/main/bumper.schema.json
+
+paths = ["README.md", "action.yaml"] # additional files or directories to bump
+ignore-directories = ["generated", "packages/legacy"]
+major-types = ["BREAKING CHANGE"]
+minor-types = ["feat"]
+patch-types = ["fix"]
+skip-scopes = ["ci", "docs"]
+fixed-version = false
+
+[groups.sdk]
+packages = ["packages/sdk-*", "packages/cli"]
+```
+
+Every key is optional, and unknown keys are an error. Paths are relative to the repository root. Command line flags beat environment variables, which beat `bumper.toml`, which beats the defaults; `paths` and `ignore-directories` add to the paths given by flags and environment variables instead. Unlike the flags and environment variables, `bumper.toml` can set a commit type or scope list to empty (`skip-scopes = []`). Settings for a single run, such as forcing, committing, tagging and pushing, are only flags and environment variables.
+
 ### Package tags
 
 Each supplied file or directory is an additional bump target belonging to its nearest containing package. A package is a directory with a valid `package.json`, `Cargo.toml`, `pyproject.toml`, `gleam.toml`, `build.zig.zon`, `CMakeLists.txt`, `build.gradle`, `build.gradle.kts`, `go.mod`, or an Erlang/OTP application resource file in its `src` directory (`src/my_app.app.src` with a string `{vsn, "x.y.z"}`; rebar3's `{vsn, git}` is not a package). Go modules use their package tag as the version because `go.mod` has no project version to update; see [Go modules](#go-modules) for their major versions. The repository root is always the root package. Documentation, lockfiles, action files, generic Nix files, and grouping directories do not create package boundaries.
@@ -48,20 +72,6 @@ Each supplied file or directory is an additional bump target belonging to its ne
 Bumper always checks every discovered package for a release. Supplying paths adds files or directories to the normal package-root scans; explicit files also support literal version replacement when their format has no dedicated writer. Dependency updates can release packages that reference another bumped package: dependency versions in `package.json`, `package-lock.json`, `Cargo.toml` and `Cargo.lock` follow the packages they name, and in a Gleam `manifest.toml` the locked `version` of each `source = "local"` package follows the package its `path` points at. Hex and git packages in the manifest are left alone, even when they share the old version.
 
 OpenAPI documents are version targets owned by their nearest package; they do not create package boundaries.
-
-An npm package can declare additional paths whose commits affect its release in `package.json`:
-
-```json
-{
-  "name": "native-artifact",
-  "version": "1.2.3",
-  "bumper": {
-    "impactPaths": ["../../../native/src", "../shared-schema"]
-  }
-}
-```
-
-Each `impactPaths` entry is a literal path relative to the package directory, not a glob. Paths are additive to normal package ownership, may overlap between packages or point into another package's tree, and do not need to exist in the current checkout. Globally ignored directories still win. These paths only determine which commits affect the package; they are not bump targets and bumper does not scan them for version replacements.
 
 Because every package is selected, `--force` forces a bump for every discovered package rather than only packages containing supplied paths, except [unversioned packages](#unversioned-packages). To force specific packages instead, pass their repository-relative directories with `--force-package packages/app` (repeatable or comma-separated; `.` is the root) or set `FORCE_PACKAGES` to a whitespace- or newline-separated list. A path that is not a discovered package is an error. Forcing a nested package still releases its ancestors and dependents with a patch, as with any other release. Forced bumps default to PATCH; use `--force-bump-type minor` (or `major`) or set `FORCE_BUMP_TYPE` to choose a different minimum impact.
 
@@ -124,15 +134,45 @@ A module in a major version subdirectory, such as `v2/go.mod` with `module examp
 
 ### Unversioned packages
 
-A package below the repository root whose stream has no tag yet and whose version is `0.0.0` is unversioned: it never releases from its own commits, child releases, dependency updates, `--force` or `--fixed-version`, and the release plan reports it as `packages/web: (skipped, unversioned 0.0.0)`. Its commits count for its nearest versioned ancestor instead, as if the files belonged to that package, so a `feat` commit there releases the ancestor with a minor bump. Its `bumper.impactPaths` apply to that ancestor too. Versioned packages nested inside it keep their own commits. Dependency versions in its manifests are still updated when the packages they reference release, so workspaces stay consistent.
+A package below the repository root whose stream has no tag yet and whose version is `0.0.0` is unversioned: it never releases from its own commits, child releases, dependency updates, `--force` or `--fixed-version`, and the release plan reports it as `packages/web: (skipped, unversioned 0.0.0)`. Its commits count for its nearest versioned ancestor instead, as if the files belonged to that package, so a `feat` commit there releases the ancestor with a minor bump. Versioned packages nested inside it keep their own commits. Dependency versions in its manifests are still updated when the packages they reference release, so workspaces stay consistent.
 
 To start releasing one, force it by name with `--force-package packages/web` or check it in `bumper -i`. That releases it like any other forced package (`0.0.0 -> 0.0.1`, or `0.1.0` with `--force-bump-type minor` or a `feat` commit) and creates its first tag, after which it versions normally and claims its own commits. The root package is never unversioned; a `0.0.0` root releases as usual.
 
+### Version groups
+
+Packages listed in the same `[groups.<name>]` of [`bumper.toml`](#configuration-file) always release together at one version. Other packages keep their own versions.
+
+```toml
+[groups.sdk]
+packages = ["packages/sdk-*", "packages/cli"]
+```
+
+Each entry in `packages` is a repository-relative package directory (`.` is the root) or a pattern, where `*` matches within one directory name and `**` matches any number of directories. Every entry must match a discovered package, and a package can belong to only one group.
+
+When any member of a group releases, whether from its own commits, forcing, a nested package or a dependency outside the group, every member releases at the highest impact in the group. That impact is applied to the highest current version among the members, so no member moves backwards. Releases then propagate from the group's members to their ancestors and dependents as usual, and those can release another group in turn. The release plan names the group and the members whose changes set its impact:
+
+```text
+Release plan:
+. (1.0.0 -> 1.0.1, patch)
+|-- propagated from child packages/app
+|-- propagated from child packages/library
+`-- packages
+    |-- app (2.0.0 -> 3.1.0, minor)
+    |   |-- direct patch
+    |   |-- group sdk (minor from packages/library)
+    |   `-- package.json (2.0.0 -> 3.1.0; library 3.0.0 -> 3.1.0)
+    `-- library (3.0.0 -> 3.1.0, minor)
+        |-- direct minor
+        `-- package.json (3.0.0 -> 3.1.0)
+```
+
+Releases between members of the same group aren't listed, since the group already explains them. Each member keeps its own tag, and [unversioned](#unversioned-packages) members stay unversioned until forced by name, so a pattern can't start releasing a package by accident.
+
 ### Fixed versions
 
-Pass `--fixed-version` or set `FIXED_VERSION=true` to give every package in the repository the same version. When any package has a direct or forced impact, every discovered package releases at the highest of those impacts, applied to the highest current version among all packages so no package moves backwards. Each package still gets its own tag (`v3.1.0`, `packages/app/v3.1.0`, ...), which keeps Go submodules resolvable and lets you turn the mode off later.
+Pass `--fixed-version`, set `FIXED_VERSION=true` or set `fixed-version = true` in [`bumper.toml`](#configuration-file) to give every package in the repository the same version. This puts every package in one [version group](#version-groups), in place of any configured groups. When any package has a direct or forced impact, every discovered package releases at the highest of those impacts, applied to the highest current version among all packages so no package moves backwards. Each package still gets its own tag (`v3.1.0`, `packages/app/v3.1.0`, ...), which keeps Go submodules resolvable and lets you turn the mode off later.
 
-When neither the flag nor `FIXED_VERSION` is set and every package (two or more) currently has the same version, an interactive terminal run asks whether to release them with a fixed version, but only when the answer would change the release plan (or when `-i` lets you choose packages afterwards). Pass `--fixed-version` or `--no-fixed-version`, or set `FIXED_VERSION` to `true` or `false`, to skip the question. Non-interactive runs never ask and version packages independently.
+When neither the flag, `FIXED_VERSION` nor `fixed-version` is set, no groups are configured, and every package (two or more) currently has the same version, an interactive terminal run asks whether to release them with a fixed version, but only when the answer would change the release plan (or when `-i` lets you choose packages afterwards). Pass `--fixed-version` or `--no-fixed-version`, or set `FIXED_VERSION` to `true` or `false`, to skip the question. Non-interactive runs never ask and version packages independently.
 
 Packages keep their own release-history boundaries, so commits are never counted twice when switching to fixed versions. The first fixed release aligns packages whose versions differ; the release plan shows each package's old version.
 

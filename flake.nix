@@ -108,6 +108,7 @@
               src = fileset.toSource {
                 root = ./.;
                 fileset = fileset.unions [
+                  ./bumper.schema.json
                   ./Cargo.lock
                   ./Cargo.toml
                   ./clippy.toml

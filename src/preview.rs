@@ -338,10 +338,11 @@ fn release_reason_labels(release: &Release) -> Vec<String> {
             .map(|path| package_label(path))
             .collect::<Vec<_>>()
             .join(", ");
-        labels.push(format!(
-            "fixed version ({} from {sources})",
-            cause.impact.as_str()
-        ));
+        let impact = cause.impact.as_str();
+        labels.push(match &cause.group {
+            Some(group) => format!("group {group} ({impact} from {sources})"),
+            None => format!("fixed version ({impact} from {sources})"),
+        });
     }
     labels.extend(
         release

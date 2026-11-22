@@ -165,7 +165,6 @@ pub struct ImpactConfig<'a> {
     pub patch_types: &'a HashSet<String>,
     pub skip_scopes: &'a HashSet<String>,
     pub ignored_directories: &'a [PathBuf],
-    pub impact_paths: &'a [PathBuf],
 }
 
 pub fn get_impact_for_package(
@@ -198,7 +197,6 @@ pub fn get_impact_for_package(
             &commit,
             package_path,
             child_package_paths,
-            config.impact_paths,
             config.ignored_directories,
         )? {
             continue;
@@ -256,7 +254,6 @@ fn commit_touches_package(
     commit: &git2::Commit<'_>,
     package_path: &Path,
     child_package_paths: &[PathBuf],
-    impact_paths: &[PathBuf],
     ignored_directories: &[PathBuf],
 ) -> AppResult<bool> {
     let tree = commit
@@ -287,7 +284,6 @@ fn commit_touches_package(
                     path,
                     package_path,
                     child_package_paths,
-                    impact_paths,
                     ignored_directories,
                 )
             })
@@ -298,17 +294,13 @@ fn path_belongs_to_package(
     path: &Path,
     package_path: &Path,
     child_package_paths: &[PathBuf],
-    impact_paths: &[PathBuf],
     ignored_directories: &[PathBuf],
 ) -> bool {
-    let ordinarily_owned = (package_path.as_os_str().is_empty() || path.starts_with(package_path))
+    (package_path.as_os_str().is_empty() || path.starts_with(package_path))
         && !child_package_paths
             .iter()
-            .any(|child| path.starts_with(child));
-    let explicitly_owned = impact_paths
-        .iter()
-        .any(|impact_path| path.starts_with(impact_path));
-    (ordinarily_owned || explicitly_owned) && !is_ignored_path(path, ignored_directories)
+            .any(|child| path.starts_with(child))
+        && !is_ignored_path(path, ignored_directories)
 }
 
 fn has_breaking_change_footer(message: &str) -> bool {
@@ -1027,67 +1019,45 @@ mod tests {
     }
 
     #[test]
-    fn explicit_impact_paths_are_additive_and_respect_boundaries_and_ignores() {
+    fn package_ownership_excludes_child_packages_and_ignored_directories() {
         let package = Path::new("packages/app");
         let children = [PathBuf::from("packages/app/plugin")];
-        let impacts = [
-            PathBuf::from("native/shared"),
-            PathBuf::from("packages/app/plugin/generated"),
-        ];
+        let ignored = [PathBuf::from("packages/app/generated")];
 
         assert!(path_belongs_to_package(
             Path::new("packages/app/src/lib.rs"),
             package,
             &children,
-            &impacts,
-            &[],
-        ));
-        assert!(path_belongs_to_package(
-            Path::new("native/shared/src/lib.rs"),
-            package,
-            &children,
-            &impacts,
-            &[],
+            &ignored,
         ));
         assert!(!path_belongs_to_package(
-            Path::new("native/shared-other/src/lib.rs"),
+            Path::new("packages/app-other/src/lib.rs"),
             package,
             &children,
-            &impacts,
-            &[],
-        ));
-        assert!(path_belongs_to_package(
-            Path::new("packages/app/plugin/generated/output.rs"),
-            package,
-            &children,
-            &impacts,
-            &[],
+            &ignored,
         ));
         assert!(!path_belongs_to_package(
             Path::new("packages/app/plugin/src/lib.rs"),
             package,
             &children,
-            &impacts,
-            &[],
-        ));
-        assert!(path_belongs_to_package(
-            Path::new("native/shared/src/lib.rs"),
-            Path::new("packages/other"),
-            &[],
-            &[PathBuf::from("native/shared")],
-            &[],
+            &ignored,
         ));
         assert!(!path_belongs_to_package(
-            Path::new("native/shared/generated/output.rs"),
+            Path::new("packages/app/generated/output.rs"),
             package,
             &children,
-            &impacts,
-            &[PathBuf::from("native/shared/generated")],
+            &ignored,
+        ));
+        assert!(path_belongs_to_package(
+            Path::new("README.md"),
+            Path::new(""),
+            &[PathBuf::from("packages/app")],
+            &[],
         ));
     }
 
     #[test]
-    fn configured_impact_paths_match_deleted_and_moved_delta_endpoints() {
+    fn package_ownership_matches_deleted_and_moved_delta_endpoints() {
         let dir = temp_path("impact-path-deltas");
         let repo = Repository::init(&dir).expect("init repo");
         commit_file(
@@ -1114,15 +1084,7 @@ mod tests {
 
         let touches_native = |oid: Oid, context: &str| {
             let commit = repo.find_commit(oid).expect("find commit");
-            commit_touches_package(
-                &repo,
-                &commit,
-                Path::new("packages/app"),
-                &[],
-                &[PathBuf::from("native")],
-                &[],
-            )
-            .expect(context)
+            commit_touches_package(&repo, &commit, Path::new("native"), &[], &[]).expect(context)
         };
 
         std::fs::remove_file(dir.join("native/deleted.rs")).expect("delete impacted file");
@@ -1181,7 +1143,6 @@ mod tests {
                 patch_types: &HashSet::from(["fix".to_string()]),
                 skip_scopes: &HashSet::new(),
                 ignored_directories: &[],
-                impact_paths: &[],
             },
         )
         .expect("get impact");
@@ -1214,7 +1175,6 @@ mod tests {
                 patch_types: &HashSet::from(["fix".to_string()]),
                 skip_scopes: &HashSet::new(),
                 ignored_directories: &[PathBuf::from("generated")],
-                impact_paths: &[],
             },
         )
         .expect("get impact");
@@ -1254,7 +1214,6 @@ mod tests {
             patch_types: &patch,
             skip_scopes: &skipped,
             ignored_directories: &[],
-            impact_paths: &[],
         };
 
         let root = get_impact_for_package(

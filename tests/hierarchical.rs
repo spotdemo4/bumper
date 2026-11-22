@@ -1351,118 +1351,6 @@ fn explicit_parent_file_is_additive_to_nested_package_detection() {
 }
 
 #[test]
-fn package_impact_path_releases_nested_package_and_propagates_to_ancestors() {
-    let local = TempDir::new("package-impact-path-local");
-    let remote = TempDir::new("package-impact-path-remote");
-    let repo = Repository::init(local.path()).expect("init repository");
-    Repository::init_bare(remote.path()).expect("init bare remote");
-    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
-        .expect("add remote");
-    fs::create_dir_all(local.path().join("packages/parent/artifact"))
-        .expect("create nested artifact package");
-    fs::create_dir_all(local.path().join("packages/native/src"))
-        .expect("create native source package");
-    fs::create_dir_all(local.path().join("packages/idle")).expect("create idle package");
-    fs::write(
-        local.path().join("package.json"),
-        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
-    )
-    .expect("write root manifest");
-    fs::write(
-        local.path().join("packages/parent/package.json"),
-        "{\n  \"name\": \"parent\",\n  \"version\": \"2.0.0\"\n}\n",
-    )
-    .expect("write parent manifest");
-    fs::write(
-        local
-            .path()
-            .join("packages/parent/artifact/package.json"),
-        "{\n  \"name\": \"artifact\",\n  \"version\": \"3.0.0\",\n  \"bumper\": {\n    \"impactPaths\": [\"../../../packages/native/src\"],\n    \"futureOption\": true\n  }\n}\n",
-    )
-    .expect("write artifact manifest");
-    fs::write(
-        local.path().join("packages/native/package.json"),
-        "{\n  \"name\": \"native\",\n  \"version\": \"4.0.0\"\n}\n",
-    )
-    .expect("write native manifest");
-    fs::write(
-        local.path().join("packages/native/src/lib.rs"),
-        "pub fn native() {}\n",
-    )
-    .expect("write native source");
-    fs::write(
-        local.path().join("packages/idle/package.json"),
-        "{\n  \"name\": \"idle\",\n  \"version\": \"5.0.0\"\n}\n",
-    )
-    .expect("write idle manifest");
-    let baseline = commit_all(&repo, "chore: initialize native artifact workspace");
-    tag(&repo, "v1.0.0", baseline);
-    tag(&repo, "packages/parent/v2.0.0", baseline);
-    tag(&repo, "packages/parent/artifact/v3.0.0", baseline);
-    tag(&repo, "packages/native/v4.0.0", baseline);
-    tag(&repo, "packages/idle/v5.0.0", baseline);
-
-    fs::write(
-        local.path().join("packages/native/src/lib.rs"),
-        "pub fn native() { println!(\"feature\"); }\n",
-    )
-    .expect("update native source");
-    commit_all(&repo, "feat: add native capability");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
-        .current_dir(local.path())
-        .args(["--no-push"])
-        .output()
-        .expect("run bumper");
-
-    assert!(
-        output.status.success(),
-        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("packages/idle: (skipped)"), "{stdout}");
-    assert!(
-        stdout.contains("artifact (3.0.0 -> 3.1.0, minor)"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("native (4.0.0 -> 4.1.0, minor)"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("propagated from child packages/parent/artifact"),
-        "{stdout}"
-    );
-    repo.revparse_single("refs/tags/packages/parent/artifact/v3.1.0")
-        .expect("find artifact minor tag");
-    repo.revparse_single("refs/tags/packages/parent/v2.0.1")
-        .expect("find propagated parent patch tag");
-    repo.revparse_single("refs/tags/packages/native/v4.1.0")
-        .expect("find native package minor tag");
-    repo.revparse_single("refs/tags/v1.0.1")
-        .expect("find propagated root patch tag");
-    assert!(
-        repo.find_reference("refs/tags/packages/idle/v5.0.1")
-            .is_err()
-    );
-    let artifact: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(local.path().join("packages/parent/artifact/package.json"))
-            .expect("read artifact manifest"),
-    )
-    .expect("parse updated artifact manifest");
-    assert_eq!(artifact["version"], "3.1.0");
-    assert_eq!(
-        artifact["bumper"],
-        serde_json::json!({
-            "impactPaths": ["../../../packages/native/src"],
-            "futureOption": true,
-        })
-    );
-}
-
-#[test]
 fn untagged_dependent_uses_manifest_version() {
     let local = TempDir::new("missing-dependent-tag-local");
     let remote = TempDir::new("missing-dependent-tag-remote");
@@ -1817,48 +1705,6 @@ fn unversioned_package_commits_apply_to_its_parent() {
 
     assert!(stdout.contains(". (1.0.1 -> 1.0.2, patch)"), "{stdout}");
     assert!(stdout.contains("web (0.0.0 -> 0.1.0, minor)"), "{stdout}");
-}
-
-#[test]
-fn unversioned_package_impact_paths_apply_to_its_parent() {
-    let local = TempDir::new("unversioned-impact-local");
-    let remote = TempDir::new("unversioned-impact-remote");
-    let repo = Repository::init(local.path()).expect("init repository");
-    Repository::init_bare(remote.path()).expect("init bare remote");
-    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
-        .expect("add remote");
-    fs::create_dir_all(local.path().join("packages/group/web")).expect("create web");
-    fs::create_dir_all(local.path().join("native")).expect("create native");
-    fs::write(
-        local.path().join("package.json"),
-        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
-    )
-    .expect("write root manifest");
-    fs::write(
-        local.path().join("packages/group/package.json"),
-        "{\n  \"name\": \"group\",\n  \"version\": \"2.0.0\"\n}\n",
-    )
-    .expect("write group manifest");
-    fs::write(
-        local.path().join("packages/group/web/package.json"),
-        "{\n  \"name\": \"web\",\n  \"version\": \"0.0.0\",\n  \"bumper\": {\"impactPaths\": [\"../../../native\"]}\n}\n",
-    )
-    .expect("write web manifest");
-    fs::write(local.path().join("native/lib.c"), "int x;\n").expect("write native source");
-    let baseline = commit_all(&repo, "chore: initialize workspace");
-    tag(&repo, "v1.0.0", baseline);
-    tag(&repo, "packages/group/v2.0.0", baseline);
-    fs::write(local.path().join("native/lib.c"), "int y;\n").expect("update native source");
-    commit_all(&repo, "feat: extend native library");
-    let stdout = run_unversioned(&local, &[]);
-
-    assert!(stdout.contains("group (2.0.0 -> 2.1.0, minor)"), "{stdout}");
-    assert!(
-        stdout.contains("packages/group/web: (skipped, unversioned 0.0.0)"),
-        "{stdout}"
-    );
-    repo.revparse_single("refs/tags/packages/group/v2.1.0")
-        .expect("find group tag");
 }
 
 fn files_fixture(name: &str, files: &[(&str, &str)]) -> (TempDir, TempDir, Repository) {
@@ -2264,4 +2110,187 @@ fn go_major_subdirectory_releases_under_its_parent_tag_prefix() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("v2: Go module 'example.com/lib/v2' is in a major version subdirectory, so it can't release 3.0.0; copy it to a v3 directory instead"), "{stderr}");
     assert!(repo.revparse_single("refs/tags/v3.0.0").is_err());
+}
+
+fn group_fixture(name: &str) -> (TempDir, TempDir, Repository) {
+    let local = TempDir::new(&format!("{name}-local"));
+    let remote = TempDir::new(&format!("{name}-remote"));
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    for (path, manifest) in [
+        (
+            "",
+            "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+        ),
+        (
+            "packages/library",
+            "{\n  \"name\": \"library\",\n  \"version\": \"3.0.0\"\n}\n",
+        ),
+        (
+            "packages/library/inner",
+            "{\n  \"name\": \"inner\",\n  \"version\": \"1.0.0\"\n}\n",
+        ),
+        (
+            "packages/app",
+            "{\n  \"name\": \"app\",\n  \"version\": \"2.0.0\",\n  \"dependencies\": {\"library\": \"3.0.0\"}\n}\n",
+        ),
+        (
+            "packages/cli",
+            "{\n  \"name\": \"cli\",\n  \"version\": \"4.0.0\",\n  \"dependencies\": {\"app\": \"2.0.0\"}\n}\n",
+        ),
+        (
+            "packages/other",
+            "{\n  \"name\": \"other\",\n  \"version\": \"5.0.0\"\n}\n",
+        ),
+    ] {
+        let directory = local.path().join(path);
+        fs::create_dir_all(&directory).expect("create package directory");
+        fs::write(directory.join("package.json"), manifest).expect("write manifest");
+    }
+    fs::write(
+        local.path().join("bumper.toml"),
+        "[groups.sdk]\npackages = [\"packages/library\", \"packages/app\"]\n",
+    )
+    .expect("write bumper.toml");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    for tag_name in [
+        "v1.0.0",
+        "packages/library/v3.0.0",
+        "packages/library/inner/v1.0.0",
+        "packages/app/v2.0.0",
+        "packages/cli/v4.0.0",
+        "packages/other/v5.0.0",
+    ] {
+        tag(&repo, tag_name, baseline);
+    }
+    (local, remote, repo)
+}
+
+fn run_group(local: &TempDir) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .env_remove("FIXED_VERSION")
+        .args(["--no-push"])
+        .output()
+        .expect("run bumper");
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn group_releases_its_members_together_at_the_highest_version() {
+    let (local, _remote, repo) = group_fixture("group-together");
+    fs::write(local.path().join("packages/app/index.js"), "app\n").expect("write app source");
+    commit_all(&repo, "fix: repair app");
+    fs::write(local.path().join("packages/library/index.js"), "library\n")
+        .expect("write library source");
+    commit_all(&repo, "feat: add library entrypoint");
+    let stdout = run_group(&local);
+
+    assert!(
+        stdout.contains("library (3.0.0 -> 3.1.0, minor)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("app (2.0.0 -> 3.1.0, minor)"), "{stdout}");
+    assert!(stdout.contains("direct patch"), "{stdout}");
+    assert!(
+        stdout.contains("group sdk (minor from packages/library)"),
+        "{stdout}"
+    );
+    // the group explains app's release, so its dependency on library isn't listed
+    assert!(
+        !stdout.contains("propagated from dependency packages/library"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("cli (4.0.0 -> 4.0.1, patch)"), "{stdout}");
+    assert!(
+        stdout.contains("propagated from dependency packages/app"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("packages/other: (skipped)"), "{stdout}");
+    assert!(
+        stdout.contains("packages/library/inner: (skipped)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains(". (1.0.0 -> 1.0.1, patch)"), "{stdout}");
+    for tag_name in [
+        "v1.0.1",
+        "packages/library/v3.1.0",
+        "packages/app/v3.1.0",
+        "packages/cli/v4.0.1",
+    ] {
+        repo.revparse_single(&format!("refs/tags/{tag_name}"))
+            .unwrap_or_else(|e| panic!("find tag {tag_name}: {e}"));
+    }
+    let app = fs::read_to_string(local.path().join("packages/app/package.json"))
+        .expect("read app manifest");
+    assert!(app.contains("\"version\": \"3.1.0\""), "{app}");
+    assert!(app.contains("\"library\": \"3.1.0\""), "{app}");
+    let cli = fs::read_to_string(local.path().join("packages/cli/package.json"))
+        .expect("read cli manifest");
+    assert!(cli.contains("\"app\": \"3.1.0\""), "{cli}");
+    assert!(repo.statuses(None).expect("read status").is_empty());
+}
+
+#[test]
+fn release_propagated_into_a_group_releases_the_whole_group() {
+    let (local, _remote, repo) = group_fixture("group-propagated");
+    fs::write(
+        local.path().join("packages/library/inner/index.js"),
+        "inner\n",
+    )
+    .expect("write inner source");
+    commit_all(&repo, "fix: repair inner");
+    let stdout = run_group(&local);
+
+    assert!(stdout.contains("inner (1.0.0 -> 1.0.1, patch)"), "{stdout}");
+    assert!(
+        stdout.contains("library (3.0.0 -> 3.0.1, patch)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("propagated from child packages/library/inner"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("app (2.0.0 -> 3.0.1, patch)"), "{stdout}");
+    assert!(
+        stdout.contains("group sdk (patch from packages/library)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("cli (4.0.0 -> 4.0.1, patch)"), "{stdout}");
+    assert!(stdout.contains("packages/other: (skipped)"), "{stdout}");
+    repo.revparse_single("refs/tags/packages/app/v3.0.1")
+        .expect("find app tag");
+}
+
+#[test]
+fn invalid_config_file_fails_before_running() {
+    for (source, message) in [
+        (
+            "[groups.sdk]\npackages = [\"packages/missing\"]\n",
+            "group 'sdk' package 'packages/missing' matches no discovered package",
+        ),
+        ("fixed = true\n", "bumper.toml: unknown key 'fixed'"),
+    ] {
+        let (local, _remote, repo) = group_fixture("group-invalid");
+        fs::write(local.path().join("bumper.toml"), source).expect("write bumper.toml");
+        commit_all(&repo, "chore: configure bumper");
+
+        let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+            .current_dir(local.path())
+            .args(["--no-push"])
+            .output()
+            .expect("run bumper");
+
+        assert!(!output.status.success(), "{source}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(message), "{source}: {stderr}");
+    }
 }

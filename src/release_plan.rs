@@ -15,6 +15,7 @@ use bumper::package::{Package, package_markers, package_version};
 use git2::{Oid, Repository};
 
 use crate::git_ops::{ImpactConfig, MajorFilter, get_impact_for_package, latest_tag_or_none};
+use crate::groups::VersionGroup;
 use crate::model::{AppResult, Config, Impact};
 use crate::versioning::{next_version, parse_version};
 
@@ -44,11 +45,13 @@ impl ReleaseReasons {
     }
 }
 
-/// A release caused by `--fixed-version`: every package takes the highest impact in the repository.
+/// A release caused by a version group: every member takes the highest impact in the group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FixedCause {
     pub impact: Impact,
     pub sources: BTreeSet<PathBuf>,
+    /// The group's name in `bumper.toml`, or `None` for `--fixed-version`.
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -194,10 +197,10 @@ pub struct PlanInput<'a> {
     pub forced_packages: &'a HashSet<PathBuf>,
     pub tracked_files: &'a [PathBuf],
     pub tracked_paths: &'a HashSet<PathBuf>,
-    pub package_impact_paths: &'a BTreeMap<PathBuf, Vec<PathBuf>>,
     pub ignored_directories: &'a [PathBuf],
     pub config: &'a Config,
-    pub fixed_version: bool,
+    /// Packages that release together, each in at most one group.
+    pub groups: &'a [VersionGroup],
 }
 
 pub fn build_release_plan(mut input: PlanInput<'_>) -> AppResult<ReleasePlan> {
@@ -232,24 +235,14 @@ pub fn build_release_plan(mut input: PlanInput<'_>) -> AppResult<ReleasePlan> {
         states.insert(path, state);
     }
 
-    if input.fixed_version {
-        apply_fixed_version(&mut states)?;
-    } else {
-        propagate_descendants(&mut states, &deepest_first, &parents);
-    }
+    propagate_descendants(&mut states, &deepest_first, &parents);
+    align_groups(&mut states, input.groups)?;
     let go = go_repository(&input);
     let Propagation {
         dependency_files,
         go_files,
     } = propagate_dependencies(&input, &go, &mut states, &deepest_first, &parents)?;
-
-    if input.fixed_version {
-        // Every package already releases at the shared version, so propagation adds no information.
-        for state in states.values_mut() {
-            state.reasons.descendants.clear();
-            state.reasons.dependencies.clear();
-        }
-    }
+    drop_group_propagation(&mut states, input.groups);
 
     let releases = materialize_releases(&states)?;
     let skipped_packages = states
@@ -300,7 +293,6 @@ fn package_state(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let impact_paths = owned_impact_paths(input, path, unversioned);
     let direct = if is_unversioned {
         None
     } else {
@@ -315,7 +307,6 @@ fn package_state(
                 patch_types: &input.config.patch_types,
                 skip_scopes: &input.config.skip_scopes,
                 ignored_directories: input.ignored_directories,
-                impact_paths: &impact_paths,
             },
         )?
     };
@@ -341,30 +332,6 @@ fn package_state(
         },
         unversioned: is_unversioned,
     })
-}
-
-/// The impact paths of `path` and of the unversioned packages whose commits it owns.
-fn owned_impact_paths(
-    input: &PlanInput<'_>,
-    path: &Path,
-    unversioned: &HashSet<PathBuf>,
-) -> Vec<PathBuf> {
-    let versioned = input
-        .known_packages
-        .keys()
-        .filter(|package| !unversioned.contains(*package))
-        .cloned()
-        .collect::<Vec<_>>();
-    input
-        .package_impact_paths
-        .iter()
-        .filter(|(owner, _)| {
-            *owner == path
-                || (unversioned.contains(*owner)
-                    && nearest_parent(owner, &versioned).is_some_and(|parent| parent == path))
-        })
-        .flat_map(|(_, paths)| paths.iter().cloned())
-        .collect()
 }
 
 /// Whether `package` is untagged at version 0.0.0, so it only releases when forced by name.
@@ -397,10 +364,10 @@ fn propagate_dependencies(
     };
 
     loop {
-        let active_before = active_package_count(states);
-        if active_before == 0 {
+        if active_package_count(states) == 0 {
             break;
         }
+        let impacts_before = package_impacts(states);
         let named_bumps = named_package_bumps(states)?;
         let local_bumps = local_package_bumps(states)?;
         let bumps = DependencyBumps {
@@ -463,7 +430,9 @@ fn propagate_dependencies(
         propagation.dependency_files = round_files;
         propagation.go_files = plan_go_rewrites(go, input.repo_root, states)?;
         propagate_descendants(states, deepest_first, parents);
-        if active_package_count(states) == active_before {
+        align_groups(states, input.groups)?;
+        // a group can raise the impact of a package that already releases
+        if package_impacts(states) == impacts_before {
             break;
         }
     }
@@ -772,45 +741,96 @@ fn active_package_count(states: &BTreeMap<PathBuf, PackageState>) -> usize {
         .count()
 }
 
-/// Releases every package at one version when any package has a direct or forced impact.
-///
-/// The shared version bumps the highest current version so no package ever moves backwards.
-fn apply_fixed_version(states: &mut BTreeMap<PathBuf, PackageState>) -> AppResult<()> {
-    let own_impact = |state: &PackageState| {
-        (!state.unversioned)
-            .then_some(state.reasons.direct.max(state.reasons.forced))
-            .flatten()
-    };
-    let Some(impact) = states.values().filter_map(own_impact).max() else {
-        return Ok(());
-    };
-    let sources = states
+fn package_impacts(states: &BTreeMap<PathBuf, PackageState>) -> BTreeMap<PathBuf, Impact> {
+    states
         .iter()
-        .filter(|(_, state)| own_impact(state) == Some(impact))
-        .map(|(path, _)| path.clone())
-        .collect::<BTreeSet<_>>();
-    let Some(shared_version) = states
-        .values()
-        .filter(|state| !state.unversioned)
-        .map(|state| parse_version(&state.base.version).map(|version| (version, state)))
-        .collect::<AppResult<Vec<_>>>()?
-        .into_iter()
-        .max_by_key(|(version, _)| *version)
-        .map(|(_, state)| state.base.version.clone())
-    else {
-        return Ok(());
-    };
+        .filter_map(|(path, state)| Some((path.clone(), state.impact()?)))
+        .collect()
+}
 
-    for state in states.values_mut().filter(|state| !state.unversioned) {
-        state.shared_version = Some(shared_version.clone());
-        if own_impact(state) != Some(impact) {
-            state.reasons.fixed = Some(FixedCause {
+/// The impact a group member has without its group: its own commits, forcing, and releases
+/// propagated from packages outside the group.
+fn own_group_impact(state: &PackageState, members: &BTreeSet<PathBuf>) -> Option<Impact> {
+    let outside = |path: &PathBuf| !members.contains(path);
+    let propagated = state.reasons.descendants.iter().any(outside)
+        || state.reasons.dependencies.keys().any(outside);
+    [
+        state.reasons.direct,
+        state.reasons.forced,
+        propagated.then_some(Impact::Patch),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+/// Releases every versioned member of a group at one version when any member releases.
+///
+/// The members take the highest impact in the group, applied to their highest current version
+/// so no member ever moves backwards.
+fn align_groups(
+    states: &mut BTreeMap<PathBuf, PackageState>,
+    groups: &[VersionGroup],
+) -> AppResult<()> {
+    for group in groups {
+        let members = states
+            .iter()
+            .filter(|(path, state)| group.members.contains(*path) && !state.unversioned)
+            .map(|(path, state)| (path.clone(), own_group_impact(state, &group.members)))
+            .collect::<BTreeMap<_, _>>();
+        let Some(impact) = members.values().flatten().max().copied() else {
+            continue;
+        };
+        let sources = members
+            .iter()
+            .filter(|(_, own)| **own == Some(impact))
+            .map(|(path, _)| path.clone())
+            .collect::<BTreeSet<_>>();
+        let Some(shared_version) = states
+            .iter()
+            .filter(|(path, _)| members.contains_key(*path))
+            .map(|(_, state)| parse_version(&state.base.version).map(|version| (version, state)))
+            .collect::<AppResult<Vec<_>>>()?
+            .into_iter()
+            .max_by_key(|(version, _)| *version)
+            .map(|(_, state)| state.base.version.clone())
+        else {
+            continue;
+        };
+
+        for (path, own) in &members {
+            let Some(state) = states.get_mut(path) else {
+                continue;
+            };
+            state.shared_version = Some(shared_version.clone());
+            state.reasons.fixed = (*own != Some(impact)).then(|| FixedCause {
                 impact,
                 sources: sources.clone(),
+                group: group.name.clone(),
             });
         }
     }
     Ok(())
+}
+
+/// Removes the releases propagated between members of the same group, which the group already
+/// explains.
+fn drop_group_propagation(states: &mut BTreeMap<PathBuf, PackageState>, groups: &[VersionGroup]) {
+    for group in groups {
+        for (path, state) in states.iter_mut() {
+            if !group.members.contains(path) || state.unversioned {
+                continue;
+            }
+            state
+                .reasons
+                .descendants
+                .retain(|child| !group.members.contains(child));
+            state
+                .reasons
+                .dependencies
+                .retain(|producer, _| !group.members.contains(producer));
+        }
+    }
 }
 
 fn planned_version(state: &PackageState, impact: Impact) -> AppResult<String> {

@@ -1,5 +1,7 @@
 mod config;
 mod git_ops;
+mod groups;
+mod init;
 mod model;
 mod preview;
 mod release_plan;
@@ -7,7 +9,6 @@ mod versioning;
 
 use std::collections::{BTreeMap, HashSet};
 use std::env;
-use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
@@ -20,11 +21,12 @@ use bumper::package::{Package, is_package_marker, marker_package_directory};
 use git2::Repository;
 use inquire::{InquireError, MultiSelect};
 
-use config::load_config;
+use config::{Command, load_config, parse_cli};
 use git_ops::{
     current_branch, ensure_clean_repo, git_commit, git_fetch, git_push, git_tag,
     list_tracked_files_under, repo_root, stage_path, staged_files,
 };
+use groups::PlanGroups;
 use model::{AppResult, Config};
 use preview::{PreviewInput, collect_bump_preview, preview_colors_enabled, render_bump_preview};
 use release_plan::{
@@ -37,12 +39,6 @@ use release_plan::{
 struct Target {
     path: PathBuf,
     package_path: PathBuf,
-}
-
-#[derive(Debug)]
-struct DiscoveredPackages {
-    packages: BTreeMap<PathBuf, Package>,
-    impact_paths: BTreeMap<PathBuf, Vec<PathBuf>>,
 }
 
 fn main() -> ExitCode {
@@ -229,13 +225,18 @@ fn prompt_forced_packages(
     }
 }
 
-/// Asks whether packages sharing a version should release with a fixed version, when the
-/// answer would change the plan. Returns the fixed version plan when accepted.
+/// Asks whether packages sharing a version should release with a fixed version, when nothing
+/// chose already and the answer would change the plan. Returns the fixed version plan when
+/// accepted.
 fn prompt_fixed_version(
     config: &Config,
     plan: &ReleasePlan,
     fixed_plan: impl FnOnce() -> AppResult<ReleasePlan>,
 ) -> AppResult<Option<ReleasePlan>> {
+    // configured groups already say which packages share a version
+    if config.fixed_version.is_some() || !config.groups.is_empty() || !io::stdin().is_terminal() {
+        return Ok(None);
+    }
     let Some(version) = plan.shared_current_version() else {
         return Ok(None);
     };
@@ -379,10 +380,14 @@ fn commit_tag_and_push(repo: &Repository, config: &Config, plan: &ReleasePlan) -
 }
 
 fn run() -> AppResult<()> {
-    let mut config = load_config()?;
+    let cli = parse_cli()?;
     let repo = open_repository()?;
     let repo_root = fs::canonicalize(repo_root(&repo)?)
         .map_err(|e| format!("failed to resolve repository root: {e}"))?;
+    if cli.command == Some(Command::Init) {
+        return run_init(&repo, &repo_root);
+    }
+    let mut config = load_config(cli, &repo_root)?;
     let ignored_directories =
         normalize_ignored_directories(&repo_root, &config.ignored_directories)?;
 
@@ -395,9 +400,8 @@ fn run() -> AppResult<()> {
 
     let tracked_files =
         list_tracked_files_under(&repo, &repo_root, &repo_root, &ignored_directories)?;
-    let discovered_packages = discover_packages(&repo_root, &tracked_files)?;
-    let known_packages = discovered_packages.packages;
-    let package_impact_paths = discovered_packages.impact_paths;
+    let known_packages = discover_packages(&repo_root, &tracked_files)?;
+    let groups = PlanGroups::new(&config.groups, &known_packages)?;
     config
         .paths
         .extend(known_packages.values().map(|package| package.root.clone()));
@@ -437,18 +441,15 @@ fn run() -> AppResult<()> {
             forced_packages,
             tracked_files: &tracked_files,
             tracked_paths: &tracked_paths,
-            package_impact_paths: &package_impact_paths,
             ignored_directories: &ignored_directories,
             config: &config,
-            fixed_version,
+            groups: groups.get(fixed_version),
         })
     };
     let mut fixed_version = config.fixed_version.unwrap_or(false);
     let mut plan = plan_releases(&forced_packages, fixed_version)?;
-    if config.fixed_version.is_none()
-        && io::stdin().is_terminal()
-        && let Some(fixed_plan) =
-            prompt_fixed_version(&config, &plan, || plan_releases(&forced_packages, true))?
+    if let Some(fixed_plan) =
+        prompt_fixed_version(&config, &plan, || plan_releases(&forced_packages, true))?
     {
         fixed_version = true;
         plan = fixed_plan;
@@ -486,6 +487,15 @@ fn run() -> AppResult<()> {
     }
 
     apply_release_plan(&repo, &config, &release_input, &ignored_directories)
+}
+
+/// Creates a `bumper.toml` that suggests a version group of the discovered packages.
+fn run_init(repo: &Repository, repo_root: &Path) -> AppResult<()> {
+    let tracked_files = list_tracked_files_under(repo, repo_root, repo_root, &[])?;
+    let known_packages = discover_packages(repo_root, &tracked_files)?;
+    let path = init::init_config(repo_root, &known_packages)?;
+    println!("created {}", path.display());
+    Ok(())
 }
 
 /// Writes every planned file change, then commits, tags and pushes the releases.
@@ -739,81 +749,10 @@ fn bump_package_files(
     Ok(())
 }
 
-fn package_json_impact_paths(manifest: &Path, package_path: &Path) -> AppResult<Vec<PathBuf>> {
-    let source = fs::read_to_string(manifest).map_err(|e| {
-        format!(
-            "failed to read package manifest '{}': {e}",
-            manifest.display()
-        )
-    })?;
-    let value = serde_json::from_str::<serde_json::Value>(&source).map_err(|e| {
-        format!(
-            "failed to parse package manifest '{}': {e}",
-            manifest.display()
-        )
-    })?;
-    let Some(bumper) = value.get("bumper") else {
-        return Ok(Vec::new());
-    };
-    let bumper = bumper.as_object().ok_or_else(|| {
-        format!(
-            "package manifest '{}' field 'bumper' must be an object",
-            manifest.display()
-        )
-    })?;
-    let Some(impact_paths) = bumper.get("impactPaths") else {
-        return Ok(Vec::new());
-    };
-    let impact_paths = impact_paths.as_array().ok_or_else(|| {
-        format!(
-            "package manifest '{}' field 'bumper.impactPaths' must be an array",
-            manifest.display()
-        )
-    })?;
-
-    let mut normalized = Vec::with_capacity(impact_paths.len());
-    for (index, value) in impact_paths.iter().enumerate() {
-        let field = format!("bumper.impactPaths[{index}]");
-        let path = value.as_str().ok_or_else(|| {
-            format!(
-                "package manifest '{}' field '{field}' must be a string",
-                manifest.display()
-            )
-        })?;
-        if path.is_empty() {
-            return Err(format!(
-                "package manifest '{}' field '{field}' must not be empty",
-                manifest.display()
-            ));
-        }
-        let path = Path::new(path);
-        if path.is_absolute() {
-            return Err(format!(
-                "package manifest '{}' field '{field}' must be relative to the package directory",
-                manifest.display()
-            ));
-        }
-        let path =
-            normalize_repository_relative_path(&package_path.join(path)).ok_or_else(|| {
-                format!(
-                    "package manifest '{}' field '{field}' escapes the repository root",
-                    manifest.display()
-                )
-            })?;
-        if path == package_path {
-            return Err(format!(
-                "package manifest '{}' field '{field}' resolves to the package directory",
-                manifest.display()
-            ));
-        }
-        normalized.push(path);
-    }
-    normalized.sort();
-    normalized.dedup();
-    Ok(normalized)
-}
-
-fn discover_packages(repo_root: &Path, tracked_files: &[PathBuf]) -> AppResult<DiscoveredPackages> {
+fn discover_packages(
+    repo_root: &Path,
+    tracked_files: &[PathBuf],
+) -> AppResult<BTreeMap<PathBuf, Package>> {
     let root = fs::canonicalize(repo_root).map_err(|e| {
         format!(
             "failed to resolve repository root '{}': {e}",
@@ -827,7 +766,6 @@ fn discover_packages(repo_root: &Path, tracked_files: &[PathBuf]) -> AppResult<D
             path: PathBuf::new(),
         },
     )]);
-    let mut impact_paths = BTreeMap::new();
     for file in tracked_files {
         if !is_package_marker(file) {
             continue;
@@ -851,18 +789,12 @@ fn discover_packages(repo_root: &Path, tracked_files: &[PathBuf]) -> AppResult<D
                 )
             })?
             .to_path_buf();
-        if file.file_name() == Some(OsStr::new("package.json")) {
-            impact_paths.insert(path.clone(), package_json_impact_paths(file, &path)?);
-        }
         packages.entry(path.clone()).or_insert(Package {
             root: directory,
             path,
         });
     }
-    Ok(DiscoveredPackages {
-        packages,
-        impact_paths,
-    })
+    Ok(packages)
 }
 
 fn bump_file(
@@ -906,6 +838,7 @@ fn bump_typed_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_directory(name: &str) -> PathBuf {
@@ -916,13 +849,6 @@ mod tests {
         let path = std::env::temp_dir().join(format!("bumper-{name}-{nanos}"));
         fs::create_dir_all(&path).expect("create temp directory");
         path
-    }
-
-    fn write_package_json(directory: &Path, source: &str) -> PathBuf {
-        fs::create_dir_all(directory).expect("create package directory");
-        let manifest = directory.join("package.json");
-        fs::write(&manifest, source).expect("write package manifest");
-        manifest
     }
 
     fn release(path: &str, last_tag: &str, tag: &str) -> Release {
@@ -957,6 +883,7 @@ mod tests {
             force_bump_type: crate::model::Impact::Patch,
             allow_dirty: false,
             fixed_version: None,
+            groups: Vec::new(),
             interactive: false,
         }
     }
@@ -1145,145 +1072,6 @@ mod tests {
 
         assert!(normalize_ignored_directories(root, &[PathBuf::from("../outside")]).is_err());
         assert!(normalize_ignored_directories(root, &[PathBuf::from("/outside")]).is_err());
-    }
-
-    #[test]
-    fn package_json_impact_paths_accept_missing_empty_and_unknown_fields() {
-        let root = temp_directory("impact-path-config");
-        let package = root.join("packages/app");
-        let manifest = write_package_json(
-            &package,
-            r#"{"name":"app","version":"1.0.0","custom":true}"#,
-        );
-        assert_eq!(
-            package_json_impact_paths(&manifest, Path::new("packages/app"))
-                .expect("parse missing bumper config"),
-            Vec::<PathBuf>::new()
-        );
-
-        fs::write(
-            &manifest,
-            r#"{"name":"app","version":"1.0.0","bumper":{"impactPaths":[],"future":true}}"#,
-        )
-        .expect("write empty impact paths");
-        assert_eq!(
-            package_json_impact_paths(&manifest, Path::new("packages/app"))
-                .expect("parse empty impact paths"),
-            Vec::<PathBuf>::new()
-        );
-
-        fs::write(
-            &manifest,
-            r#"{"name":"app","version":"1.0.0","bumper":{"impactPaths":["../../shared/native","future/missing","src/../generated","../../shared/native"],"future":true}}"#,
-        )
-        .expect("write valid impact paths");
-        assert_eq!(
-            package_json_impact_paths(&manifest, Path::new("packages/app"))
-                .expect("parse valid impact paths"),
-            vec![
-                PathBuf::from("packages/app/future/missing"),
-                PathBuf::from("packages/app/generated"),
-                PathBuf::from("shared/native"),
-            ]
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn package_json_impact_paths_report_manifest_fields() {
-        let root = temp_directory("invalid-impact-path-config");
-        let manifest = write_package_json(&root, r#"{"name":"root","version":"1.0.0"}"#);
-        for (source, field) in [
-            (
-                r#"{"name":"root","version":"1.0.0","bumper":true}"#,
-                "field 'bumper'",
-            ),
-            (
-                r#"{"name":"root","version":"1.0.0","bumper":{"impactPaths":true}}"#,
-                "field 'bumper.impactPaths'",
-            ),
-            (
-                r#"{"name":"root","version":"1.0.0","bumper":{"impactPaths":["src",1]}}"#,
-                "field 'bumper.impactPaths[1]'",
-            ),
-        ] {
-            fs::write(&manifest, source).expect("write invalid impact config");
-            let error = package_json_impact_paths(&manifest, Path::new(""))
-                .expect_err("invalid impact config should fail");
-            assert!(error.contains(&manifest.display().to_string()), "{error}");
-            assert!(error.contains(field), "{error}");
-        }
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn package_json_impact_paths_reject_invalid_normalized_paths() {
-        let root = temp_directory("invalid-normalized-impact-paths");
-        let manifest = write_package_json(
-            &root.join("packages/app"),
-            r#"{"name":"app","version":"1.0.0"}"#,
-        );
-        for (path, message) in [
-            ("", "must not be empty"),
-            (".", "resolves to the package directory"),
-            ("src/..", "resolves to the package directory"),
-            ("../../../outside", "escapes the repository root"),
-            ("/outside", "must be relative"),
-        ] {
-            let source = serde_json::json!({
-                "name": "app",
-                "version": "1.0.0",
-                "bumper": {"impactPaths": [path]},
-            });
-            fs::write(&manifest, source.to_string()).expect("write invalid impact path");
-            let error = package_json_impact_paths(&manifest, Path::new("packages/app"))
-                .expect_err("invalid normalized path should fail");
-            assert!(error.contains("bumper.impactPaths[0]"), "{error}");
-            assert!(error.contains(message), "{error}");
-        }
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn discovery_keeps_package_json_impact_paths_with_other_markers() {
-        let root = temp_directory("impact-path-discovery");
-        let package = root.join("packages/app");
-        let package_json = write_package_json(
-            &package,
-            r#"{"name":"app","version":"1.0.0","bumper":{"impactPaths":["../../native"]}}"#,
-        );
-        let cargo_toml = package.join("Cargo.toml");
-        fs::write(
-            &cargo_toml,
-            "[package]\nname = \"app-rust\"\nversion = \"1.0.0\"\n",
-        )
-        .expect("write Cargo manifest");
-
-        let discovered = discover_packages(&root, &[cargo_toml, package_json])
-            .expect("discover package metadata");
-
-        assert!(discovered.packages.contains_key(Path::new("packages/app")));
-        assert_eq!(
-            discovered.impact_paths.get(Path::new("packages/app")),
-            Some(&vec![PathBuf::from("native")])
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn malformed_root_impact_config_is_not_masked_by_root_package() {
-        let root = temp_directory("invalid-root-impact-path");
-        let manifest = write_package_json(
-            &root,
-            r#"{"name":"root","version":"1.0.0","bumper":{"impactPaths":"src"}}"#,
-        );
-
-        let error = discover_packages(&root, std::slice::from_ref(&manifest))
-            .expect_err("malformed root package config should fail");
-
-        assert!(error.contains(&manifest.display().to_string()), "{error}");
-        assert!(error.contains("bumper.impactPaths"), "{error}");
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
