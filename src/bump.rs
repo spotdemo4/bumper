@@ -36,11 +36,40 @@ pub struct VersionBump {
     pub new_version: String,
 }
 
+/// The package registry a package name belongs to. A name only identifies a package within
+/// its own ecosystem: an npm package, a Cargo crate and a Python package can share a name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Ecosystem {
+    /// Names from `package.json` and `package-lock.json`.
+    Npm,
+    /// Names from `Cargo.toml` and `Cargo.lock`.
+    Cargo,
+    /// Names from `pyproject.toml` and `uv.lock`.
+    Python,
+}
+
+/// The name of a package in its ecosystem.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PackageName {
+    pub ecosystem: Ecosystem,
+    pub name: String,
+}
+
+impl PackageName {
+    #[must_use]
+    pub fn new(ecosystem: Ecosystem, name: impl Into<String>) -> Self {
+        Self {
+            ecosystem,
+            name: name.into(),
+        }
+    }
+}
+
 /// The version bumps of releasing packages, for updating the dependencies on them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DependencyBumps {
     /// Bumps by package name, for dependencies that name the package.
-    pub named: BTreeMap<String, VersionBump>,
+    pub named: BTreeMap<PackageName, VersionBump>,
     /// Bumps by absolute, canonical package directory, for path dependencies.
     pub local: BTreeMap<PathBuf, VersionBump>,
 }
@@ -49,13 +78,22 @@ impl DependencyBumps {
     fn is_empty(&self) -> bool {
         self.named.is_empty() && self.local.is_empty()
     }
+
+    /// The bumps of the packages named in `ecosystem`, by name.
+    fn named_in(&self, ecosystem: Ecosystem) -> BTreeMap<String, VersionBump> {
+        self.named
+            .iter()
+            .filter(|(name, _)| name.ecosystem == ecosystem)
+            .map(|(name, bump)| (name.name.clone(), bump.clone()))
+            .collect()
+    }
 }
 
 /// A dependency whose version a dependency update changes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChangedDependency {
     /// A dependency on the package with this name in [`DependencyBumps::named`].
-    Named(String),
+    Named(PackageName),
     /// A path dependency named `name` on the package directory `root` in
     /// [`DependencyBumps::local`].
     Local { name: String, root: PathBuf },
@@ -66,7 +104,7 @@ impl ChangedDependency {
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
-            Self::Named(name) | Self::Local { name, .. } => name,
+            Self::Named(PackageName { name, .. }) | Self::Local { name, .. } => name,
         }
     }
 }
@@ -83,8 +121,14 @@ struct DependencyTransform {
     dependencies: BTreeSet<ChangedDependency>,
 }
 
-fn named_dependencies(names: BTreeSet<String>) -> BTreeSet<ChangedDependency> {
-    names.into_iter().map(ChangedDependency::Named).collect()
+fn named_dependencies(
+    ecosystem: Ecosystem,
+    names: BTreeSet<String>,
+) -> BTreeSet<ChangedDependency> {
+    names
+        .into_iter()
+        .map(|name| ChangedDependency::Named(PackageName::new(ecosystem, name)))
+        .collect()
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +138,28 @@ enum DependencyFormat {
     CargoToml,
     CargoLock,
     GleamManifest,
+}
+
+impl DependencyFormat {
+    fn for_file(file: &Path) -> Option<Self> {
+        match file.file_name().and_then(|name| name.to_str())? {
+            "package.json" => Some(Self::PackageJson),
+            "package-lock.json" => Some(Self::PackageLock),
+            "Cargo.toml" => Some(Self::CargoToml),
+            "Cargo.lock" => Some(Self::CargoLock),
+            "manifest.toml" => Some(Self::GleamManifest),
+            _ => None,
+        }
+    }
+
+    /// The ecosystem of the names the format's dependencies use, when it matches them by name.
+    fn ecosystem(self) -> Option<Ecosystem> {
+        match self {
+            Self::PackageJson | Self::PackageLock => Some(Ecosystem::Npm),
+            Self::CargoToml | Self::CargoLock => Some(Ecosystem::Cargo),
+            Self::GleamManifest => None,
+        }
+    }
 }
 
 /// Bumps the version in `file` with the writer for its file name.
@@ -171,23 +237,31 @@ fn evaluate_typed_change(
     Ok(TypedChange::from_changed(changed))
 }
 
+/// The name `file` gives its package, in the ecosystem the file belongs to.
 #[must_use]
-pub fn package_name_for_file(file: &Path) -> Option<String> {
+pub fn package_name_for_file(file: &Path) -> Option<PackageName> {
     let name = file.file_name().and_then(|n| n.to_str())?;
-    match name {
-        "package.json" | "package-lock.json" => read_package_json_name(file),
-        "Cargo.toml" => read_toml_name(file, "package").ok(),
-        "pyproject.toml" => read_toml_name(file, "project").ok(),
+    let (ecosystem, name) = match name {
+        "package.json" | "package-lock.json" => (Ecosystem::Npm, read_package_json_name(file)?),
+        "Cargo.toml" => (Ecosystem::Cargo, read_toml_name(file, "package").ok()?),
+        "pyproject.toml" => (Ecosystem::Python, read_toml_name(file, "project").ok()?),
         "Cargo.lock" => {
             let cargo_toml = file.with_file_name("Cargo.toml");
-            read_toml_name(&cargo_toml, "package").ok()
+            (
+                Ecosystem::Cargo,
+                read_toml_name(&cargo_toml, "package").ok()?,
+            )
         }
         "uv.lock" => {
             let pyproject = file.with_file_name("pyproject.toml");
-            read_toml_name(&pyproject, "project").ok()
+            (
+                Ecosystem::Python,
+                read_toml_name(&pyproject, "project").ok()?,
+            )
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some(PackageName::new(ecosystem, name))
 }
 
 fn read_package_json_name(path: &Path) -> Option<String> {
@@ -228,13 +302,8 @@ fn evaluate_dependency_update(
     bumps: &DependencyBumps,
     write: bool,
 ) -> AppResult<DependencyUpdate> {
-    let format = match file.file_name().and_then(|name| name.to_str()) {
-        Some("package.json") => DependencyFormat::PackageJson,
-        Some("package-lock.json") => DependencyFormat::PackageLock,
-        Some("Cargo.toml") => DependencyFormat::CargoToml,
-        Some("Cargo.lock") => DependencyFormat::CargoLock,
-        Some("manifest.toml") => DependencyFormat::GleamManifest,
-        _ => return Ok(DependencyUpdate::Unhandled),
+    let Some(format) = DependencyFormat::for_file(file) else {
+        return Ok(DependencyUpdate::Unhandled);
     };
     if bumps.is_empty() {
         return Ok(DependencyUpdate::Unchanged);
@@ -242,12 +311,16 @@ fn evaluate_dependency_update(
 
     let source = fs::read_to_string(file)
         .map_err(|e| format!("failed to read '{}': {e}", file.display()))?;
-    let bumped = &bumps.named;
+    // a dependency name only matches packages of the same ecosystem
+    let bumped = format
+        .ecosystem()
+        .map(|ecosystem| bumps.named_in(ecosystem))
+        .unwrap_or_default();
     let transformed = match format {
-        DependencyFormat::PackageJson => transform_package_json_dependencies(&source, bumped),
-        DependencyFormat::PackageLock => transform_package_lock_dependencies(&source, bumped),
-        DependencyFormat::CargoToml => transform_cargo_toml_dependencies(&source, bumped),
-        DependencyFormat::CargoLock => transform_cargo_lock_dependencies(&source, bumped),
+        DependencyFormat::PackageJson => transform_package_json_dependencies(&source, &bumped),
+        DependencyFormat::PackageLock => transform_package_lock_dependencies(&source, &bumped),
+        DependencyFormat::CargoToml => transform_cargo_toml_dependencies(&source, &bumped),
+        DependencyFormat::CargoLock => transform_cargo_lock_dependencies(&source, &bumped),
         DependencyFormat::GleamManifest => {
             transform_gleam_manifest_dependencies(file, &source, &bumps.local)
         }
@@ -263,13 +336,21 @@ fn evaluate_dependency_update(
     Ok(DependencyUpdate::Changed(transformed.dependencies))
 }
 
-fn typed_bumps<S: BuildHasher>(bumped: &HashMap<String, (String, String), S>) -> DependencyBumps {
+/// The bumps of `bumped`, whose names are in the ecosystem of `file`.
+fn typed_bumps<S: BuildHasher>(
+    file: &Path,
+    bumped: &HashMap<String, (String, String), S>,
+) -> DependencyBumps {
+    let Some(ecosystem) = DependencyFormat::for_file(file).and_then(DependencyFormat::ecosystem)
+    else {
+        return DependencyBumps::default();
+    };
     DependencyBumps {
         named: bumped
             .iter()
             .map(|(name, (old_version, new_version))| {
                 (
-                    name.clone(),
+                    PackageName::new(ecosystem, name.clone()),
                     VersionBump {
                         old_version: old_version.clone(),
                         new_version: new_version.clone(),
@@ -292,7 +373,7 @@ pub fn dependency_update_needed<S: BuildHasher>(
     bumped: &HashMap<String, (String, String), S>,
 ) -> AppResult<bool> {
     Ok(matches!(
-        preview_dependency_update(file, &typed_bumps(bumped))?,
+        preview_dependency_update(file, &typed_bumps(file, bumped))?,
         DependencyUpdate::Changed(_)
     ))
 }
@@ -311,7 +392,7 @@ fn write_dependency_update<S: BuildHasher>(
     }
 
     Ok(matches!(
-        apply_dependency_update(file, &typed_bumps(bumped))?,
+        apply_dependency_update(file, &typed_bumps(file, bumped))?,
         DependencyUpdate::Changed(_)
     ))
 }
@@ -399,7 +480,7 @@ fn transform_package_json_dependencies(
 
     Some(DependencyTransform {
         content,
-        dependencies: named_dependencies(changed_names),
+        dependencies: named_dependencies(Ecosystem::Npm, changed_names),
     })
 }
 
@@ -536,7 +617,7 @@ fn transform_package_lock_dependencies(
     }
     Some(DependencyTransform {
         content,
-        dependencies: named_dependencies(changed_names),
+        dependencies: named_dependencies(Ecosystem::Npm, changed_names),
     })
 }
 
@@ -771,7 +852,7 @@ fn transform_cargo_toml_dependencies(
 
     Some(DependencyTransform {
         content: doc.to_string(),
-        dependencies: named_dependencies(changed_names),
+        dependencies: named_dependencies(Ecosystem::Cargo, changed_names),
     })
 }
 
@@ -922,7 +1003,7 @@ fn transform_cargo_lock_dependencies(
 
     Some(DependencyTransform {
         content,
-        dependencies: named_dependencies(changed_names),
+        dependencies: named_dependencies(Ecosystem::Cargo, changed_names),
     })
 }
 
@@ -1895,7 +1976,7 @@ mod tests {
         let path = write_package_json(&dir, r#"{"name":"@trevrpc/trevrpc-js","version":"0.13.0"}"#);
         assert_eq!(
             package_name_for_file(&path),
-            Some("@trevrpc/trevrpc-js".to_string())
+            Some(PackageName::new(Ecosystem::Npm, "@trevrpc/trevrpc-js"))
         );
         let _ = fs::remove_dir_all(dir);
     }
@@ -2217,7 +2298,10 @@ mod tests {
         );
         assert_eq!(
             transformed.dependencies,
-            BTreeSet::from([ChangedDependency::Named("pkg-a".to_string())])
+            BTreeSet::from([ChangedDependency::Named(PackageName::new(
+                Ecosystem::Npm,
+                "pkg-a"
+            ))])
         );
     }
 
@@ -2305,14 +2389,14 @@ mod tests {
         let bumped = DependencyBumps {
             named: BTreeMap::from([
                 (
-                    "pkg-a".to_string(),
+                    PackageName::new(Ecosystem::Npm, "pkg-a"),
                     VersionBump {
                         old_version: "0.13.0".to_string(),
                         new_version: "0.14.0".to_string(),
                     },
                 ),
                 (
-                    "pkg-b".to_string(),
+                    PackageName::new(Ecosystem::Npm, "pkg-b"),
                     VersionBump {
                         old_version: "2.0.0".to_string(),
                         new_version: "2.1.0".to_string(),
@@ -2322,8 +2406,8 @@ mod tests {
             local: BTreeMap::new(),
         };
         let expected_names = BTreeSet::from([
-            ChangedDependency::Named("pkg-a".to_string()),
-            ChangedDependency::Named("pkg-b".to_string()),
+            ChangedDependency::Named(PackageName::new(Ecosystem::Npm, "pkg-a")),
+            ChangedDependency::Named(PackageName::new(Ecosystem::Npm, "pkg-b")),
         ]);
 
         assert_eq!(
@@ -2442,7 +2526,7 @@ mod tests {
         let bumps = DependencyBumps {
             // a package of the same name elsewhere must not match
             named: BTreeMap::from([(
-                "other".to_string(),
+                PackageName::new(Ecosystem::Cargo, "other"),
                 VersionBump {
                     old_version: "1.11.1".to_string(),
                     new_version: "9.9.9".to_string(),

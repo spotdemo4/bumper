@@ -399,6 +399,7 @@ mod tests {
     use super::*;
     use crate::model::Impact;
     use crate::release_plan::{DependencyCause, NamedPackageBump, ReleaseReasons};
+    use bumper::bump::{Ecosystem, PackageName};
 
     fn release(
         path: &str,
@@ -492,7 +493,7 @@ mod tests {
             ]),
             skipped_packages: BTreeMap::new(),
             named_bumps: BTreeMap::from([(
-                "library".to_string(),
+                PackageName::new(Ecosystem::Npm, "library"),
                 NamedPackageBump {
                     package_path: library_path.clone(),
                     version: version_bump("2.0.0", "2.0.1"),

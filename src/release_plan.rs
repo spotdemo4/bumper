@@ -4,8 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use bumper::bump::{
-    ChangedDependency, DependencyBumps, DependencyUpdate, VersionBump, package_name_for_file,
-    preview_dependency_update,
+    ChangedDependency, DependencyBumps, DependencyUpdate, PackageName, VersionBump,
+    package_name_for_file, preview_dependency_update,
 };
 use bumper::go::{
     ModuleUpdate, PathMajor, is_buf_template, is_proto, local_replacements, read_module_path,
@@ -100,7 +100,7 @@ pub enum SkipReason {
 pub struct ReleasePlan {
     pub releases: BTreeMap<PathBuf, Release>,
     pub skipped_packages: BTreeMap<PathBuf, SkipReason>,
-    pub named_bumps: BTreeMap<String, NamedPackageBump>,
+    pub named_bumps: BTreeMap<PackageName, NamedPackageBump>,
     pub dependency_files: BTreeMap<PathBuf, DependencyFilePlan>,
     pub go_files: BTreeMap<PathBuf, GoFilePlan>,
     /// The module path of every Go module in the repository.
@@ -169,7 +169,7 @@ const UNVERSIONED: &str = "0.0.0";
 
 struct PackageState {
     package: Package,
-    names: BTreeSet<String>,
+    names: BTreeSet<PackageName>,
     base: ReleaseBase,
     /// The version bumped to produce the release, when it differs from `base.version`.
     shared_version: Option<String>,
@@ -905,7 +905,7 @@ fn materialize_releases(
 
 fn named_package_bumps(
     states: &BTreeMap<PathBuf, PackageState>,
-) -> AppResult<BTreeMap<String, NamedPackageBump>> {
+) -> AppResult<BTreeMap<PackageName, NamedPackageBump>> {
     let mut bumped = BTreeMap::new();
     for (path, state) in states {
         let Some(impact) = state.impact() else {
@@ -951,8 +951,8 @@ fn local_package_bumps(
 }
 
 fn version_bumps(
-    named_bumps: &BTreeMap<String, NamedPackageBump>,
-) -> BTreeMap<String, VersionBump> {
+    named_bumps: &BTreeMap<PackageName, NamedPackageBump>,
+) -> BTreeMap<PackageName, VersionBump> {
     named_bumps
         .iter()
         .map(|(name, bump)| (name.clone(), bump.version.clone()))

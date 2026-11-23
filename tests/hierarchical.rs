@@ -1089,6 +1089,102 @@ fn dependency_updates_release_an_unselected_sibling_package() {
     );
 }
 
+/// A Python package and a Cargo crate that share the name `shared`, where the Python package
+/// sorts first, and a crate that depends on the `shared` crate.
+fn shared_name_fixture(name: &str, changes: &[(&str, &str)]) -> (TempDir, String) {
+    let local = TempDir::new(name);
+    let remote = TempDir::new(&format!("{name}-remote"));
+    let repo = Repository::init(local.path()).expect("init repository");
+    Repository::init_bare(remote.path()).expect("init bare remote");
+    repo.remote("origin", remote.path().to_str().expect("UTF-8 remote path"))
+        .expect("add remote");
+    for directory in ["a-python", "b-rust", "c-rust"] {
+        fs::create_dir_all(local.path().join(directory)).expect("create package");
+    }
+    fs::write(
+        local.path().join("package.json"),
+        "{\n  \"name\": \"root\",\n  \"version\": \"1.0.0\"\n}\n",
+    )
+    .expect("write root manifest");
+    fs::write(
+        local.path().join("a-python/pyproject.toml"),
+        "[project]\nname = \"shared\"\nversion = \"1.0.0\"\n",
+    )
+    .expect("write Python manifest");
+    fs::write(
+        local.path().join("b-rust/Cargo.toml"),
+        "[package]\nname = \"shared\"\nversion = \"1.0.0\"\n",
+    )
+    .expect("write shared crate manifest");
+    fs::write(
+        local.path().join("c-rust/Cargo.toml"),
+        "[package]\nname = \"consumer\"\nversion = \"3.0.0\"\n\n[dependencies]\nshared = { version = \"1.0.0\", path = \"../b-rust\" }\n",
+    )
+    .expect("write consumer crate manifest");
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "a-python/v1.0.0", baseline);
+    tag(&repo, "b-rust/v1.0.0", baseline);
+    tag(&repo, "c-rust/v3.0.0", baseline);
+    for (path, message) in changes {
+        fs::write(local.path().join(path), "changed\n").expect("write change");
+        commit_all(&repo, message);
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-commit", "--no-tag", "--no-push"])
+        .output()
+        .expect("run bumper");
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    (local, stdout)
+}
+
+#[test]
+fn cargo_dependencies_do_not_resolve_to_python_packages_of_the_same_name() {
+    let (local, stdout) = shared_name_fixture(
+        "shared-name-python",
+        &[("a-python/main.py", "feat: python")],
+    );
+
+    assert!(!stdout.contains("c-rust ("), "{stdout}");
+    assert!(
+        fs::read_to_string(local.path().join("c-rust/Cargo.toml"))
+            .expect("read consumer manifest")
+            .contains("shared = { version = \"1.0.0\", path = \"../b-rust\" }"),
+        "the Python release doesn't change the Cargo dependency"
+    );
+
+    let (local, stdout) = shared_name_fixture(
+        "shared-name-both",
+        &[
+            ("a-python/main.py", "feat: python"),
+            ("b-rust/lib.rs", "fix: rust"),
+        ],
+    );
+
+    assert!(
+        stdout.contains("propagated from dependency b-rust (shared via c-rust/Cargo.toml)"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("propagated from dependency a-python"),
+        "{stdout}"
+    );
+    assert!(
+        fs::read_to_string(local.path().join("c-rust/Cargo.toml"))
+            .expect("read consumer manifest")
+            .contains("shared = { version = \"1.0.1\", path = \"../b-rust\" }"),
+        "the Cargo dependency takes the crate's version"
+    );
+}
+
 #[test]
 fn gleam_manifest_path_dependencies_release_the_dependent_package() {
     let local = TempDir::new("gleam-manifest-local");
