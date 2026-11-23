@@ -109,16 +109,57 @@ impl ChangedDependency {
     }
 }
 
+/// The dependencies whose versions a dependency update changes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChangedDependencies {
+    /// Dependencies of the package that owns the file.
+    pub owner: BTreeSet<ChangedDependency>,
+    /// Other packages whose versions a lock file records, which the owner doesn't depend on
+    /// itself, such as the other members of a Cargo workspace in its shared `Cargo.lock`, or
+    /// the dependencies of a linked package in a `package-lock.json`.
+    pub locked: BTreeSet<ChangedDependency>,
+}
+
+impl ChangedDependencies {
+    fn owner(owner: BTreeSet<ChangedDependency>) -> Self {
+        Self {
+            owner,
+            locked: BTreeSet::new(),
+        }
+    }
+
+    /// Splits the packages named `names` in `ecosystem` into the dependencies of the owner,
+    /// those in `owner_names`, and the other locked packages.
+    fn split(
+        ecosystem: Ecosystem,
+        names: BTreeSet<String>,
+        owner_names: &BTreeSet<String>,
+    ) -> Self {
+        let (owner, locked): (BTreeSet<_>, BTreeSet<_>) = names
+            .into_iter()
+            .partition(|name| owner_names.contains(name));
+        Self {
+            owner: named_dependencies(ecosystem, owner),
+            locked: named_dependencies(ecosystem, locked),
+        }
+    }
+
+    /// Every dependency whose version changes.
+    pub fn iter(&self) -> impl Iterator<Item = &ChangedDependency> {
+        self.owner.iter().chain(&self.locked)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DependencyUpdate {
-    Changed(BTreeSet<ChangedDependency>),
+    Changed(ChangedDependencies),
     Unchanged,
     Unhandled,
 }
 
 struct DependencyTransform {
     content: String,
-    dependencies: BTreeSet<ChangedDependency>,
+    dependencies: ChangedDependencies,
 }
 
 fn named_dependencies(
@@ -320,7 +361,12 @@ fn evaluate_dependency_update(
         DependencyFormat::PackageJson => transform_package_json_dependencies(&source, &bumped),
         DependencyFormat::PackageLock => transform_package_lock_dependencies(&source, &bumped),
         DependencyFormat::CargoToml => transform_cargo_toml_dependencies(&source, &bumped),
-        DependencyFormat::CargoLock => transform_cargo_lock_dependencies(&source, &bumped),
+        DependencyFormat::CargoLock => {
+            // the crate of the `Cargo.toml` next to the lock, which doesn't exist for a
+            // virtual workspace
+            let owner = package_name_for_file(file).map(|name| name.name);
+            transform_cargo_lock_dependencies(&source, &bumped, owner.as_deref())
+        }
         DependencyFormat::GleamManifest => {
             transform_gleam_manifest_dependencies(file, &source, &bumps.local)
         }
@@ -480,7 +526,7 @@ fn transform_package_json_dependencies(
 
     Some(DependencyTransform {
         content,
-        dependencies: named_dependencies(Ecosystem::Npm, changed_names),
+        dependencies: ChangedDependencies::owner(named_dependencies(Ecosystem::Npm, changed_names)),
     })
 }
 
@@ -615,10 +661,33 @@ fn transform_package_lock_dependencies(
     if content == source {
         return None;
     }
+    let owner_names = package_lock_owner_dependencies(root);
     Some(DependencyTransform {
         content,
-        dependencies: named_dependencies(Ecosystem::Npm, changed_names),
+        dependencies: ChangedDependencies::split(Ecosystem::Npm, changed_names, &owner_names),
     })
+}
+
+/// The names of the dependencies of the package that owns a `package-lock.json`.
+///
+/// They're the dependency maps of the root entry `packages[""]` (lockfileVersion 2/3), or
+/// the top-level `dependencies` (lockfileVersion 1), which can't tell the direct dependencies
+/// from the hoisted transitive ones.
+fn package_lock_owner_dependencies(root: &serde_json::Map<String, Value>) -> BTreeSet<String> {
+    if let Some(Value::Object(packages)) = root.get("packages") {
+        let Some(Value::Object(entry)) = packages.get("") else {
+            return BTreeSet::new();
+        };
+        return PACKAGE_LOCK_RANGE_SECTIONS
+            .iter()
+            .filter_map(|section| entry.get(*section).and_then(Value::as_object))
+            .flat_map(|dependencies| dependencies.keys().cloned())
+            .collect();
+    }
+    root.get("dependencies")
+        .and_then(Value::as_object)
+        .map(|dependencies| dependencies.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 fn json_path(prefix: &[&str], suffix: &[&str]) -> Vec<String> {
@@ -852,7 +921,10 @@ fn transform_cargo_toml_dependencies(
 
     Some(DependencyTransform {
         content: doc.to_string(),
-        dependencies: named_dependencies(Ecosystem::Cargo, changed_names),
+        dependencies: ChangedDependencies::owner(named_dependencies(
+            Ecosystem::Cargo,
+            changed_names,
+        )),
     })
 }
 
@@ -922,11 +994,19 @@ pub fn bump_cargo_lock_dependencies<S: BuildHasher>(
     write_dependency_update(file, bumped, "Cargo.lock")
 }
 
+/// Updates the versions of the bumped crates in a `Cargo.lock`, both in their own
+/// `[[package]]` entries and in the `dependencies` of other entries. Only the crates in the
+/// `dependencies` of the entry of the `owner` crate are dependencies of the lock's owner: a
+/// workspace shares one lock, which has an entry for every member and its dependencies.
 fn transform_cargo_lock_dependencies(
     source: &str,
     bumped: &BTreeMap<String, VersionBump>,
+    owner: Option<&str>,
 ) -> Option<DependencyTransform> {
     let mut segments = lock_segments(source);
+    let owner_names = owner
+        .map(|owner| cargo_lock_dependencies_of(&segments, owner))
+        .unwrap_or_default();
 
     let mut changed_names = BTreeSet::new();
     for segment in &mut segments {
@@ -1003,8 +1083,44 @@ fn transform_cargo_lock_dependencies(
 
     Some(DependencyTransform {
         content,
-        dependencies: named_dependencies(Ecosystem::Cargo, changed_names),
+        dependencies: ChangedDependencies::split(Ecosystem::Cargo, changed_names, &owner_names),
     })
+}
+
+/// The names in the `dependencies` of the `[[package]]` entry of the local crate `name`, the
+/// one without a `source`, in the segments of a `Cargo.lock`.
+fn cargo_lock_dependencies_of(segments: &[Vec<String>], name: &str) -> BTreeSet<String> {
+    let Some(segment) = segments.iter().skip(1).find(|segment| {
+        segment
+            .iter()
+            .find_map(|line| quoted_value(line, "name"))
+            .is_some_and(|segment_name| segment_name == name)
+            && !segment
+                .iter()
+                .any(|line| line.trim_start().starts_with("source ="))
+    }) else {
+        return BTreeSet::new();
+    };
+
+    let mut names = BTreeSet::new();
+    let mut in_deps = false;
+    for line in segment {
+        let line = line.trim();
+        if line == "dependencies = [" {
+            in_deps = true;
+        } else if in_deps && line == "]" {
+            break;
+        } else if in_deps
+            && let Some(dependency) = line
+                .trim_end_matches(',')
+                .strip_prefix('"')
+                .and_then(|line| line.strip_suffix('"'))
+            && let Some(dependency_name) = dependency.split_whitespace().next()
+        {
+            names.insert(dependency_name.to_string());
+        }
+    }
+    names
 }
 
 /// Dependency update for a Gleam `manifest.toml`: sets the locked `version` of each
@@ -1066,7 +1182,7 @@ fn transform_gleam_manifest_dependencies(
     }
     Some(DependencyTransform {
         content: doc.to_string(),
-        dependencies,
+        dependencies: ChangedDependencies::owner(dependencies),
     })
 }
 
@@ -2246,6 +2362,177 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    fn version_bumps(bumps: &[(&str, &str, &str)]) -> BTreeMap<String, VersionBump> {
+        bumps
+            .iter()
+            .map(|(name, old_version, new_version)| {
+                (
+                    (*name).to_string(),
+                    VersionBump {
+                        old_version: (*old_version).to_string(),
+                        new_version: (*new_version).to_string(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn named(ecosystem: Ecosystem, names: &[&str]) -> BTreeSet<ChangedDependency> {
+        names
+            .iter()
+            .map(|name| ChangedDependency::Named(PackageName::new(ecosystem, *name)))
+            .collect()
+    }
+
+    #[test]
+    fn package_lock_transitive_dependencies_of_a_linked_package_are_not_the_owners() {
+        let bumped = version_bumps(&[
+            ("@trevrpc/trevrpc-js", "1.11.1", "1.12.0"),
+            ("@trevrpc/qmux", "0.2.0", "0.3.0"),
+        ]);
+        let source = r#"{
+  "name": "@trevrpc/effect",
+  "lockfileVersion": 3,
+  "packages": {
+    "": {
+      "name": "@trevrpc/effect",
+      "version": "1.0.0",
+      "dependencies": { "@trevrpc/trevrpc-js": "file:.." }
+    },
+    "..": {
+      "name": "@trevrpc/trevrpc-js",
+      "version": "1.11.1",
+      "dependencies": { "@trevrpc/qmux": "^0.2.0" }
+    },
+    "node_modules/@trevrpc/qmux": {
+      "version": "0.2.0"
+    },
+    "node_modules/@trevrpc/trevrpc-js": {
+      "resolved": "..",
+      "link": true
+    }
+  }
+}"#;
+
+        let transformed =
+            transform_package_lock_dependencies(source, &bumped).expect("transformed");
+
+        let v: Value = serde_json::from_str(&transformed.content).expect("parse");
+        assert_eq!(v["packages"][".."]["version"], "1.12.0");
+        assert_eq!(
+            v["packages"][".."]["dependencies"]["@trevrpc/qmux"],
+            "^0.3.0"
+        );
+        assert_eq!(
+            v["packages"]["node_modules/@trevrpc/qmux"]["version"],
+            "0.3.0"
+        );
+        assert_eq!(
+            transformed.dependencies,
+            ChangedDependencies {
+                owner: named(Ecosystem::Npm, &["@trevrpc/trevrpc-js"]),
+                locked: named(Ecosystem::Npm, &["@trevrpc/qmux"]),
+            }
+        );
+    }
+
+    #[test]
+    fn package_lock_v1_top_level_dependencies_are_the_owners() {
+        let bumped = version_bumps(&[("pkg-a", "1.0.0", "1.1.0"), ("pkg-b", "2.0.0", "2.1.0")]);
+        let source = r#"{
+  "lockfileVersion": 1,
+  "dependencies": {
+    "pkg-a": {
+      "version": "1.0.0",
+      "dependencies": {
+        "pkg-b": { "version": "2.0.0" }
+      }
+    }
+  }
+}"#;
+
+        let transformed =
+            transform_package_lock_dependencies(source, &bumped).expect("transformed");
+
+        assert_eq!(
+            transformed.dependencies,
+            ChangedDependencies {
+                owner: named(Ecosystem::Npm, &["pkg-a"]),
+                locked: named(Ecosystem::Npm, &["pkg-b"]),
+            }
+        );
+    }
+
+    #[test]
+    fn cargo_lock_workspace_members_are_not_dependencies_of_the_owner() {
+        let source = concat!(
+            "version = 4\n",
+            "\n",
+            "[[package]]\n",
+            "name = \"dep\"\n",
+            "version = \"1.0.0\"\n",
+            "\n",
+            "[[package]]\n",
+            "name = \"m\"\n",
+            "version = \"1.0.0\"\n",
+            "dependencies = [\n",
+            " \"root\",\n",
+            "]\n",
+            "\n",
+            "[[package]]\n",
+            "name = \"root\"\n",
+            "version = \"1.0.0\"\n",
+            "dependencies = [\n",
+            " \"dep\",\n",
+            "]\n",
+            "\n",
+            "[[package]]\n",
+            "name = \"root\"\n",
+            "version = \"0.1.0\"\n",
+            "source = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+            "dependencies = [\n",
+            " \"m\",\n",
+            "]\n",
+        );
+        let bumped = version_bumps(&[("m", "1.0.0", "1.1.0"), ("dep", "1.0.0", "1.0.1")]);
+
+        let transformed =
+            transform_cargo_lock_dependencies(source, &bumped, Some("root")).expect("transformed");
+
+        assert!(
+            transformed
+                .content
+                .contains("name = \"m\"\nversion = \"1.1.0\""),
+            "{}",
+            transformed.content
+        );
+        assert!(
+            transformed
+                .content
+                .contains("name = \"dep\"\nversion = \"1.0.1\""),
+            "{}",
+            transformed.content
+        );
+        assert_eq!(
+            transformed.dependencies,
+            ChangedDependencies {
+                owner: named(Ecosystem::Cargo, &["dep"]),
+                locked: named(Ecosystem::Cargo, &["m"]),
+            }
+        );
+
+        // a virtual workspace has no crate of its own, which could depend on the members
+        let transformed =
+            transform_cargo_lock_dependencies(source, &bumped, None).expect("transformed");
+        assert_eq!(
+            transformed.dependencies,
+            ChangedDependencies {
+                owner: BTreeSet::new(),
+                locked: named(Ecosystem::Cargo, &["dep", "m"]),
+            }
+        );
+    }
+
     #[test]
     fn bump_package_lock_deps_updates_local_entry_ranges() {
         let bumped = BTreeMap::from([(
@@ -2298,10 +2585,9 @@ mod tests {
         );
         assert_eq!(
             transformed.dependencies,
-            BTreeSet::from([ChangedDependency::Named(PackageName::new(
-                Ecosystem::Npm,
-                "pkg-a"
-            ))])
+            ChangedDependencies::owner(BTreeSet::from([ChangedDependency::Named(
+                PackageName::new(Ecosystem::Npm, "pkg-a")
+            )]))
         );
     }
 
@@ -2405,10 +2691,10 @@ mod tests {
             ]),
             local: BTreeMap::new(),
         };
-        let expected_names = BTreeSet::from([
+        let expected_names = ChangedDependencies::owner(BTreeSet::from([
             ChangedDependency::Named(PackageName::new(Ecosystem::Npm, "pkg-a")),
             ChangedDependency::Named(PackageName::new(Ecosystem::Npm, "pkg-b")),
-        ]);
+        ]));
 
         assert_eq!(
             preview_dependency_update(&path, &bumped).expect("preview dependency update"),
@@ -2540,10 +2826,12 @@ mod tests {
                 },
             )]),
         };
-        let expected = DependencyUpdate::Changed(BTreeSet::from([ChangedDependency::Local {
-            name: "library".to_string(),
-            root: library_root,
-        }]));
+        let expected = DependencyUpdate::Changed(ChangedDependencies::owner(BTreeSet::from([
+            ChangedDependency::Local {
+                name: "library".to_string(),
+                root: library_root,
+            },
+        ])));
 
         assert_eq!(
             preview_dependency_update(&manifest, &bumps).expect("preview manifest.toml"),

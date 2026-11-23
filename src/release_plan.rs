@@ -399,8 +399,8 @@ fn propagate_dependencies(
                     package_label(&owner.path)
                 )
             })?;
-            for dependency in dependencies {
-                let producer = match &dependency {
+            for dependency in dependencies.iter() {
+                let producer = match dependency {
                     ChangedDependency::Named(name) => named_bumps.get(name),
                     ChangedDependency::Local { root, .. } => local_bumps.get(root),
                 };
@@ -411,13 +411,17 @@ fn propagate_dependencies(
                     continue;
                 }
                 let name = dependency.name().to_string();
-                let cause = owner_state
-                    .reasons
-                    .dependencies
-                    .entry(producer.package_path.clone())
-                    .or_default();
-                cause.names.insert(name.clone());
-                cause.manifests.insert(manifest.clone());
+                // a lock file also records packages the owner doesn't depend on, whose
+                // versions change without releasing the owner
+                if dependencies.owner.contains(dependency) {
+                    let cause = owner_state
+                        .reasons
+                        .dependencies
+                        .entry(producer.package_path.clone())
+                        .or_default();
+                    cause.names.insert(name.clone());
+                    cause.manifests.insert(manifest.clone());
+                }
                 round_files
                     .entry(manifest.clone())
                     .or_default()

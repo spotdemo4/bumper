@@ -1186,6 +1186,67 @@ fn cargo_dependencies_do_not_resolve_to_python_packages_of_the_same_name() {
 }
 
 #[test]
+fn workspace_members_in_a_shared_cargo_lock_are_not_dependencies_of_the_root_crate() {
+    let (local, _remote, repo) = files_fixture(
+        "cargo-workspace-lock",
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"root\"\nversion = \"1.0.0\"\n\n[workspace]\nmembers = [\"m\"]\n",
+            ),
+            (
+                "m/Cargo.toml",
+                "[package]\nname = \"m\"\nversion = \"1.0.0\"\n\n[dependencies]\nroot = { version = \"1.0.0\", path = \"..\" }\n",
+            ),
+            (
+                "Cargo.lock",
+                "version = 4\n\n[[package]]\nname = \"m\"\nversion = \"1.0.0\"\ndependencies = [\n \"root\",\n]\n\n[[package]]\nname = \"root\"\nversion = \"1.0.0\"\n",
+            ),
+        ],
+    );
+    let baseline = commit_all(&repo, "chore: initialize workspace");
+    tag(&repo, "v1.0.0", baseline);
+    tag(&repo, "m/v1.0.0", baseline);
+    fs::create_dir_all(local.path().join("m/src")).expect("create m/src");
+    fs::write(local.path().join("m/src/lib.rs"), "pub fn g() {}\n").expect("write lib.rs");
+    commit_all(&repo, "feat: add g to m");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bumper"))
+        .current_dir(local.path())
+        .args(["--no-commit", "--no-tag", "--no-push"])
+        .output()
+        .expect("run bumper");
+    assert!(
+        output.status.success(),
+        "bumper failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains(". (1.0.0 -> 1.0.1, patch)"), "{stdout}");
+    assert!(stdout.contains("propagated from child m"), "{stdout}");
+    assert!(
+        !stdout.contains("propagated from dependency m"),
+        "root doesn't depend on m: {stdout}"
+    );
+    assert!(
+        stdout.contains("Cargo.lock (1.0.0 -> 1.0.1; m 1.0.0 -> 1.1.0)"),
+        "the lock still takes the member's version: {stdout}"
+    );
+    assert!(
+        stdout.contains("propagated from dependency root (root via m/Cargo.toml)"),
+        "{stdout}"
+    );
+    let lock = fs::read_to_string(local.path().join("Cargo.lock")).expect("read Cargo.lock");
+    assert!(lock.contains("name = \"m\"\nversion = \"1.1.0\""), "{lock}");
+    assert!(
+        lock.contains("name = \"root\"\nversion = \"1.0.1\""),
+        "{lock}"
+    );
+}
+
+#[test]
 fn gleam_manifest_path_dependencies_release_the_dependent_package() {
     let local = TempDir::new("gleam-manifest-local");
     let remote = TempDir::new("gleam-manifest-remote");
