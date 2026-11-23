@@ -103,7 +103,7 @@
           default = pkgs.trev.libs.mkRustPackage (
             final: with pkgs.lib; {
               pname = "bumper";
-              version = "1.0.0";
+              version = "1.0.1";
 
               src = fileset.toSource {
                 root = ./.;

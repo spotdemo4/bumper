@@ -29,7 +29,7 @@ Before changing files, bumper reports selected packages without impactful change
 
 ```text
 Release plan:
-. (1.0.0 -> 1.0.1, patch)
+. (1.0.1 -> 1.0.1, patch)
 |-- propagated from child packages/library
 `-- packages
     |-- app (3.0.0 -> 3.0.1, patch)
@@ -156,7 +156,7 @@ When any member of a group releases, whether from its own commits, forcing, a ne
 
 ```text
 Release plan:
-. (1.0.0 -> 1.0.1, patch)
+. (1.0.1 -> 1.0.1, patch)
 |-- propagated from child packages/app
 |-- propagated from child packages/library
 `-- packages
@@ -181,9 +181,9 @@ Packages keep their own release-history boundaries, so commits are never counted
 
 ```text
 Release plan:
-. (1.0.0 -> 3.1.0, minor)
+. (1.0.1 -> 3.1.0, minor)
 |-- fixed version (minor from packages/library)
-|-- package.json (1.0.0 -> 3.1.0)
+|-- package.json (1.0.1 -> 3.1.0)
 `-- packages
     |-- app (2.0.0 -> 3.1.0, minor)
     |   |-- fixed version (minor from packages/library)
@@ -203,7 +203,7 @@ Most of the popular actions are antagonistic about making _any_ changes to the s
 
 ```yaml
 - name: Bump
-  uses: spotdemo4/bumper@v1.0.0
+  uses: spotdemo4/bumper@v1.0.1
   with:
     commit: true # commit changes after bumping, default true
     push: true # push changes after bumping, default true
@@ -278,7 +278,7 @@ docker run -it \
   -w /app \
   -v "$(pwd):/app" \
   -v "$HOME/.ssh:/root/.ssh" \
-  ghcr.io/spotdemo4/bumper:1.0.0
+  ghcr.io/spotdemo4/bumper:1.0.1
 ```
 
 ### Downloads
